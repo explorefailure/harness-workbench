@@ -1,0 +1,11 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "hwb:builtin",
+  "features": [
+    {"name": "redact", "config": {"patterns": ["notakey-live-[0-9a-f]{12}"]}}
+  ],
+  "steps": [
+    {"id": "01", "argv": ["./leak.sh", "p1.txt"], "inputs": ["p1.txt", "leak.sh"]}
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "hwb:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "retry",
+      "config": {
+        "max": 3
+      }
+    }
+  ],
+  "env": [
+    "OLLAMA_HOST",
+    "HWB_PROBE_TEMP",
+    "HWB_PROBE_SEED",
+    "HWB_PROBE_FAIL_ALWAYS",
+    "HWB_PROBE_FAIL_TIMES",
+    "HWB_PROBE_STATE"
+  ],
+  "steps": [
+    {
+      "id": "q2",
+      "argv": [
+        "python3",
+        "ollama_probe.py",
+        "qwen3:14b",
+        "prompts/q2.txt"
+      ],
+      "inputs": [
+        "prompts/q2.txt",
+        "ollama_probe.py"
+      ]
+    }
+  ]
+}

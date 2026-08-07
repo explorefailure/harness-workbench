@@ -1,0 +1,28 @@
+# The sdist is the complete project, not just the importable part.
+#
+# README.md links to docs/ and examples/ with relative paths, and setuptools
+# does not ship either by default -- so without this the sdist arrives with
+# its own front page pointing at files that are not there. The doc-drift
+# tests read those same files, so an sdist missing them cannot run its own
+# suite either.
+include LICENSE
+include NOTICE
+recursive-include docs *.md
+recursive-include examples *.md *.json *.sh *.py *.txt
+
+# Run stores are outputs, not source, and are no longer tracked -- but they
+# still exist on disk after anyone runs the examples, and MANIFEST.in reads
+# the FILESYSTEM rather than git. Without a prune per store the sdist sweeps
+# them back in, and sweeps them in BROKEN: `attempts.jsonl` and `*.bin` match
+# none of the include patterns above, so the shipped run would carry an
+# integrity.json whose subjects are missing and could not pass `hwb verify`.
+#
+# One line per store directory. A test asserts this list covers every store
+# present under examples/, because a new example is exactly when this is
+# forgotten.
+prune examples/runs
+prune examples/flaky/runs
+prune examples/flaky/sweeps
+prune examples/flaky/catches
+prune examples/flaky/efficacy
+prune examples/attaching/runs

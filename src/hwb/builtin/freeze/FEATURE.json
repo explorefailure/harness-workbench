@@ -1,0 +1,6 @@
+{"name":"freeze","version":"0.1.0","power":"annotate",
+ "seams":["on_spec_loaded"],"provides":["content-digest"],"requires":[],
+ "seam_contract":">=0.2.0,<0.3.0","record_key":"freeze",
+ "intent":"capability",
+ "inverts":{"seam":"on_spec_loaded","source":"invert.py",
+            "decision":"whether the declared inputs drifted from the baseline"}}

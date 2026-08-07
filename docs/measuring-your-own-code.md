@@ -1,0 +1,265 @@
+# Measuring your own code
+
+You have something you want to run and record, or a piece of harness behaviour
+you want to know the truth about. This shows you how to attach it and what you
+can then ask.
+
+It assumes you have read nothing else. It stops where your work begins — the
+last section hands you off to the reference pages rather than restating them.
+
+The files shown here are real. They live in
+[`../examples/attaching/`](../examples/attaching/), so you can run the whole
+guide there first and substitute your own afterwards. Every transcript below
+was produced by the commands above it, and the test suite re-runs them.
+
+## Two ways your code attaches
+
+| you have | it becomes | you write |
+|---|---|---|
+| a **workload** — anything runnable | a **step** | a line of JSON |
+| **harness behaviour** — retry, redaction, a checker | a **feature** | a manifest and a Python file |
+
+Only the second involves writing against an interface. If all you want is a
+recorded run, you never leave the first row.
+
+---
+
+## 1. Your workload becomes a step
+
+A step is `argv`. The runner executes it and records what came back; it has no
+notion of a model, a language, or a build system.
+
+`mine.json`:
+
+```json
+{
+  "schema": "hwbspec/v0.1",
+  "steps": [{"id": "check", "argv": ["./check.sh"], "inputs": ["check.sh"]}]
+}
+```
+
+Three things to get right here, because each one is silent when you get it
+wrong:
+
+- **There is no shell.** No pipes, globs, `&&`, or `$VAR`. If you want them,
+  say so: `["/bin/sh", "-c", "a | b"]`.
+- **Paths resolve against the spec's directory**, never the directory you ran
+  `hwb` from — so the same spec means the same thing from anywhere.
+- **`inputs` is a declaration, not a filter.** It does not affect execution. It
+  tells `freeze` what to digest, `hwb catch` what to perturb, and `hwb replay`
+  what to copy. Anything you leave out is invisible to all three.
+
+If your workload reads environment variables that change its behaviour, declare
+them with `env` so their **values** land in the record — and for the same
+reason, never declare a secret. Full field list: [`the-spec.md`](the-spec.md).
+
+Run it:
+
+```console
+$ hwb run mine.json
+20260807T205423Z-d72f0e-a48b  discovery  1 step(s)  completed
+```
+
+**`completed` describes the harness, not your command.** A step that exits 1 is
+data; the run recorded what happened, which is the run succeeding.
+
+Everything below needs that run id, so capture it:
+
+```sh
+RUN=$(hwb run mine.json | awk 'NR==1{print $1}')
+```
+
+Use `NR==1`. A run that reports a failed feature prints a second line, and a
+bare `awk '{print $1}'` will glue a word onto the end of your id.
+
+---
+
+## 2. Your harness behaviour becomes a feature
+
+A feature is a directory beside your spec. Put it in `features/` and the runner
+finds it with no configuration:
+
+```
+mine.json
+check.sh
+features/
+  myfeature/
+    FEATURE.json
+    feature.py
+```
+
+The manifest declares what the code is allowed to do, and is validated **before
+any Python is imported**:
+
+```json
+{"name": "myfeature", "power": "annotate", "seams": ["after_step"]}
+```
+
+The hook is a function named after the seam:
+
+```python
+def after_step(step, obs, ctx):
+    return {step.id: obs["attempts"]}
+```
+
+**`step` is an object with `.id`, `.argv` and `.inputs`. `obs` is a dict.** The
+access is mixed, and `step["id"]` is the first thing most people write — it
+raises, your feature is disabled, and the run continues without it.
+
+Choose the power by what the code needs to do, not by what sounds safest:
+
+| you want to | declare | and you may |
+|---|---|---|
+| look, and record nothing | `observe` | return nothing |
+| record something | `annotate` | **return a dict** — never write `ctx["extras"]` yourself |
+| control whether the step runs | `wrap` | run the step 0..n times; write nothing |
+
+Ask for it by name:
+
+```json
+{"schema": "hwbspec/v0.1",
+ "features": [{"name": "myfeature"}],
+ "steps": [{"id": "check", "argv": ["./check.sh"], "inputs": ["check.sh"]}]}
+```
+
+A mistyped feature name or directory **fails loudly at load**. Shipped features
+are never a silent fallback — you cannot accidentally run code you did not
+choose.
+
+```console
+$ hwb show "$RUN"
+run       20260807T205423Z-d72f0e-91e4
+...
+features  myfeature@0.0.0(ok)
+
+attempts
+  step check n=0   exit=0     5ms
+...
+extras
+  myfeature: {"check": 1}
+```
+
+If it says `features failed: myfeature`, the traceback is in the record at
+`extras.myfeature.error` — an annotation defect disables the feature and lets
+the run finish, because it cannot admit anything.
+
+The six shipped features are working examples of each power. `retry`'s hook is
+eight lines; the rest of that file is the reasoning behind them, which is worth
+more than the code. Contract details — seams, capabilities, bounds:
+[`writing-a-feature.md`](writing-a-feature.md).
+
+---
+
+## 3. Ask whether it did what it claims
+
+**First, one thing that will otherwise waste your afternoon.** Everything below
+runs your spec *many times* and compares the records. If your workload
+remembers anything between runs — a counter, a cache, a file it appends to —
+every comparison is measuring the leftovers. Point the campaigns at a stateless
+version of your workload.
+
+Now the first question, and the one to ask before any other: does the manifest
+you wrote describe the code you wrote?
+
+```console
+$ hwb confine "$RUN"
+20260807T205423Z-d72f0e-91e4
+
+did each feature stay inside the power it declared?
+
+FEATURE      POWER      VERDICT      DETAIL
+myfeature    annotate   clean        wrote only through its declared channel
+
+1 clean, 0 breached, 0 unmeasured
+```
+
+Every other campaign trusts that declaration, so a breach here invalidates
+what the rest tell you.
+
+---
+
+## Now ask the others
+
+You have a recorded run and a feature that stays in its lane. Each of these
+answers a different question about **your** code. Try the one whose question
+you actually have.
+
+**Does anything downstream consult it?** A feature can be perfectly well-behaved
+and completely inert.
+
+```console
+$ hwb efficacy mine.json
+...
+FEATURE    INTENT      POWER     SEAM             VERDICT    DETAIL
+myfeature  -           annotate  -                skipped    declares no inversion
+
+killed 0/0 tested
+
+  UNMEASURED: myfeature declares no decision and is not an instrument
+```
+
+That is the honest answer, not a pass. To be measured, a feature declares
+`inverts` — a well-formed *opposite* of its decision — and the run must come
+out different. Writing your own inversion is the discipline: a feature whose
+author cannot state its opposite has not decided what it does.
+
+**Is a bug in it contained?** Breaks your feature five ways and checks the
+damage stopped there.
+
+```console
+$ hwb blast mine.json
+...
+FEATURE   SEAM            FAULT       POWER    SURVIVED
+myfeature after_step      hang        annotate run record others steps   [failed]
+...
+per-power failure semantics held for every injection
+```
+
+**Does your detector actually fire?** Perturbs your declared inputs and looks
+for a feature that notices.
+
+```console
+$ hwb catch mine.json
+...
+caught 0/3   false alarms 0   correctly ignored 2
+```
+
+`0/3` is not a bad score — `myfeature` is not a detector, so nothing was
+watching. Attach `freeze` and the same command becomes a real measurement.
+
+**Does it disturb anything else?** Needs a second feature to be meaningful —
+with only one attached, `hwb interfere` will tell you there was nothing to
+check rather than reporting a clean result.
+
+```sh
+hwb sweep mine.json && hwb interfere <the sweep id it printed>
+```
+
+Five more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares
+two runs and reports what it masked · `hwb verify` asks whether the record was
+edited · `hwb fidelity` asks what can still be answered from the run directory
+alone · `hwb sensitivity` checks the checkers themselves still fire ·
+`hwb replay` re-executes from the preserved spec.
+
+And read [what the instrument cannot see](measuring.md#what-the-instrument-cannot-see)
+before you trust any of it very far.
+
+---
+
+## When you outgrow the local directory
+
+`features_root` is `<spec dir>/features` until you say otherwise. Set it to
+`"hwb:builtin"` to use the shipped features, or to any path — resolved relative
+to the spec, so it travels with the file. It is digested into the spec's
+identity, because which code runs is the most experiment-changing fact about a
+run.
+
+## Where to look next
+
+| | |
+|---|---|
+| [`the-spec.md`](the-spec.md) | every spec field, the bounds, the digest rule |
+| [`writing-a-feature.md`](writing-a-feature.md) | manifest contract, seams, powers, capabilities, `inverts` |
+| [`the-record.md`](the-record.md) | reading a run with nothing but `cat` |
+| [`measuring.md`](measuring.md) | every campaign, what its verdict means, and its limits |
+| [`../examples/flaky/`](../examples/flaky/) | all of the above, worked, with no model |

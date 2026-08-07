@@ -1,0 +1,2 @@
+endpoint=https://example.invalid/health
+timeout=5

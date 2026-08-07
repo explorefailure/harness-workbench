@@ -1,0 +1,6 @@
+{"name":"retry","version":"0.1.0","power":"wrap",
+ "seams":["around_step"],"provides":[],"requires":[],
+ "seam_contract":">=0.2.0,<0.3.0","record_key":"retry",
+ "intent":"capability",
+ "inverts":{"seam":"around_step","source":"invert.py",
+            "decision":"whether the work beneath an attempt succeeded, and so whether to stop"}}

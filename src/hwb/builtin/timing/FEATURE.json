@@ -1,0 +1,4 @@
+{"name":"timing","version":"0.1.0","power":"observe",
+ "seams":["after_step"],"provides":[],"requires":[],
+ "seam_contract":">=0.2.0,<0.3.0","record_key":"timing",
+ "intent":"instrument"}

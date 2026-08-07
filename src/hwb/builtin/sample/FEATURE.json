@@ -1,0 +1,6 @@
+{"name":"sample","version":"0.1.0","power":"wrap",
+ "seams":["around_step"],"provides":[],"requires":[],
+ "seam_contract":">=0.2.0,<0.3.0","record_key":"sample",
+ "intent":"capability",
+ "inverts":{"seam":"around_step","source":"invert.py",
+            "decision":"how many draws a step is worth"}}

@@ -1,0 +1,35 @@
+[build-system]
+# 64, not 58: PEP 660 `build_editable` landed in setuptools 64, so anything
+# below it cannot do `pip install -e .` at all. The old floor was permissive
+# enough to admit a backend that fails, and it failed confusingly -- "build
+# backend is missing the 'build_editable' hook" rather than a version
+# complaint. A floor that admits a build which cannot work is not a floor.
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hwb"
+version = "0.1.0"
+description = "Explore Failure's Harness Workbench — a workbench for building and testing harness ideas"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+# Copyright is held by the individual. "Explore Failure" is a research
+# and project identity, not a legal entity -- see NOTICE.
+authors = [{ name = "Garrett Davis" }]
+dependencies = []
+
+[project.scripts]
+hwb = "hwb.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+# The builtin feature tree ships with the package so `pip install hwb` gives
+# a tool that can demonstrate itself. It is OPT-IN via
+# `"features_root": "hwb:builtin"`, never a fallback -- see features.py.
+include-package-data = true
+
+[tool.setuptools.package-data]
+hwb = ["builtin/*/*.py", "builtin/*/FEATURE.json"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

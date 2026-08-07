@@ -1,0 +1,65 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "hwb:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "sample",
+      "config": {
+        "n": 3
+      }
+    }
+  ],
+  "env": [
+    "OLLAMA_HOST",
+    "HWB_PROBE_TEMP",
+    "HWB_PROBE_SEED",
+    "HWB_PROBE_FAIL_ALWAYS",
+    "HWB_PROBE_FAIL_TIMES",
+    "HWB_PROBE_STATE"
+  ],
+  "steps": [
+    {
+      "id": "q1",
+      "argv": [
+        "python3",
+        "ollama_probe.py",
+        "qwen3:14b",
+        "prompts/q1.txt"
+      ],
+      "inputs": [
+        "prompts/q1.txt",
+        "ollama_probe.py"
+      ]
+    },
+    {
+      "id": "q2",
+      "argv": [
+        "python3",
+        "ollama_probe.py",
+        "qwen3:14b",
+        "prompts/q2.txt"
+      ],
+      "inputs": [
+        "prompts/q2.txt",
+        "ollama_probe.py"
+      ]
+    },
+    {
+      "id": "q3",
+      "argv": [
+        "python3",
+        "ollama_probe.py",
+        "qwen3:14b",
+        "prompts/q3.txt"
+      ],
+      "inputs": [
+        "prompts/q3.txt",
+        "ollama_probe.py"
+      ]
+    }
+  ]
+}

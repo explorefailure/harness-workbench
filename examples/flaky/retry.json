@@ -1,0 +1,17 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "hwb:builtin",
+  "features": [
+    {"name": "retry", "config": {"max": 3}},
+    {"name": "timing"}
+  ],
+  "env": ["FLAKY_FAIL_TIMES", "FLAKY_STATE"],
+  "steps": [
+    {
+      "id": "check",
+      "argv": ["./flaky.sh", "api"],
+      "inputs": ["flaky.sh"]
+    }
+  ]
+}

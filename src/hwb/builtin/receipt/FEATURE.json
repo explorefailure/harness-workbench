@@ -1,0 +1,4 @@
+{"name":"receipt","power":"annotate","provides":[],"record_key":"receipt",
+ "intent":"capability","requires":["content-digest"],"seam_contract":">=0.2.0,<0.3.0","seams":["after_run"],"self_attests":{"digest":"digest","payload":"bound"},"version":"0.1.0",
+ "inverts":{"seam":"after_run","source":"invert.py",
+            "decision":"that its published digest is the digest of its published payload"}}

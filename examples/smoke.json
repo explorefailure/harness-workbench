@@ -1,0 +1,49 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "hwb:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "sample",
+      "config": {
+        "n": 3
+      }
+    },
+    {
+      "name": "timing"
+    },
+    {
+      "name": "receipt"
+    }
+  ],
+  "env": [
+    "HOME"
+  ],
+  "steps": [
+    {
+      "id": "01",
+      "argv": [
+        "./echo.sh",
+        "p1.txt"
+      ],
+      "inputs": [
+        "p1.txt",
+        "echo.sh"
+      ]
+    },
+    {
+      "id": "02",
+      "argv": [
+        "./echo.sh",
+        "p2.txt"
+      ],
+      "inputs": [
+        "p2.txt",
+        "echo.sh"
+      ]
+    }
+  ]
+}

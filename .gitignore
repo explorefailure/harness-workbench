@@ -1,0 +1,46 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Run stores are outputs, not source -- at ANY depth, which is the change.
+#
+# Example runs used to be committed on the theory that they illustrate the
+# record format. They do not earn it: docs/the-record.md documents the shape,
+# nothing in the suite reads them (222 tests pass with all of them absent),
+# and they were 908 of 981 tracked files -- so the repository read as a
+# committed scratch directory. Worse, each record.json lists every
+# environment VARIABLE NAME present at capture, which is a fingerprint of
+# whatever machine produced it.
+#
+# Unanchored on purpose: a store can appear beside any spec, including in
+# examples yet to be written.
+runs/
+sweeps/
+blasts/
+catches/
+efficacy/
+sensitivity/
+replays/
+
+# Measurement campaigns: real runs, reproducible, not source.
+/measure/
+
+# Campaign scratch specs. Written beside the base spec because steps run
+# with cwd=spec.dir, cleaned up afterwards -- but a concurrent `git add -A`
+# can sweep one in mid-run, which is how one got committed.
+.hwbsweep-*
+.hwbblast-*
+*.freeze.lock
+
+# The flaky example counts its invocations here. State, not source --
+# committing it would ship the example already "warmed up" and it would
+# pass first try for everyone who cloned it, which is the one thing it
+# exists to not do.
+examples/flaky/.flaky-state
+
+# Efficacy campaigns' shared scratch spec.
+.hwbefficacy-*
