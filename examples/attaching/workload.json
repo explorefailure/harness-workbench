@@ -1,0 +1,4 @@
+{
+  "schema": "hwbspec/v0.1",
+  "steps": [{"id": "check", "argv": ["./check.sh"], "inputs": ["check.sh"]}]
+}

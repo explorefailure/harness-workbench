@@ -3097,7 +3097,7 @@ REGISTERED_TRANSCRIPTS = {
     "hwb sweep stable.json": {"cwd": _FLAKY},
     # measuring-your-own-code.md. `examples/attaching/` holds exactly the files
     # that guide shows, which is what makes its transcripts checkable at all.
-    "hwb run mine.json": {"cwd": _ATTACH},
+    "hwb run workload.json": {"cwd": _ATTACH},
     "hwb efficacy mine.json": {"cwd": _ATTACH},
     "hwb blast mine.json": {"cwd": _ATTACH},
     # Exits 1 on purpose: nothing in that spec detects anything, so `caught 0/3`

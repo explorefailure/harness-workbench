@@ -29,7 +29,7 @@ recorded run, you never leave the first row.
 A step is `argv`. The runner executes it and records what came back; it has no
 notion of a model, a language, or a build system.
 
-`mine.json`:
+`workload.json`:
 
 ```json
 {
@@ -56,21 +56,12 @@ reason, never declare a secret. Full field list: [`the-spec.md`](the-spec.md).
 Run it:
 
 ```console
-$ hwb run mine.json
-20260807T205423Z-d72f0e-a48b  discovery  1 step(s)  completed
+$ hwb run workload.json
+20260810T234119Z-1e1419-b5f4  discovery  1 step(s)  completed
 ```
 
 **`completed` describes the harness, not your command.** A step that exits 1 is
 data; the run recorded what happened, which is the run succeeding.
-
-Everything below needs that run id, so capture it:
-
-```sh
-RUN=$(hwb run mine.json | awk 'NR==1{print $1}')
-```
-
-Use `NR==1`. A run that reports a failed feature prints a second line, and a
-bare `awk '{print $1}'` will glue a word onto the end of your id.
 
 ---
 
@@ -121,6 +112,15 @@ Ask for it by name:
  "features": [{"name": "myfeature"}],
  "steps": [{"id": "check", "argv": ["./check.sh"], "inputs": ["check.sh"]}]}
 ```
+
+Run the feature-bearing spec and capture its id for the checks below:
+
+```sh
+RUN=$(hwb run mine.json | awk 'NR==1{print $1}')
+```
+
+Use `NR==1`. A run that reports a failed feature prints a second line, and a
+bare `awk '{print $1}'` will glue a word onto the end of your id.
 
 A mistyped feature name or directory **fails loudly at load**. Shipped features
 are never a silent fallback — you cannot accidentally run code you did not
@@ -232,7 +232,8 @@ with only one attached, `hwb interfere` will tell you there was nothing to
 check rather than reporting a clean result.
 
 ```sh
-hwb sweep mine.json && hwb interfere <the sweep id it printed>
+SWEEP=$(hwb sweep mine.json | awk 'NR==1{print $1}')
+hwb interfere "$SWEEP"
 ```
 
 Five more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares

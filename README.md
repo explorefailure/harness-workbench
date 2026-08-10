@@ -175,12 +175,12 @@ Two kinds, and mixing them up is the most common first mistake:
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
 
-**These pages are machine-checked, not maintained by hope.** The test suite
-asserts that every spec field, every record key, the seam table, the powers
-table and the command split match the code — and that the `console`
-transcripts are faithful abridgements of what the tool prints today, with
-any elision marked `...`. What no test can check is whether the *prose* is
-still a good explanation. See
+**These pages have machine-checked surfaces, not a blanket guarantee.** The
+test suite asserts that every spec field, every record key, the seam table,
+the powers table and the command split match the code. It re-runs each
+registered `console` transcript and holds the remaining unregistered count to
+a ceiling, with any elision in checked output marked `...`. What no test can
+check is whether the *prose* is still a good explanation. See
 [`docs/measuring.md`](docs/measuring.md#are-the-transcripts-in-these-docs-real).
 
 ## Development
