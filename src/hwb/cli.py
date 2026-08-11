@@ -16,7 +16,8 @@ from . import (blast as blastmod, catch as catchmod, confine as confmod,
                conform, diff as diffmod, efficacy as effmod,
                effects as effectsmod, features,
                fidelity as fidmod, replay as replaymod, runner,
-               sensitivity as sensmod, spec as specmod, steady as steadymod,
+               interrupt as intmod, sensitivity as sensmod,
+               spec as specmod, steady as steadymod,
                sweep as sweepmod)
 
 DEFAULT_ROOT = os.environ.get("HWB_RUNS", "runs")
@@ -28,6 +29,7 @@ DEFAULT_EFFICACY = os.environ.get("HWB_EFFICACY", "efficacy")
 DEFAULT_REPLAYS = os.environ.get("HWB_REPLAYS", "replays")
 DEFAULT_STEADIES = os.environ.get("HWB_STEADIES", "steadies")
 DEFAULT_EFFECTS = os.environ.get("HWB_EFFECTS", "effects")
+DEFAULT_INTERRUPTS = os.environ.get("HWB_INTERRUPTS", "interrupts")
 
 
 def _fail(msg: str) -> int:
@@ -66,8 +68,10 @@ def cmd_run(args) -> int:
 def _run_dirs(root: str) -> List[str]:
     if not os.path.isdir(root):
         return []
+    # Interrupted directories are evidence too.  The old record.json filter
+    # made the exact failures ``hwb interrupt`` measures invisible to ls.
     return sorted(d for d in os.listdir(root)
-                  if os.path.isfile(os.path.join(root, d, "record.json")))
+                  if os.path.isdir(os.path.join(root, d)))
 
 
 def _load_record(root: str, run_id: str):
@@ -84,23 +88,45 @@ def cmd_ls(args) -> int:
         sys.stdout.write("no runs under %s\n" % args.root)
         return 0
     sys.stdout.write("%-30s %-13s %-11s %-6s %s\n" %
-                     ("RUN", "CLASS", "STATUS", "STEPS", "FEATURES"))
+                     ("RUN", "CLASS", "STATE", "STEPS", "FEATURES"))
     for run_id in rows:
-        r = _load_record(args.root, run_id)
-        feats = ",".join(f["name"] for f in r["features"]) or "-"
-        sys.stdout.write("%-30s %-13s %-11s %-6d %s\n" % (
-            run_id, r["run_class"], r["status"], len(r["steps"]), feats))
+        life = intmod.inspect_state(os.path.join(args.root, run_id))
+        r = life.get("record") or {}
+        feats = ",".join(f["name"] for f in r.get("features", [])) or "-"
+        steps = str(len(r["steps"])) if isinstance(r.get("steps"), list) else "-"
+        sys.stdout.write("%-30s %-13s %-11s %-6s %s\n" % (
+            run_id, r.get("run_class", "-"), life["state"], steps, feats))
     return 0
 
 
 def cmd_show(args) -> int:
-    r = _load_record(args.root, args.run_id)
-    if r is None:
+    d = os.path.join(args.root, args.run_id)
+    if not os.path.isdir(d):
         return _fail("no such run: %s" % args.run_id)
+    life = intmod.inspect_state(d)
+    r = life.get("record")
     if args.json:
-        json.dump(r, sys.stdout, indent=2, sort_keys=True)
+        # Keep stdout parseable.  Prefixing a lifecycle line here would turn a
+        # valid JSON interface into prose; incomplete paths without a record
+        # receive a derived lifecycle object instead.
+        payload = r if r is not None else {
+            "lifecycle": life["state"], "reasons": life["reasons"],
+            "inventory": life["inventory"], "run_id": args.run_id,
+        }
+        json.dump(payload, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
-        return 0
+        if life["state"] != intmod.COMPLETE:
+            sys.stderr.write("hwb: lifecycle %s; show is non-passing\n"
+                             % life["state"])
+        return 0 if life["state"] == intmod.COMPLETE else 1
+    sys.stdout.write("lifecycle %s\n" % life["state"])
+    if life["state"] != intmod.COMPLETE:
+        for reason in life["reasons"]:
+            sys.stdout.write("  %s\n" % reason)
+        sys.stdout.write("  retained: %s\n" %
+                         (", ".join(life["inventory"]) or "(empty directory)"))
+    if r is None:
+        return 1
     sys.stdout.write("run       %s\n" % r["run_id"])
     sys.stdout.write("class     %s\n" % r["run_class"])
     sys.stdout.write("status    %s\n" % r["status"])
@@ -138,40 +164,60 @@ def cmd_show(args) -> int:
         sys.stdout.write("\nextras\n")
         for k, v in sorted(r["extras"].items()):
             sys.stdout.write("  %s: %s\n" % (k, json.dumps(v, sort_keys=True)[:400]))
-    return 0
+    return 0 if life["state"] == intmod.COMPLETE else 1
 
 
 def cmd_verify(args) -> int:
     d = os.path.join(args.root, args.run_id)
     if not os.path.isdir(d):
         return _fail("no such run: %s" % args.run_id)
-    res = runner.verify(d)
-    sys.stdout.write("%s  %s\n" % (args.run_id, res["state"]))
+    life = intmod.inspect_state(d)
+    res = life.get("integrity") or runner.verify(d)
+    sys.stdout.write("%s  %s\n" % (args.run_id, life["state"]))
     for f in res["drifted"]:
         sys.stdout.write("  edited:  %s\n" % f)
     for f in res["missing"]:
         sys.stdout.write("  missing: %s\n" % f)
+    for f in res.get("untracked", []):
+        sys.stdout.write("  untracked: %s\n" % f)
+    if res.get("error"):
+        sys.stdout.write("  integrity: invalid -- %s\n" % res["error"])
 
     # Integrity and conformance answer different questions: one asks whether
     # the bytes changed since they were written, the other whether what was
     # written satisfies the invariants at all. A record can be untampered
     # and still malformed.
-    conforms = True
-    try:
-        record, attempts, _ = diffmod.load_run(args.root, args.run_id)
-        # run_dir is what enables the checks that need the store as evidence:
-        # collapse detection, and whether spec_digest / features[].digest are
-        # true rather than merely claimed. Omitting it silently downgrades
-        # `verify` to the weak checks.
-        conform.validate_record(record, attempts, run_dir=d)
+    conforms = life["state"] in (intmod.RECOVERABLE, intmod.COMPLETE)
+    if conforms:
         sys.stdout.write("  conforms: yes\n")
-    except conform.NonConforming as e:
-        conforms = False
-        sys.stdout.write("  conforms: NO -- %s\n" % e)
-    except diffmod.Incomparable as e:
-        conforms = False
-        sys.stdout.write("  conforms: unreadable -- %s\n" % e)
-    return 0 if (res["state"] == "clean" and conforms) else 1
+    else:
+        sys.stdout.write("  conforms: NO -- %s\n" % "; ".join(life["reasons"]))
+    return 0 if life["state"] == intmod.COMPLETE else 1
+
+
+def cmd_interrupt(args) -> int:
+    try:
+        man = intmod.campaign(args.spec, args.root, args.interrupts,
+                              timeout_seconds=args.child_timeout_seconds)
+    except intmod.InterruptError as e:
+        return _fail(str(e))
+
+    sys.stdout.write("%s  %s\n" % (man["campaign_id"], man["verdict"]))
+    sys.stdout.write("checkpoint protocol: %s\n\n" %
+                     man["checkpoint_protocol"])
+    sys.stdout.write("%-30s %-12s %-12s %-10s %s\n" %
+                     ("CHECKPOINT", "EXPECTED", "OBSERVED", "CHILD", "SIGNAL"))
+    for row in man["checkpoints"]:
+        child = row["child"]
+        sys.stdout.write("%-30s %-12s %-12s %-10s %s\n" % (
+            row["checkpoint"], row["expected_state"], row["observed_state"],
+            child["result"], child["signal"] or "-"))
+        for violation in row["violations"]:
+            sys.stdout.write("  VIOLATION: %s\n" % violation)
+    sys.stdout.write("\nunobserved by this bounded campaign:\n")
+    for item in man["unobserved"]:
+        sys.stdout.write("  - %s\n" % item)
+    return 0 if man["verdict"] == intmod.PASSED else 1
 
 
 def cmd_diff(args) -> int:
@@ -706,6 +752,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="steady-campaign store (default: ./steadies)")
     p.add_argument("--effects-store", default=DEFAULT_EFFECTS,
                    help="effects-campaign store (default: ./effects)")
+    p.add_argument("--interrupts", default=DEFAULT_INTERRUPTS,
+                   help="interruption-campaign store (default: ./interrupts)")
     sub = p.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="execute a spec")
@@ -790,6 +838,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "(repeatable; default: none)")
     fx.set_defaults(func=cmd_effects)
 
+    ix = sub.add_parser(
+        "interrupt", help="terminate the runner at named lifecycle checkpoints")
+    ix.add_argument("spec", help="path to a spec JSON file")
+    ix.add_argument("--child-timeout-seconds", type=float,
+                    default=intmod.DEFAULT_TIMEOUT_SECONDS,
+                    help="bound for each child/checkpoint (default: 30)")
+    ix.set_defaults(func=cmd_interrupt)
+
     od = sub.add_parser("order",
                         help="check a permutations sweep for order sensitivity")
     od.add_argument("sweep_id", help="sweep id (printed by `hwb sweep`)")
@@ -819,7 +875,7 @@ def misplaced_spec(args) -> Optional[str]:
     """Was a spec handed to a command that wanted an id?
 
     The commands split -- `run`, `sweep`, `blast`, `catch`, `steady`,
-    `effects`, `efficacy` take a
+    `effects`, `interrupt`, `efficacy` take a
     SPEC; the rest take an ID produced by one of those -- and nothing said so
     at the point of confusion. Handing a spec to `confine` reported "no
     record at runs/bare.json", which is true and tells you nothing: the path
@@ -836,7 +892,7 @@ def misplaced_spec(args) -> Optional[str]:
         if isinstance(val, str) and os.path.isfile(val):
             return ("%s takes a run id, not a spec file (got %s)\n"
                     "       specs are taken by: run, sweep, blast, catch, "
-                    "steady, effects, efficacy\n"
+                    "steady, effects, interrupt, efficacy\n"
                     "       run one first, then pass the id it prints "
                     "(`hwb ls`)" % (args.cmd, val))
     return None

@@ -27,6 +27,7 @@ sensitivity/
 replays/
 steadies/
 effects/
+interrupts/
 
 # Measurement campaigns: real runs, reproducible, not source.
 /measure/

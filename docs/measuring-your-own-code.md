@@ -269,11 +269,12 @@ SWEEP=$(hwb sweep mine.json | awk 'NR==1{print $1}')
 hwb interfere "$SWEEP"
 ```
 
-Five more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares
+Six more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares
 two runs and reports what it masked · `hwb verify` asks whether the record was
 edited · `hwb fidelity` asks what can still be answered from the run directory
 alone · `hwb sensitivity` checks the checkers themselves still fire ·
-`hwb replay` re-executes from the preserved spec.
+`hwb interrupt` terminates the runner at named close boundaries · `hwb replay`
+re-executes from the preserved spec.
 
 And read [what the instrument cannot see](measuring.md#what-the-instrument-cannot-see)
 before you trust any of it very far.

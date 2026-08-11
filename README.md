@@ -64,8 +64,8 @@ $ hwb run hello.json
 20260807T170423Z-6beee9-4472  discovery  1 step(s)  completed
 
 $ hwb ls
-RUN                            CLASS         STATUS      STEPS  FEATURES
-20260807T170423Z-6beee9-4472   discovery     completed   1      -
+RUN                            CLASS         STATE       STEPS  FEATURES
+20260807T170423Z-6beee9-4472   discovery     complete    1      -
 
 $ hwb show 20260807T170423Z-6beee9-4472
 ```
@@ -138,6 +138,7 @@ nothing but `cat`.
 $ hwb confine <run id>        # did each feature use only its declared record channel
 $ hwb effects <spec> --watch state --allow state/output.txt  # did files stay in a bounded envelope
 $ hwb blast <spec>            # break a feature; was the damage contained
+$ hwb interrupt <spec>        # kill the runner at each durable lifecycle boundary
 $ hwb steady <spec>           # is the unchanged baseline stable enough to compare
 $ hwb efficacy <spec>         # invert a feature's decision; did anything notice
 $ hwb catch <spec>            # perturb declared inputs; did a detector fire
@@ -160,7 +161,7 @@ what the instrument **cannot** see.
 
 Two kinds, and mixing them up is the most common first mistake:
 
-- **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `efficacy`
+- **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy`
 - **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
   `replay` `interfere` `order`
 

@@ -9,6 +9,11 @@ lines are appended while execution is live, then their artifact descriptors
 are finalised once after every feature hook. There is no database and no
 index — a run is a directory, and copying the directory copies the run.
 
+An interrupted directory is still evidence, but it is not necessarily a run.
+`hwb ls` deliberately exposes directories without `record.json`; `show` and
+`verify` classify them and exit non-zero rather than hiding them or repairing
+them. See [Lifecycle state](#lifecycle-state).
+
 ## Layout
 
 ```
@@ -132,6 +137,11 @@ run. `hwb verify` covers post-close edits; conformance independently checks
 that these descriptors still agree with the files. Agreement makes an output
 rewrite visible in the record but does not identify which feature wrote it.
 
+Finalisation writes `attempts.jsonl.finalising`, closes it, then atomically
+replaces `attempts.jsonl`. The temporary name can remain after interruption;
+it is retained as evidence and the directory is `incomplete`, never silently
+cleaned during inspection.
+
 `caused_by` is a **stack**, outermost first, one frame per wrap activation
 carrying that feature's own call ordinal. Nested wraps produce multiple
 frames, which is how `retry(sample(step))` is distinguishable from
@@ -186,7 +196,8 @@ A sha256 per file in the run, written last:
            "steps/check/attempts/0/stdout.bin": "sha256:898b..."}}
 ```
 
-`hwb verify` recomputes these. It answers *"has this been edited since it was
+`hwb verify` recomputes these and also rejects any file present in the run but
+absent from the inventory. It answers *"has this been edited since it was
 written"* — a different question from *"is what was written valid"*, which is
 conformance. **A record can be untampered and still malformed**, so `verify`
 reports both and neither implies the other.
@@ -194,6 +205,26 @@ reports both and neither implies the other.
 This is a tamper-evidence mechanism, not a tamper-proofing one. There is no
 key, so anyone who can edit the run can recompute the digests. It catches
 accident and drift, which is what it is for.
+
+## Lifecycle state
+
+`record.status: completed` is necessary but not sufficient for a completed
+run. The reader-side lifecycle oracle uses four states:
+
+- `absent`: the announced directory does not exist.
+- `incomplete`: some evidence exists, but no readable conforming completed
+  record exists, or an integrity baseline exists and disagrees with the store.
+- `recoverable`: the record and attempt artifacts conform, but
+  `integrity.json` is absent. The evidence is readable; execution is not
+  resumable and regenerating the baseline would not restore its original
+  authority.
+- `complete`: the record conforms and `integrity.json` verifies every file in
+  the directory with no missing, edited, or untracked subjects.
+
+`hwb ls` lists every directory in the run store, including incomplete ones.
+`hwb show` prints retained inventory and exits 1 for incomplete state; it may
+display a recoverable record, but still exits 1. `hwb verify` exits 0 only for
+`complete`. None of these readers delete, move, repair, or resume evidence.
 
 ## `spec.json` and `features/`
 

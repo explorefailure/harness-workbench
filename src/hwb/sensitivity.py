@@ -68,6 +68,7 @@ PUBLIC_VERDICT_ENGINES = (
     "effects",
     "fidelity",
     "interfere",
+    "interrupt",
     "order",
     "replay",
     "steady",
@@ -536,6 +537,24 @@ def _probe_replay_changed_executable(runs_root: str, run_id: str,
     return DETECTED, man["verdict"]
 
 
+def _probe_interrupt_premature_complete(runs_root: str, run_id: str,
+                                        work: str) -> Tuple[str, str]:
+    """A conforming record whose integrity close never happened."""
+    from . import interrupt
+
+    d = _copy_run(runs_root, run_id, os.path.join(work, "I"))
+    integrity = os.path.join(d, "integrity.json")
+    if not os.path.isfile(integrity):
+        return ERRORED, "subject run has no integrity.json to remove"
+    os.remove(integrity)
+    observed = interrupt.inspect_state(d)
+    if observed["state"] == interrupt.COMPLETE:
+        return MISSED, "called a conforming record complete before integrity close"
+    if observed["state"] != interrupt.RECOVERABLE:
+        return ERRORED, "probe expected recoverable, observed %s" % observed["state"]
+    return DETECTED, "missing integrity close classified recoverable, not complete"
+
+
 # name -> (checker, probe, control?, why this violation must be caught)
 PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "diff_exit_code": (
@@ -585,6 +604,9 @@ PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "effects_out_of_envelope": (
         "effects", _probe_effects_out_of_envelope, False,
         "an endpoint change outside every allowed path is a breach"),
+    "interrupt_premature_complete": (
+        "interrupt", _probe_interrupt_premature_complete, False,
+        "a conforming record without its integrity close must not be complete"),
     "replay_changed_executable": (
         "replay", _probe_replay_changed_executable, False,
         "a replay whose execution produces different output must not match"),

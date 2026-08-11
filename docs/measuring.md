@@ -17,7 +17,7 @@ Reference for what these read and write:
 
 | takes a spec | takes an id |
 |---|---|
-| `run` `sweep` `blast` `catch` `steady` `effects` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
+| `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
 
 The first group produces runs; the second interrogates them.
 
@@ -33,7 +33,7 @@ A record can be untampered and still malformed.
 
 ```console
 $ hwb verify 20260807T174828Z-325fab-ece2
-20260807T174828Z-325fab-ece2  clean
+20260807T174828Z-325fab-ece2  complete
   conforms: yes
 ```
 
@@ -172,6 +172,52 @@ to be unrepresentative of real residual defects.
 Blast-radius *minimisation* from that literature deliberately does not
 transfer: this has no production and no users, so the goal is maximum
 exploration.
+
+### `hwb interrupt <spec>`
+
+Can a terminated runner directory ever look like a clean completed run before
+all completion invariants exist? `interrupt` starts one real child per named
+lifecycle boundary. The child writes an atomic coordination marker and blocks;
+only after the marker exists does the parent terminate that direct child. The
+kill point is therefore a named boundary, not a guessed sleep duration.
+
+The bounded sequence is: before and after run-directory creation, after the
+spec and feature sources are preserved, after the first attempt artifacts are
+closed, after `attempts.jsonl.finalising` is closed but before `os.replace`,
+after that replace, after `record.json` closes, and after `integrity.json`
+closes. An uninterrupted child is the second positive control.
+
+```sh
+hwb interrupt stable.json
+```
+
+Every row records the checkpoint, child return code or signal, announced run
+path, observed state, retained file inventory, and any violation. Every
+interrupted directory remains in the run store. The full campaign executes the
+spec nine times: eight checkpoint children and one uninterrupted control. Use
+a small representative spec when the real workload is expensive. There is no
+automatic delete, repair, quarantine, or resume.
+
+The state oracle is deliberately stricter than the record's own `status`:
+
+| state | meaning | `ls` / `show` / `verify` |
+|---|---|---|
+| `absent` | the announced run directory was not created | not listed; the campaign still records the announced path |
+| `incomplete` | evidence exists without a readable conforming record, or integrity disagrees | listed; `show` displays retained evidence and exits 1; `verify` exits 1 |
+| `recoverable` | a conforming completed record is readable but integrity has not closed | listed and readable, but `show`/`verify` exit 1; this does **not** mean resumable |
+| `complete` | conforming record plus clean exhaustive integrity inventory | listed; `show`/`verify` exit 0 |
+
+The positive control at `integrity_written` proves a child can be terminated
+after all invariants exist and still classify complete. Every earlier row is a
+negative control against premature completion. A file added after integrity
+close is now `untracked` and prevents a clean result; integrity checks both the
+claimed entries and the complete stored file inventory.
+
+**Bounded means bounded.** This is direct-child process termination, not power
+loss. It does not cover intervals between checkpoints, kernel or storage-cache
+failure, `fsync` guarantees, descendant-process cleanup, network/IPC/lock
+cleanup, or durable suspend/resume. Those unobserved classes are carried in
+every campaign manifest and printed on the passing path.
 
 ### `hwb confine <run id>`
 
@@ -394,13 +440,14 @@ confine_record_reach         confine   detected   reached into somebody-else
 conform_artifact_mismatch    conform   detected   Invariant 1: stdout_bytes disagrees ...
 diff_exit_code *             diff      detected   ...
 effects_out_of_envelope      effects   detected   added state/spill.txt
+interrupt_premature_complete interrupt detected   missing integrity close classified recoverable, not complete
 replay_changed_executable    replay    MISSED     reported `matched` after output changed
 verify_tamper                verify    detected   drifted (drifted: record.json)
 
 * = positive control
 
-detected 14/15
-checker coverage: 13/13
+detected 15/16
+checker coverage: 14/14
 ```
 
 Record probes run on copies, verdict reducers receive deliberately red
@@ -485,6 +532,10 @@ further than it holds.
 - **Seam budgets are advisory at the edges.** Main thread only, cannot
   interrupt a blocking C call, and a hook catching `BaseException` can absorb
   the escalation. Real isolation needs a subprocess.
+- **`interrupt` covers named closed-file boundaries and only its direct runner
+  child.** It does not test power loss, storage durability, arbitrary
+  instruction points, descendants, or remote effects, and `recoverable` means
+  readable evidence rather than resumable execution.
 - **`freeze` and `catch` cover only declared inputs.** Not the interpreter, the
   environment, the clock, or anything you forgot to declare.
 - **Injected faults are not real defects.** A large fault-injection study put

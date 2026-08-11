@@ -30,3 +30,7 @@ prune examples/attaching/runs
 prune examples/attaching/steadies
 prune examples/effect-boundary/runs
 prune examples/effect-boundary/effects
+prune examples/interrupts
+prune examples/flaky/interrupts
+prune examples/attaching/interrupts
+prune examples/effect-boundary/interrupts

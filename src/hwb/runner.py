@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -44,6 +45,39 @@ from .seams import Dispatcher
 RECORD_SCHEMA = "hwbrun/v0.1"
 SEAM_CONTRACT = "seams/0.2.0"
 ATTEMPT_ARTIFACT_CONTRACT = "attempt-artifacts/0.1"
+
+# Private coordination used by the bounded interruption campaign.  This is
+# deliberately not a spec field or public run option: checkpoints are an
+# instrument attached by ``hwb interrupt``, not behaviour a workload can ask
+# the harness to perform.
+_CHECKPOINT_ENV = "HWB_LIFECYCLE_CHECKPOINT"
+_CHECKPOINT_MARKER_ENV = "HWB_LIFECYCLE_MARKER"
+
+
+def _lifecycle_checkpoint(name: str, run_dir: str) -> None:
+    """Publish one named, closed-file boundary and wait to be terminated.
+
+    The marker is written atomically before the wait.  The interruption
+    campaign therefore kills only after it has evidence that the child
+    reached the requested boundary; no sleep duration chooses the kill point.
+    Outside that campaign both environment variables are absent and this is a
+    very small equality check.
+    """
+    if os.environ.get(_CHECKPOINT_ENV) != name:
+        return
+    marker = os.environ.get(_CHECKPOINT_MARKER_ENV)
+    if not marker:
+        raise HarnessError("lifecycle checkpoint %s has no marker path" % name)
+    payload = {"checkpoint": name, "pid": os.getpid(),
+               "run_dir": os.path.abspath(run_dir)}
+    tmp = marker + ".writing"
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    with open(tmp, "wb") as fh:
+        fh.write(canon_bytes(payload))
+    os.replace(tmp, marker)
+    # The parent owns release by terminating this process.  An Event avoids a
+    # timing-based sleep and cannot return spuriously on its own.
+    threading.Event().wait()
 
 
 def _utc() -> str:
@@ -81,12 +115,14 @@ class Recorder:
         self.run_id = "%s-%s-%s" % (_stamp(), short(spec.digest),
                                     uuid.uuid4().hex[:4])
         self.run_dir = os.path.join(root, self.run_id)
+        _lifecycle_checkpoint("before_run_directory", self.run_dir)
         try:
             os.makedirs(self.run_dir, exist_ok=False)
         except FileExistsError:
             raise HarnessError("run directory already exists: %s" % self.run_dir)
         self._attempts = open(os.path.join(self.run_dir, "attempts.jsonl"),
                               "a", encoding="utf-8")
+        _lifecycle_checkpoint("run_directory_created", self.run_dir)
         self._extras: Dict[str, Dict[str, Any]] = {}
         self._failed_steps: List[Dict[str, str]] = []
         self._frames: List[Dict[str, Any]] = []
@@ -237,7 +273,9 @@ class Recorder:
         path = os.path.join(self.run_dir, "record.json")
         with open(path, "wb") as fh:
             fh.write(canon_bytes(record))
+        _lifecycle_checkpoint("record_written", self.run_dir)
         _write_integrity(self.run_dir)
+        _lifecycle_checkpoint("integrity_written", self.run_dir)
         return record
 
     def _finalise_attempt_artifacts(self) -> None:
@@ -274,7 +312,9 @@ class Recorder:
             with open(tmp, "w", encoding="utf-8") as fh:
                 for attempt in attempts:
                     fh.write(json.dumps(attempt, sort_keys=True) + "\n")
+            _lifecycle_checkpoint("attempts_finalising_written", self.run_dir)
             os.replace(tmp, path)
+            _lifecycle_checkpoint("attempts_finalised", self.run_dir)
         finally:
             if os.path.isfile(tmp):
                 os.remove(tmp)
@@ -302,18 +342,41 @@ def _write_integrity(run_dir: str) -> None:
 def verify(run_dir: str) -> Dict[str, Any]:
     path = os.path.join(run_dir, "integrity.json")
     if not os.path.isfile(path):
-        return {"state": "baseline_missing", "drifted": [], "missing": []}
-    with open(path, "r", encoding="utf-8") as fh:
-        base = json.load(fh)
+        return {"state": "baseline_missing", "drifted": [], "missing": [],
+                "untracked": [], "error": None}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            base = json.load(fh)
+        files = base["files"]
+        if not isinstance(files, dict):
+            raise ValueError("files is not an object")
+        for rel, dig in files.items():
+            if not isinstance(rel, str) or not isinstance(dig, str):
+                raise ValueError("files entries must map path strings to digests")
+            normal = os.path.normpath(rel)
+            if os.path.isabs(rel) or normal == ".." or normal.startswith(".." + os.sep):
+                raise ValueError("integrity path escapes the run directory: %r" % rel)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return {"state": "baseline_invalid", "drifted": [], "missing": [],
+                "untracked": [], "error": str(e)}
     drifted, missing = [], []
-    for rel, dig in sorted(base["files"].items()):
+    for rel, dig in sorted(files.items()):
         full = os.path.join(run_dir, rel)
         if not os.path.isfile(full):
             missing.append(rel)
         elif digest_file(full) != dig:
             drifted.append(rel)
-    state = "clean" if not drifted and not missing else "drifted"
-    return {"state": state, "drifted": drifted, "missing": missing}
+    actual = set()
+    for dirpath, dirnames, filenames in os.walk(run_dir):
+        dirnames[:] = sorted(dirnames)
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            if fn != "integrity.json" and os.path.isfile(full):
+                actual.add(os.path.relpath(full, run_dir))
+    untracked = sorted(actual - set(files))
+    state = "clean" if not drifted and not missing and not untracked else "drifted"
+    return {"state": state, "drifted": drifted, "missing": missing,
+            "untracked": untracked, "error": None}
 
 
 # ---------------------------------------------------------------- the loop
@@ -329,6 +392,7 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
 
     rec = Recorder(root, spec)
     rec.preserve(loaded)
+    _lifecycle_checkpoint("inputs_preserved", rec.run_dir)
     disp = Dispatcher(loaded, rec)
 
     disp.call("on_spec_loaded", spec)
@@ -368,6 +432,7 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
                 fh.write(out)
             with open(os.path.join(adir, "stderr.bin"), "wb") as fh:
                 fh.write(err)
+            _lifecycle_checkpoint("attempt_artifacts_written", rec.run_dir)
             obs = {"step_id": step.id, "n": n, "exit": exit_code,
                    "started": started,
                    "duration_ms": int((time.monotonic() - t0) * 1000),

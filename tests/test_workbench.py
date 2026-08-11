@@ -2470,6 +2470,144 @@ class TestEffects(Base):
         self.assertEqual(cli.main(prefix + [allowed, "--watch", "."]), 2)
 
 
+class TestInterruptions(Base):
+    """Family 14: named direct-child interruption and store-state truth."""
+
+    def setUp(self):
+        super().setUp()
+        self.interrupts = os.path.join(self.tmp, "interrupt-campaigns")
+
+    def test_state_oracle_distinguishes_all_closed_states_without_repair(self):
+        from hwb import interrupt
+
+        missing = os.path.join(self.runs, "announced-but-absent")
+        self.assertEqual(interrupt.inspect_state(missing)["state"],
+                         interrupt.ABSENT)
+
+        incomplete = os.path.join(self.runs, "husk")
+        os.makedirs(incomplete)
+        with open(os.path.join(incomplete, "attempts.jsonl"), "w"):
+            pass
+        self.assertEqual(interrupt.inspect_state(incomplete)["state"],
+                         interrupt.INCOMPLETE)
+
+        rec = self.run_spec([], name="oracle.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        self.assertEqual(interrupt.inspect_state(d)["state"], interrupt.COMPLETE)
+        os.remove(os.path.join(d, "integrity.json"))
+        observed = interrupt.inspect_state(d)
+        self.assertEqual(observed["state"], interrupt.RECOVERABLE)
+        self.assertIn("not closed", observed["reasons"][0])
+        self.assertTrue(os.path.isfile(os.path.join(d, "record.json")),
+                        "inspection must not delete or quarantine evidence")
+
+    def test_exhaustive_integrity_rejects_a_file_added_after_close(self):
+        rec = self.run_spec([], name="inventory.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        with open(os.path.join(d, "late.tmp"), "w", encoding="utf-8") as fh:
+            fh.write("not in the close-time inventory")
+        result = runner.verify(d)
+        self.assertEqual(result["state"], "drifted")
+        self.assertEqual(result["untracked"], ["late.tmp"])
+
+    def test_integrity_inventory_cannot_escape_the_run_directory(self):
+        rec = self.run_spec([], name="inventory-path.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        path = os.path.join(d, "integrity.json")
+        base = read(path)
+        base["files"]["../outside"] = "sha256:" + "0" * 64
+        write(path, base)
+        result = runner.verify(d)
+        self.assertEqual(result["state"], "baseline_invalid")
+        self.assertIn("escapes", result["error"])
+
+    def test_every_named_checkpoint_has_the_exact_expected_state(self):
+        from hwb import interrupt
+
+        path = self.spec([], name="interrupt.json")
+        man = interrupt.campaign(path, self.runs, self.interrupts,
+                                 timeout_seconds=5)
+        self.assertEqual(man["verdict"], interrupt.PASSED, man["violations"])
+        rows = {r["checkpoint"]: r for r in man["checkpoints"]}
+        self.assertEqual(set(rows) - {"uninterrupted_control"},
+                         {name for name, _ in interrupt.CHECKPOINTS})
+        for name, expected in interrupt.CHECKPOINTS:
+            with self.subTest(checkpoint=name):
+                row = rows[name]
+                self.assertEqual(row["observed_state"], expected)
+                self.assertEqual(row["violations"], [])
+                self.assertTrue(row["child"]["terminate_requested"])
+        self.assertEqual(rows["uninterrupted_control"]["observed_state"],
+                         interrupt.COMPLETE)
+        self.assertEqual(rows["uninterrupted_control"]["child"]["returncode"], 0)
+
+        early = [rows[name] for name, _ in interrupt.CHECKPOINTS
+                 if name not in ("integrity_written",)]
+        self.assertFalse(any(r["observed_state"] == interrupt.COMPLETE
+                             for r in early),
+                         "no pre-integrity boundary may appear complete")
+        self.assertIn("descendant-process lifetime",
+                      " ".join(man["unobserved"]))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.interrupts, man["campaign_id"], "campaign.json")))
+
+    def test_list_exposes_husks_and_show_verify_refuse_them(self):
+        import io
+        from contextlib import redirect_stdout
+        from hwb import cli
+
+        husk = os.path.join(self.runs, "interrupted-husk")
+        os.makedirs(husk)
+        with open(os.path.join(husk, "attempts.jsonl"), "w"):
+            pass
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(cli.main(["--root", self.runs, "ls"]), 0)
+            self.assertEqual(cli.main(["--root", self.runs, "show",
+                                       "interrupted-husk"]), 1)
+            self.assertEqual(cli.main(["--root", self.runs, "verify",
+                                       "interrupted-husk"]), 1)
+        shown = out.getvalue()
+        self.assertIn("interrupted-husk", shown)
+        self.assertIn("incomplete", shown)
+        self.assertIn("record.json has not closed", shown)
+
+    def test_show_json_remains_parseable_for_complete_and_incomplete_paths(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from hwb import cli
+
+        rec = self.run_spec([], name="show-json.json")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(cli.main(["--root", self.runs, "show",
+                                       rec["run_id"], "--json"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["run_id"], rec["run_id"])
+
+        husk = os.path.join(self.runs, "json-husk")
+        os.makedirs(husk)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(cli.main(["--root", self.runs, "show",
+                                       "json-husk", "--json"]), 1)
+        self.assertEqual(json.loads(out.getvalue())["lifecycle"], "incomplete")
+        self.assertIn("non-passing", err.getvalue())
+
+    def test_bad_timeout_is_refused_before_spawning(self):
+        from hwb import interrupt
+        with self.assertRaisesRegex(interrupt.InterruptError, "greater than zero"):
+            interrupt.campaign(self.spec([], name="bad-timeout.json"), self.runs,
+                               self.interrupts, timeout_seconds=0)
+
+    def test_instrument_store_cannot_overlap_the_run_store(self):
+        from hwb import interrupt
+        path = self.spec([], name="overlap.json")
+        with self.assertRaisesRegex(interrupt.InterruptError, "must not overlap"):
+            interrupt.campaign(path, self.runs,
+                               os.path.join(self.runs, "campaigns"),
+                               timeout_seconds=5)
+
+
 class TestInvertsDeclaration(Base):
     """The manifest field must fail closed at load, not at campaign time.
 
@@ -3142,7 +3280,7 @@ class TestTheFirstRunDeadEnds(Base):
         # added later cannot quietly escape the check.
         from hwb import cli
         spec_takers = {"run", "sweep", "blast", "catch", "efficacy",
-                       "steady", "effects"}
+                       "steady", "effects", "interrupt"}
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]
         for name, parser in sub.choices.items():
@@ -3434,7 +3572,8 @@ def _commands_in(block):
 
 
 STORE_DIRS = ("runs", "sweeps", "blasts", "catches",
-              "efficacy", "sensitivity", "replays", "steadies", "effects")
+              "efficacy", "sensitivity", "replays", "steadies", "effects",
+              "interrupts")
 
 
 class TestRunStoresDoNotShip(unittest.TestCase):
