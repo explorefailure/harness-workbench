@@ -2704,6 +2704,119 @@ class TestInterruptions(Base):
         self.assertEqual(json.loads(out.getvalue())["lifecycle"], "incomplete")
         self.assertIn("non-passing", err.getvalue())
 
+    def test_list_and_show_fall_back_for_readable_malformed_records(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from hwb import cli
+
+        malformed = {
+            "empty-record": {},
+            "bad-features": {"features": ["x"]},
+        }
+        for run_id, record in malformed.items():
+            d = os.path.join(self.runs, run_id)
+            os.makedirs(d)
+            write(os.path.join(d, "record.json"), record)
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(cli.main(["--root", self.runs, "ls"]), 0)
+        listing = out.getvalue()
+        self.assertEqual(err.getvalue(), "")
+        for run_id in malformed:
+            self.assertIn(run_id, listing)
+        self.assertEqual(listing.count("incomplete"), len(malformed))
+
+        for run_id in malformed:
+            with self.subTest(run_id=run_id, format="text"):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--root", self.runs, "show", run_id])
+                self.assertEqual(code, 1)
+                self.assertEqual(err.getvalue(), "")
+                self.assertIn("lifecycle incomplete", out.getvalue())
+                self.assertIn("record does not conform", out.getvalue())
+                self.assertIn("retained: record.json", out.getvalue())
+                self.assertNotIn("run       ", out.getvalue())
+
+            with self.subTest(run_id=run_id, format="json"):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--root", self.runs, "show", run_id,
+                                     "--json"])
+                self.assertEqual(code, 1)
+                payload = json.loads(out.getvalue())
+                self.assertEqual(payload["lifecycle"], "incomplete")
+                self.assertEqual(payload["run_id"], run_id)
+                self.assertEqual(payload["inventory"], ["record.json"])
+                self.assertIn("record does not conform", payload["reasons"][0])
+                self.assertNotIn("features", payload)
+                self.assertIn("non-passing", err.getvalue())
+
+    def test_list_and_show_fall_back_for_malformed_attempt_streams(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from hwb import cli, interrupt
+
+        cases = {"invalid-json": "not json\n", "non-object": "[]\n"}
+        run_ids = []
+        for label, body in cases.items():
+            rec = self.run_spec([], name="%s-attempts.json" % label)
+            run_id = rec["run_id"]
+            run_ids.append(run_id)
+            with open(os.path.join(self.runs, run_id, "attempts.jsonl"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(body)
+            observed = interrupt.inspect_state(os.path.join(self.runs, run_id))
+            self.assertEqual(observed["state"], interrupt.INCOMPLETE)
+            self.assertIsNone(observed["record"])
+
+        rec = self.run_spec([], name="missing-exit-attempts.json")
+        run_id = rec["run_id"]
+        run_ids.append(run_id)
+        attempts_path = os.path.join(self.runs, run_id, "attempts.jsonl")
+        attempts = [json.loads(line) for line in read_text(attempts_path).splitlines()
+                    if line.strip()]
+        attempts[0].pop("exit")
+        with open(attempts_path, "w", encoding="utf-8") as fh:
+            for attempt in attempts:
+                fh.write(json.dumps(attempt) + "\n")
+        observed = interrupt.inspect_state(os.path.join(self.runs, run_id))
+        self.assertEqual(observed["state"], interrupt.INCOMPLETE)
+        self.assertIsNone(observed["record"])
+        self.assertIn("missing 'exit'", observed["reasons"][0])
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(cli.main(["--root", self.runs, "ls"]), 0)
+        self.assertEqual(err.getvalue(), "")
+        for run_id in run_ids:
+            self.assertIn(run_id, out.getvalue())
+
+        for run_id in run_ids:
+            with self.subTest(run_id=run_id, format="text"):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--root", self.runs, "show", run_id])
+                self.assertEqual(code, 1)
+                self.assertEqual(err.getvalue(), "")
+                self.assertIn("lifecycle incomplete", out.getvalue())
+                self.assertIn("retained:", out.getvalue())
+                self.assertNotIn("\nattempts\n", out.getvalue())
+
+            with self.subTest(run_id=run_id, format="json"):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--root", self.runs, "show", run_id,
+                                     "--json"])
+                self.assertEqual(code, 1)
+                payload = json.loads(out.getvalue())
+                self.assertEqual(payload["lifecycle"], "incomplete")
+                self.assertEqual(payload["run_id"], run_id)
+                self.assertIn("attempts.jsonl", payload["inventory"])
+                self.assertTrue(payload["reasons"])
+                self.assertIn("non-passing", err.getvalue())
+
     def test_bad_timeout_is_refused_before_spawning(self):
         from hwb import interrupt
         with self.assertRaisesRegex(interrupt.InterruptError, "greater than zero"):

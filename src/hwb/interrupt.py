@@ -92,6 +92,34 @@ def _inventory(run_dir: str) -> List[str]:
     return out
 
 
+def _validate_inspection_shape(record: Dict[str, Any],
+                               attempts: List[Dict[str, Any]]) -> None:
+    """Reject shapes that the human-readable lifecycle views cannot render."""
+    for feature in record["features"]:
+        if not isinstance(feature["name"], str):
+            raise TypeError("feature name must be a string, got %s"
+                            % type(feature["name"]).__name__)
+    for index, attempt in enumerate(attempts, 1):
+        if "exit" not in attempt:
+            raise ValueError("attempts.jsonl entry %d is missing 'exit'" % index)
+
+    timings = record.get("seam_timings")
+    if timings is None:
+        timings = {}
+    if not isinstance(timings, dict):
+        raise TypeError("seam_timings must be an object")
+    for feature, seams in timings.items():
+        if not isinstance(feature, str) or not isinstance(seams, dict):
+            raise TypeError("seam_timings entries must map names to objects")
+        for seam, cell in seams.items():
+            if not isinstance(seam, str) or not isinstance(cell, dict):
+                raise TypeError("seam_timings seam entries must be objects")
+            if not isinstance(cell.get("calls"), int):
+                raise TypeError("seam_timings calls must be an integer")
+            if not isinstance(cell.get("total_ms"), (int, float)):
+                raise TypeError("seam_timings total_ms must be numeric")
+
+
 def inspect_state(run_dir: str) -> Dict[str, Any]:
     """Classify one announced run path without mutating it."""
     from . import conform, runner
@@ -124,10 +152,21 @@ def inspect_state(run_dir: str) -> Dict[str, Any]:
         if os.path.isfile(attempts_path):
             with open(attempts_path, "r", encoding="utf-8") as fh:
                 attempts = [json.loads(line) for line in fh if line.strip()]
+    except (OSError, ValueError) as e:
+        return {"state": INCOMPLETE, "run_path": absolute, "record": None,
+                "inventory": inventory,
+                "reasons": ["attempts.jsonl is unreadable: %s" % e],
+                "integrity": None}
+
+    try:
         conform.validate_record(record, attempts, run_dir=absolute)
+        _validate_inspection_shape(record, attempts)
     except (OSError, ValueError, KeyError, TypeError, AttributeError,
             conform.NonConforming) as e:
-        return {"state": INCOMPLETE, "run_path": absolute, "record": record,
+        # A readable JSON value is not yet a displayable run record.  Keep
+        # the bytes visible through the inventory and explain why they were
+        # refused, but do not hand an unvalidated shape to `ls` or `show`.
+        return {"state": INCOMPLETE, "run_path": absolute, "record": None,
                 "inventory": inventory,
                 "reasons": ["record does not conform: %s" % e],
                 "integrity": None}
