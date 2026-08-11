@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Tests and package verification never need to mutate repository state.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test / ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run full test suite
+        run: python -m unittest discover -s tests -v
+
+  package:
+    name: Build and verify release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Confirm clean checkout
+        run: |
+          git status --porcelain --untracked-files=all > "$RUNNER_TEMP/hwb-git-status"
+          if test -s "$RUNNER_TEMP/hwb-git-status"; then
+            cat "$RUNNER_TEMP/hwb-git-status"
+            exit 1
+          fi
+
+      - name: Install release tooling
+        run: python -m pip install --disable-pip-version-check build==1.5.0 twine==7.0.0
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Inspect artifact contents and version agreement
+        run: python tools/verify_release_artifacts.py dist
+
+      - name: Install and exercise wheel in a clean environment
+        run: python tools/verify_installed_artifact.py dist/*.whl
+
+      - name: Install and exercise source distribution in a clean environment
+        run: python tools/verify_installed_artifact.py dist/*.tar.gz
