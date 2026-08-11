@@ -85,10 +85,12 @@ declaring it is rejected with an explicit message.
 - An `observe` hook's return value is discarded *by contract*. It is handed
   the live extras dict through `ctx`, so it *can* write — and that write is
   recorded as a breach. If you want to record something, declare `annotate`.
-- An `annotate` hook must write **by returning a dict**, not by reaching
-  through `ctx["extras"]`. A direct write to your own namespace bypasses the
-  declared channel; a write to someone else's is coupling that nothing
-  declares, which is exactly what `provides`/`requires` exist to make visible.
+- An `annotate` hook must write **by returning a dict of canonical JSON data**,
+  not by reaching through `ctx["extras"]`. Non-finite numbers such as `NaN`
+  and infinities are not JSON and disable the feature like any other annotate
+  defect. A direct write to your own namespace bypasses the declared channel;
+  a write to someone else's is coupling that nothing declares, which is
+  exactly what `provides`/`requires` exist to make visible.
 - A `wrap` has power over **execution** — how many times the step runs — and
   **no declared channel into the record at all**. Writing extras from a wrap
   is a breach even into your own namespace.
@@ -96,7 +98,9 @@ declaring it is rejected with an explicit message.
 Breaches are **recorded, not blocked**. Disabling a feature mid-run for
 reaching through would change what every earlier campaign measured, so the
 breach becomes a fact in the record and `hwb confine` reads it. This follows
-`freeze`: annotate rather than block, and let the reader decide.
+`freeze`: annotate rather than block, and let the reader decide. The boundary
+exception is a direct write that makes the record non-canonical: it is rolled
+back and the feature is disabled so its defect cannot prevent the run closing.
 
 ## Seams
 

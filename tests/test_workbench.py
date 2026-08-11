@@ -317,6 +317,24 @@ class TestLoadTimeRefusals(Base):
 
 
 class TestFailureSemantics(Base):
+    def _annotator(self, source, name="bad"):
+        d = os.path.join(self.feat_dir, name)
+        os.makedirs(d, exist_ok=True)
+        write(os.path.join(d, "FEATURE.json"),
+              {"name": name, "version": "0.1.0", "power": "annotate",
+               "seams": ["after_run"], "seam_contract": ">=0.2.0,<0.3.0"})
+        with open(os.path.join(d, "feature.py"), "w") as fh:
+            fh.write(source)
+
+    def _assert_failed_annotation_is_inspectable(self, rec, name="bad"):
+        self.assertValidRecord(rec)
+        feature = [f for f in rec["features"] if f["name"] == name][0]
+        self.assertEqual(feature["status"], "failed")
+        self.assertEqual(rec["extras"][name]["error"]["type"],
+                         "InvalidAnnotation")
+        stored = read(os.path.join(self.runs, rec["run_id"], "record.json"))
+        self.assertEqual(stored["extras"][name], rec["extras"][name])
+
     def _crasher(self, seam, power="annotate"):
         d = os.path.join(self.feat_dir, "boom")
         os.makedirs(d, exist_ok=True)
@@ -353,6 +371,79 @@ class TestFailureSemantics(Base):
         bad = [f for f in rec["features"] if f["name"] == "bad"][0]
         self.assertEqual(bad["status"], "failed")
         self.assertIn("PowerMismatch", json.dumps(rec["extras"]["bad"]))
+
+    def test_annotate_returning_non_finite_numbers_fails_without_killing_run(self):
+        for label, expression in (("nan", "float('nan')"),
+                                  ("infinity", "float('inf')"),
+                                  ("negative-infinity", "-float('inf')")):
+            with self.subTest(value=label):
+                self._annotator(
+                    "def after_run(spec, ctx):\n"
+                    "    return {'value': %s}\n" % expression)
+                rec = self.run_spec(["bad"], name="%s.json" % label)
+                self._assert_failed_annotation_is_inspectable(rec)
+                self.assertNotIn("value", rec["extras"]["bad"])
+
+    def test_nested_non_canonical_annotation_is_rejected_at_the_seam(self):
+        self._annotator(
+            "def after_run(spec, ctx):\n"
+            "    return {'outer': [{'valid': 1}, "
+            "{'invalid': float('nan')}]}\n")
+        rec = self.run_spec(["bad"], name="nested-invalid.json")
+        self._assert_failed_annotation_is_inspectable(rec)
+        self.assertNotIn("outer", rec["extras"]["bad"])
+
+    def test_invalid_direct_mutation_is_rolled_back_and_recorded(self):
+        self._annotator(
+            "def after_run(spec, ctx):\n"
+            "    own = ctx['extras'].setdefault('bad', {})\n"
+            "    own['poison'] = {'nested': [float('inf')]}\n"
+            "    return {'returned': 'must not be committed'}\n")
+        rec = self.run_spec(["bad"], name="direct-invalid.json")
+        self._assert_failed_annotation_is_inspectable(rec)
+        self.assertNotIn("poison", rec["extras"]["bad"])
+        self.assertNotIn("returned", rec["extras"]["bad"])
+        feature = [f for f in rec["features"] if f["name"] == "bad"][0]
+        self.assertTrue(any(b["namespace"] == "bad"
+                            for b in feature["breaches"]))
+
+    def test_invalid_direct_mutation_is_rolled_back_when_hook_also_crashes(self):
+        self._annotator(
+            "def after_run(spec, ctx):\n"
+            "    ctx['extras'].setdefault('bad', {})['poison'] = float('nan')\n"
+            "    raise RuntimeError('after poisoning extras')\n")
+        rec = self.run_spec(["bad"], name="direct-invalid-crash.json")
+        self.assertValidRecord(rec)
+        feature = [f for f in rec["features"] if f["name"] == "bad"][0]
+        self.assertEqual(feature["status"], "failed")
+        self.assertEqual(rec["extras"]["bad"]["error"]["type"],
+                         "RuntimeError")
+        self.assertNotIn("poison", rec["extras"]["bad"])
+        self.assertTrue(any(b["namespace"] == "bad"
+                            for b in feature["breaches"]))
+
+    def test_valid_unicode_and_finite_numeric_annotations_are_preserved(self):
+        self._annotator(
+            "def after_run(spec, ctx):\n"
+            "    return {'text': '雪 café 🧪', "
+            "'numbers': [-7, 0, 1.25, 100000000000000000000]}\n")
+        rec = self.run_spec(["bad"], name="valid-canonical.json")
+        self.assertValidRecord(rec)
+        feature = [f for f in rec["features"] if f["name"] == "bad"][0]
+        self.assertEqual(feature["status"], "ok")
+        self.assertEqual(rec["extras"]["bad"]["text"], "雪 café 🧪")
+        self.assertEqual(rec["extras"]["bad"]["numbers"],
+                         [-7, 0, 1.25, 100000000000000000000])
+
+    def test_residual_record_serialisation_failure_is_a_harness_error(self):
+        sp = specmod.load(self.spec([], name="residual-invalid.json"))
+        rec = runner.Recorder(self.runs, sp)
+        rec.preserve([])
+        rec.extras("outside-dispatch")["value"] = float("nan")
+        with self.assertRaises(runner.HarnessError) as cm:
+            rec.close("completed", [])
+        self.assertIn("canonical", str(cm.exception))
+        self.assertIn("record.json", str(cm.exception))
 
     def test_nonzero_exit_is_data_not_an_error(self):
         p = os.path.join(self.tmp, "fail.sh")

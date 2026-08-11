@@ -273,8 +273,18 @@ class Recorder:
             "extras": self._extras,
         }
         path = os.path.join(self.run_dir, "record.json")
+        try:
+            encoded = canon_bytes(record)
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            # Annotate data is checked at dispatch, but close is the final
+            # authority for everything else that contributes to the record.
+            # Keep an unexpected serialization defect in the harness error
+            # taxonomy rather than leaking the JSON encoder's ValueError.
+            raise HarnessError(
+                "record.json close failed: record is not canonical JSON "
+                "(%s: %s)" % (type(exc).__name__, exc)) from exc
         with open(path, "wb") as fh:
-            fh.write(canon_bytes(record))
+            fh.write(encoded)
         _lifecycle_checkpoint("record_written", self.run_dir)
         _write_integrity(self.run_dir)
         _lifecycle_checkpoint("integrity_written", self.run_dir)

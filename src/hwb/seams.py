@@ -20,6 +20,8 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
+from .canon import canon_bytes
+
 SEAMS = (
     "on_spec_loaded",
     "before_run",
@@ -47,6 +49,10 @@ SEAM_POWERS = {
 
 class PowerMismatch(Exception):
     """A feature did something its declared power does not permit."""
+
+
+class InvalidAnnotation(Exception):
+    """An annotate hook produced data the run record cannot represent."""
 
 
 class SeamTimeout(Exception):
@@ -196,6 +202,43 @@ class Dispatcher:
     def _snapshot(self) -> Dict[str, Any]:
         return copy.deepcopy(self.recorder.extras_view())
 
+    def _restore(self, snapshot: Dict[str, Any]) -> None:
+        """Roll the live record channel back without replacing its root.
+
+        Hooks receive the root object through ``ctx``. Keeping that identity
+        while restoring its contents means subsequent hooks see the rollback
+        through the same channel they were originally handed.
+        """
+        extras = self.recorder.extras_view()
+        extras.clear()
+        extras.update(snapshot)
+
+    @staticmethod
+    def _require_canonical(value: Any, source: str) -> None:
+        """Exercise the exact encoder that will seal ``record.json``."""
+        try:
+            canon_bytes(value)
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise InvalidAnnotation(
+                "%s must be canonical JSON (%s: %s)"
+                % (source, type(exc).__name__, exc)) from exc
+
+    def _rollback_invalid_direct_annotation(
+            self, feat, seam: str, step_id, before: Dict[str, Any]) -> None:
+        """Contain poison left behind by a hook that also raised."""
+        if feat.manifest.power != "annotate":
+            return
+        try:
+            self._require_canonical(
+                self.recorder.extras_view(),
+                "annotate hook direct record mutation")
+        except InvalidAnnotation:
+            # The hook's original exception remains the reported failure;
+            # this only prevents its partial write from causing a second,
+            # fatal failure during close.
+            self._note_reach(feat, seam, step_id, before)
+            self._restore(before)
+
     def _note_reach(self, feat, seam: str, step_id, before: Dict[str, Any]) -> None:
         """Namespaces the hook changed by hand, before its return is applied.
 
@@ -246,15 +289,33 @@ class Dispatcher:
                     # KeyboardInterrupt on the way past.
                     self.recorder.note_seam(feat.name, seam,
                                             (time.perf_counter() - t0) * 1000)
+                    self._rollback_invalid_direct_annotation(
+                        feat, seam, step_id, before)
                     self._fail(feat, seam, step_id, exc)
                     continue
                 except Exception as exc:                  # noqa: BLE001
                     self.recorder.note_seam(feat.name, seam,
                                             (time.perf_counter() - t0) * 1000)
+                    self._rollback_invalid_direct_annotation(
+                        feat, seam, step_id, before)
                     self._fail(feat, seam, step_id, exc)
                     continue
             self.recorder.note_seam(feat.name, seam,
                                     (time.perf_counter() - t0) * 1000)
+            if feat.manifest.power == "annotate":
+                try:
+                    # ``ctx['extras']`` is deliberately live so confinement
+                    # can observe reach-through. A non-canonical write cannot
+                    # remain there, though: it would turn this feature defect
+                    # into a raw close-time encoder crash.
+                    self._require_canonical(
+                        self.recorder.extras_view(),
+                        "annotate hook direct record mutation")
+                except InvalidAnnotation as exc:
+                    self._note_reach(feat, seam, step_id, before)
+                    self._restore(before)
+                    self._fail(feat, seam, step_id, exc)
+                    continue
             self._note_reach(feat, seam, step_id, before)
             if b.overran():
                 # Returned, but late. Checked separately from the alarm
@@ -271,6 +332,16 @@ class Dispatcher:
                 self._fail(feat, seam, step_id, PowerMismatch(
                     "annotate hook must return a dict or None, got %s"
                     % type(out).__name__))
+                continue
+            try:
+                # Validate the prospective merged state, not just ``out``:
+                # two separately encodable mappings can still be invalid
+                # together (for example, keys that cannot be sorted).
+                candidate = self._snapshot()
+                candidate.setdefault(feat.name, {}).update(out)
+                self._require_canonical(candidate, "annotate hook return")
+            except InvalidAnnotation as exc:
+                self._fail(feat, seam, step_id, exc)
                 continue
             self.recorder.extras(feat.name).update(out)
 
