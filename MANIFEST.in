@@ -28,3 +28,5 @@ prune examples/flaky/efficacy
 prune examples/flaky/steadies
 prune examples/attaching/runs
 prune examples/attaching/steadies
+prune examples/effect-boundary/runs
+prune examples/effect-boundary/effects

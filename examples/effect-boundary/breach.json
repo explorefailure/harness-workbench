@@ -1,0 +1,12 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "calibration",
+  "features": [{"name": "spill"}],
+  "steps": [
+    {
+      "id": "write",
+      "argv": ["./write-allowed.sh"],
+      "inputs": ["write-allowed.sh"]
+    }
+  ]
+}

@@ -13,7 +13,8 @@ import sys
 from typing import List, Optional
 
 from . import (blast as blastmod, catch as catchmod, confine as confmod,
-               conform, diff as diffmod, efficacy as effmod, features,
+               conform, diff as diffmod, efficacy as effmod,
+               effects as effectsmod, features,
                fidelity as fidmod, replay as replaymod, runner,
                sensitivity as sensmod, spec as specmod, steady as steadymod,
                sweep as sweepmod)
@@ -26,6 +27,7 @@ DEFAULT_SENS = os.environ.get("HWB_SENSITIVITY", "sensitivity")
 DEFAULT_EFFICACY = os.environ.get("HWB_EFFICACY", "efficacy")
 DEFAULT_REPLAYS = os.environ.get("HWB_REPLAYS", "replays")
 DEFAULT_STEADIES = os.environ.get("HWB_STEADIES", "steadies")
+DEFAULT_EFFECTS = os.environ.get("HWB_EFFECTS", "effects")
 
 
 def _fail(msg: str) -> int:
@@ -519,6 +521,57 @@ def cmd_steady(args) -> int:
     return 2
 
 
+def _effect_endpoint(cell) -> str:
+    if cell is None:
+        return "absent"
+    detail = cell["type"]
+    if cell.get("digest"):
+        detail += " " + cell["digest"]
+    return detail
+
+
+def cmd_effects(args) -> int:
+    try:
+        man = effectsmod.campaign(args.spec, args.root, args.effects_store,
+                                  args.watch, args.allow or [])
+    except effectsmod.EffectsError as e:
+        return _fail(str(e))
+
+    sys.stdout.write("%s  %s\n" % (man["campaign_id"], man["verdict"]))
+    sys.stdout.write("run: %s\n" % (man["run_id"] or "(none)"))
+    sys.stdout.write("sensor: %s\n" % man["sensor"]["name"])
+    sys.stdout.write("watch: %s\n" % ", ".join(
+        row["path"] for row in man["watched_roots"]))
+    sys.stdout.write("allow: %s\n" % (", ".join(
+        row["path"] for row in man["allowed_paths"]) or "(none)"))
+
+    for row in man["changes"]:
+        tag = "ALLOWED" if row["allowed"] else "BREACH"
+        sys.stdout.write("\n%-7s %-15s %s\n"
+                         % (tag, row["change"], row["path"]))
+        sys.stdout.write("        before: %s\n" %
+                         _effect_endpoint(row["before"]))
+        sys.stdout.write("        after:  %s\n" %
+                         _effect_endpoint(row["after"]))
+
+    if man["setup_error"]:
+        sys.stdout.write("\nSETUP ERROR: %s\n" % man["setup_error"])
+    if man["instrument_error"]:
+        sys.stdout.write("\nINSTRUMENT ERROR: %s\n" % man["instrument_error"])
+    if man["sensor"]["unobserved_special_paths"]:
+        sys.stdout.write("\nUNINTERPRETABLE special path(s): %s\n" % ", ".join(
+            man["sensor"]["unobserved_special_paths"]))
+
+    sys.stdout.write("\nunobserved by this sensor:\n")
+    for item in man["sensor"]["unobserved"]:
+        sys.stdout.write("  - %s\n" % item)
+    if man["verdict"] == effectsmod.WITHIN_ENVELOPE:
+        sys.stdout.write("\nWITHIN ENVELOPE under the declared endpoint "
+                         "sensor -- not a global clean verdict\n")
+        return 0
+    return 1 if man["verdict"] == effectsmod.BREACH else 2
+
+
 def cmd_replay(args) -> int:
     try:
         man = replaymod.replay(args.root, args.run_id, args.replays,
@@ -651,6 +704,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="replay store (default: ./replays)")
     p.add_argument("--steadies", default=DEFAULT_STEADIES,
                    help="steady-campaign store (default: ./steadies)")
+    p.add_argument("--effects-store", default=DEFAULT_EFFECTS,
+                   help="effects-campaign store (default: ./effects)")
     sub = p.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="execute a spec")
@@ -724,6 +779,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="permit one exact moving axis (repeatable; default: none)")
     st.set_defaults(func=cmd_steady)
 
+    fx = sub.add_parser(
+        "effects", help="compare bounded filesystem effects with an allowance")
+    fx.add_argument("spec", help="path to a spec JSON file")
+    fx.add_argument("--watch", action="append", required=True, metavar="SUBDIR",
+                    help="existing spec-relative subdirectory to snapshot "
+                         "(repeatable; no default)")
+    fx.add_argument("--allow", action="append", default=[], metavar="PATH",
+                    help="spec-relative allowed path/prefix inside a watch "
+                         "(repeatable; default: none)")
+    fx.set_defaults(func=cmd_effects)
+
     od = sub.add_parser("order",
                         help="check a permutations sweep for order sensitivity")
     od.add_argument("sweep_id", help="sweep id (printed by `hwb sweep`)")
@@ -753,7 +819,7 @@ def misplaced_spec(args) -> Optional[str]:
     """Was a spec handed to a command that wanted an id?
 
     The commands split -- `run`, `sweep`, `blast`, `catch`, `steady`,
-    `efficacy` take a
+    `effects`, `efficacy` take a
     SPEC; the rest take an ID produced by one of those -- and nothing said so
     at the point of confusion. Handing a spec to `confine` reported "no
     record at runs/bare.json", which is true and tells you nothing: the path
@@ -770,7 +836,7 @@ def misplaced_spec(args) -> Optional[str]:
         if isinstance(val, str) and os.path.isfile(val):
             return ("%s takes a run id, not a spec file (got %s)\n"
                     "       specs are taken by: run, sweep, blast, catch, "
-                    "steady, efficacy\n"
+                    "steady, effects, efficacy\n"
                     "       run one first, then pass the id it prints "
                     "(`hwb ls`)" % (args.cmd, val))
     return None

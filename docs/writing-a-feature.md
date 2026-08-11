@@ -66,7 +66,10 @@ arbitrary code execution; keeping resolution inert is what makes that safe.
 A power is a claim about what a feature is allowed to do through the
 dispatcher. Its return channel is enforced at dispatch and record-channel
 reach-through is audited afterwards by `hwb confine`. Filesystem, process,
-and network effects are outside that check.
+and network effects are outside that check. `hwb effects` can separately
+compare persistent endpoint changes under explicitly watched subdirectories
+with an allowed path envelope; it is not a syscall tracer and cannot attribute
+a change to one feature.
 
 | power | may return | may write to extras | failure semantics |
 |---|---|---|---|

@@ -1,0 +1,11 @@
+{
+  "name": "spill",
+  "version": "0.1.0",
+  "power": "annotate",
+  "seams": ["after_run"],
+  "provides": [],
+  "requires": [],
+  "seam_contract": ">=0.2.0,<0.3.0",
+  "record_key": "spill",
+  "intent": "capability"
+}

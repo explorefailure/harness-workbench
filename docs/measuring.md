@@ -17,7 +17,7 @@ Reference for what these read and write:
 
 | takes a spec | takes an id |
 |---|---|
-| `run` `sweep` `blast` `catch` `steady` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
+| `run` `sweep` `blast` `catch` `steady` `effects` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
 
 The first group produces runs; the second interrogates them.
 
@@ -195,6 +195,42 @@ peeker       observe    BREACHED     wrote its own namespace by hand instead of 
 `unmeasured` is **not** clean, and is reported separately so it cannot be
 read as a pass.
 
+### `hwb effects <spec> --watch <subdir> [--allow <path>]`
+
+Did filesystem changes visible at the two endpoints stay inside a declared
+effect envelope? `--watch` is required and repeatable. Each watched root must
+be an existing strict descendant of the spec directory; there is no implicit
+project, home, or filesystem root. `--allow` is also repeatable and names an
+exact path or path prefix inside one watched root. Paths are resolved against
+the spec directory, just like step inputs.
+
+The campaign snapshots before feature resolution and after the run closes, so
+import-time feature effects and seam-time effects are both inside the measured
+interval. It preserves the ordinary run and writes a campaign manifest with
+every changed path, change kind, before/after path type, content digest and
+mode. Allowed changes remain in the evidence. An unallowed endpoint change is
+`BREACH`; invalid setup, sensor failure, and a special filesystem node whose
+content cannot be observed are separate non-passing states.
+
+```sh
+hwb effects clean.json --watch state --allow state/allowed.txt
+hwb effects breach.json --watch state --allow state/allowed.txt
+```
+
+The complete known-red/control pair is in
+[`../examples/effect-boundary/`](../examples/effect-boundary/). Its `spill`
+feature returns a legal annotation while also opening `state/spill.txt` behind
+the record channel. `confine` sees only the legal annotation; `effects` names
+the file as a breach.
+
+**`within_envelope` does not mean clean.** The zero-dependency sensor is two
+portable endpoint snapshots, not a syscall tracer. It cannot see paths outside
+the explicit roots, a file created and removed between snapshots, reads or
+failed writes, timestamps/ownership/xattrs/ACLs/locks, processes, IPC, network,
+DNS, sockets, or remote effects. Those classes are written into every manifest
+and printed even on the passing path. A missing tracer therefore never becomes
+a global `clean` verdict.
+
 ### `hwb catch <spec>`
 
 Mutation testing pointed at the **workload** rather than the code: perturb a
@@ -357,13 +393,14 @@ PROBE                        CHECKER   VERDICT    DETAIL
 confine_record_reach         confine   detected   reached into somebody-else
 conform_artifact_mismatch    conform   detected   Invariant 1: stdout_bytes disagrees ...
 diff_exit_code *             diff      detected   ...
+effects_out_of_envelope      effects   detected   added state/spill.txt
 replay_changed_executable    replay    MISSED     reported `matched` after output changed
 verify_tamper                verify    detected   drifted (drifted: record.json)
 
 * = positive control
 
-detected 13/14
-checker coverage: 12/12
+detected 14/15
+checker coverage: 13/13
 ```
 
 Record probes run on copies, verdict reducers receive deliberately red
@@ -442,8 +479,9 @@ further than it holds.
   that rewrites captured output on disk is outside that relation, while the
   version that writes `extras` through an undeclared channel is a recorded
   breach. Final byte counts and digests prove the record agrees with stored
-  output, but they do not attribute the write. Filesystem-effect confinement
-  requires a separate measurement surface.
+  output, but they do not attribute the write. `effects` observes persistent
+  endpoint changes only inside roots supplied with `--watch`; it is not a
+  tracer and does not assign a write to a particular feature.
 - **Seam budgets are advisory at the edges.** Main thread only, cannot
   interrupt a blocking C call, and a hook catching `BaseException` can absorb
   the escalation. Real isolation needs a subprocess.

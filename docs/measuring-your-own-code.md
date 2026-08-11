@@ -181,6 +181,21 @@ processes, or network activity performed by feature code.
 Every other campaign trusts that declaration, so a breach here invalidates
 what the rest tell you.
 
+If the feature or workload is expected to write files, declare a separate
+bounded endpoint envelope. There is no default watch root:
+
+```sh
+hwb effects mine.json --watch state --allow state/expected-output.txt
+```
+
+`--watch` must name an existing subdirectory of the spec directory. Repeat
+`--allow` for every permitted file or subtree. The manifest retains allowed
+changes as well as breaches, with before/after types and digests. A passing
+result is `within_envelope`, never `clean`: paths outside the watched roots,
+ephemeral create/delete pairs, reads, processes, and network activity are not
+observed by the portable snapshot sensor. See the known-red/control pair in
+[`../examples/effect-boundary/`](../examples/effect-boundary/).
+
 ---
 
 ## Now ask the others

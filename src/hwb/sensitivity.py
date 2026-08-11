@@ -65,6 +65,7 @@ PUBLIC_VERDICT_ENGINES = (
     "conform",
     "diff",
     "efficacy",
+    "effects",
     "fidelity",
     "interfere",
     "order",
@@ -463,6 +464,31 @@ def _probe_steady_moving_baseline(runs_root: str, run_id: str,
     return DETECTED, "unallowed output axis classified unstable"
 
 
+def _probe_effects_out_of_envelope(runs_root: str, run_id: str,
+                                   work: str) -> Tuple[str, str]:
+    """An endpoint file creation outside the one allowed path prefix."""
+    from . import effects
+
+    state = os.path.join(work, "state")
+    os.makedirs(state)
+    before = {"state/allowed.txt": {
+        "type": "regular", "mode": "0644", "bytes": 1,
+        "digest": "sha256:" + "a" * 64}}
+    after = dict(before)
+    after["state/spill.txt"] = {
+        "type": "regular", "mode": "0644", "bytes": 1,
+        "digest": "sha256:" + "b" * 64}
+    allowances = [{"path": "state/allowed.txt",
+                   "absolute": os.path.join(state, "allowed.txt"),
+                   "watch": "state"}]
+    changes = effects.compare(before, after, allowances, work)
+    verdict = effects.classify(changes, [])
+    breaches = [row for row in changes if not row["allowed"]]
+    if verdict != effects.BREACH or not breaches:
+        return MISSED, "accepted an out-of-envelope endpoint file creation"
+    return DETECTED, "%s %s" % (breaches[0]["change"], breaches[0]["path"])
+
+
 def _probe_replay_changed_executable(runs_root: str, run_id: str,
                                      work: str) -> Tuple[str, str]:
     """Replay from unchanged declared inputs but a changed step executable.
@@ -556,6 +582,9 @@ PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "steady_moving_baseline": (
         "steady", _probe_steady_moving_baseline, False,
         "an unchanged control with an unallowed moving axis is unstable"),
+    "effects_out_of_envelope": (
+        "effects", _probe_effects_out_of_envelope, False,
+        "an endpoint change outside every allowed path is a breach"),
     "replay_changed_executable": (
         "replay", _probe_replay_changed_executable, False,
         "a replay whose execution produces different output must not match"),

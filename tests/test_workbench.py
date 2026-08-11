@@ -2334,6 +2334,142 @@ class TestSteady(Base):
         self.assertEqual(cli.main(args + ["--repeats", "1", stable]), 2)
 
 
+class TestEffects(Base):
+    """Family 13: bounded endpoint filesystem-effect observation."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = os.path.join(self.tmp, "state")
+        self.effects_store = os.path.join(self.tmp, "effect-campaigns")
+        os.makedirs(self.state)
+
+    def campaign(self, command, allowances=None, name="effects.json"):
+        from hwb import effects
+        path = self.spec([], name=name, steps=[{
+            "id": "01", "argv": ["/bin/sh", "-c", command], "inputs": []}])
+        return effects.campaign(path, self.runs, self.effects_store,
+                                ["state"], allowances or [])
+
+    def test_allowed_endpoint_change_is_within_envelope_not_clean(self):
+        from hwb import effects
+        man = self.campaign("printf allowed > state/allowed.txt",
+                            ["state/allowed.txt"])
+        self.assertEqual(man["verdict"], effects.WITHIN_ENVELOPE)
+        self.assertNotEqual(man["verdict"].lower(), "clean")
+        self.assertEqual([r["path"] for r in man["allowed_changes"]],
+                         ["state/allowed.txt"])
+        self.assertEqual(man["breaches"], [])
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.runs, man["run_id"], "record.json")))
+        self.assertIn("process creation, descendant lifetime, signals, and IPC",
+                      man["sensor"]["unobserved"])
+
+    def test_known_red_write_outside_allowance_is_a_breach(self):
+        from hwb import effects
+        man = self.campaign(
+            "printf allowed > state/allowed.txt; printf spill > state/spill.txt",
+            ["state/allowed.txt"], name="breach.json")
+        self.assertEqual(man["verdict"], effects.BREACH)
+        self.assertEqual([r["path"] for r in man["breaches"]],
+                         ["state/spill.txt"])
+        row = man["breaches"][0]
+        self.assertEqual(row["change"], "added")
+        self.assertIsNone(row["before"])
+        self.assertEqual(row["after"]["type"], "regular")
+        self.assertTrue(row["after"]["digest"].startswith("sha256:"))
+
+    def test_content_mode_removal_and_type_are_exact_evidence(self):
+        from hwb import effects
+        file_path = os.path.join(self.state, "subject")
+        with open(file_path, "w", encoding="utf-8") as fh:
+            fh.write("before")
+        watches, allowances = effects._resolve_contract(
+            self.tmp, ["state"], [], self.runs, self.effects_store)
+        before, _ = effects.snapshot(watches, self.tmp)
+        os.remove(file_path)
+        os.mkdir(file_path)
+        after, _ = effects.snapshot(watches, self.tmp)
+        changes = effects.compare(before, after, allowances, self.tmp)
+        row = [r for r in changes if r["path"] == "state/subject"][0]
+        self.assertEqual(row["change"], "type_changed")
+        self.assertEqual(row["before"]["type"], "regular")
+        self.assertEqual(row["after"]["type"], "directory")
+
+    def test_no_watch_and_broad_or_overlapping_watch_are_setup_errors(self):
+        from hwb import effects
+        path = self.spec([], name="contract.json")
+        with self.assertRaisesRegex(effects.EffectsError, "no default root"):
+            effects.campaign(path, self.runs, self.effects_store, [], [])
+        with self.assertRaisesRegex(effects.EffectsError, "broader roots"):
+            effects.campaign(path, self.runs, self.effects_store, ["."], [])
+
+        child = os.path.join(self.state, "child")
+        os.makedirs(child)
+        with self.assertRaisesRegex(effects.EffectsError, "overlap"):
+            effects.campaign(path, self.runs, self.effects_store,
+                             ["state", "state/child"], [])
+
+    def test_allowance_must_belong_to_one_watch(self):
+        from hwb import effects
+        path = self.spec([], name="allow-contract.json")
+        with self.assertRaisesRegex(effects.EffectsError,
+                                    "inside exactly one watched root"):
+            effects.campaign(path, self.runs, self.effects_store,
+                             ["state"], ["outside.txt"])
+
+    def test_instrument_stores_cannot_overlap_the_subject_watch(self):
+        from hwb import effects
+        path = self.spec([], name="store-contract.json")
+        inside = os.path.join(self.state, "campaigns")
+        with self.assertRaisesRegex(effects.EffectsError,
+                                    "instrument-owned writes"):
+            effects.campaign(path, self.runs, inside, ["state"], [])
+
+    def test_subject_setup_error_is_not_a_scoped_pass(self):
+        from hwb import effects
+        path = self.spec(["does-not-exist"], name="bad-effects.json")
+        man = effects.campaign(path, self.runs, self.effects_store,
+                               ["state"], [])
+        self.assertEqual(man["verdict"], effects.SETUP_ERROR)
+        self.assertIn("could not execute", man["setup_error"])
+        self.assertIsNone(man["run_id"])
+
+    def test_snapshot_failure_is_an_instrument_error(self):
+        from unittest import mock
+        from hwb import effects
+        path = self.spec([], name="sensor-error.json")
+        with mock.patch.object(effects, "snapshot",
+                               side_effect=PermissionError("denied")):
+            man = effects.campaign(path, self.runs, self.effects_store,
+                                   ["state"], [])
+        self.assertEqual(man["verdict"], effects.INSTRUMENT_ERROR)
+        self.assertIn("before snapshot failed", man["instrument_error"])
+        self.assertIsNone(man["run_id"])
+
+    def test_special_nodes_make_the_scoped_result_uninterpretable(self):
+        from hwb import effects
+        self.assertEqual(effects.classify([], ["state/socket"]),
+                         effects.UNINTERPRETABLE)
+
+    def test_cli_distinguishes_within_breach_and_bad_setup(self):
+        from hwb import cli
+        allowed = self.spec([], name="fx-cli-ok.json", steps=[{
+            "id": "01", "argv": ["/bin/sh", "-c",
+                                    "printf ok > state/allowed.txt"],
+            "inputs": []}])
+        breached = self.spec([], name="fx-cli-red.json", steps=[{
+            "id": "01", "argv": ["/bin/sh", "-c",
+                                    "printf red > state/spill.txt"],
+            "inputs": []}])
+        prefix = ["--root", self.runs, "--effects-store", self.effects_store,
+                  "effects"]
+        self.assertEqual(cli.main(prefix + [allowed, "--watch", "state",
+                                            "--allow", "state/allowed.txt"]), 0)
+        self.assertEqual(cli.main(prefix + [breached, "--watch", "state",
+                                            "--allow", "state/allowed.txt"]), 1)
+        self.assertEqual(cli.main(prefix + [allowed, "--watch", "."]), 2)
+
+
 class TestInvertsDeclaration(Base):
     """The manifest field must fail closed at load, not at campaign time.
 
@@ -3005,7 +3141,8 @@ class TestTheFirstRunDeadEnds(Base):
         # Enumerated from the parser rather than listed by hand, so a command
         # added later cannot quietly escape the check.
         from hwb import cli
-        spec_takers = {"run", "sweep", "blast", "catch", "efficacy", "steady"}
+        spec_takers = {"run", "sweep", "blast", "catch", "efficacy",
+                       "steady", "effects"}
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]
         for name, parser in sub.choices.items():
@@ -3297,7 +3434,7 @@ def _commands_in(block):
 
 
 STORE_DIRS = ("runs", "sweeps", "blasts", "catches",
-              "efficacy", "sensitivity", "replays", "steadies")
+              "efficacy", "sensitivity", "replays", "steadies", "effects")
 
 
 class TestRunStoresDoNotShip(unittest.TestCase):
