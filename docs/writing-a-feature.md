@@ -4,6 +4,12 @@ A feature is a directory. The workbench validates the whole set from
 manifests **before importing any of it**, so a feature declares what it
 intends to do in JSON and then does it in Python.
 
+`feature.py` is trusted executable code, not a plugin sandbox. When a run or
+campaign begins, the selected module is imported with the current user's
+permissions and can access the filesystem, processes, environment, and
+network regardless of the feature's declared power. Powers constrain the
+dispatcher and make breaches measurable; they are not OS-level containment.
+
 ```
 myfeature/
   FEATURE.json     the manifest — what this claims
@@ -59,7 +65,8 @@ What your feature writes ends up in the run's `extras[<record_key>]` — see
 
 Validation is inert: manifests are read and cross-checked without importing
 anything, so **a spec you do not trust can still be inspected.** Importing is
-arbitrary code execution; keeping resolution inert is what makes that safe.
+arbitrary code execution; keeping resolution inert is what makes inspection
+safe. Do not execute an untrusted feature tree.
 
 ## Powers
 

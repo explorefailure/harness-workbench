@@ -150,9 +150,11 @@ network/IPC/lock cleanup, or resume/repair/quarantine/deletion behavior.
 ## `sensitivity`
 
 Location: `sensitivity/<campaign_id>/campaign.json` by default. Each
-`<campaign_id>/<probe>/` directory is isolated scratch evidence: copied runs
+`<campaign_id>/<probe>/` directory is separate scratch evidence: copied runs
 for record probes, or a fresh workload for replay. The subject run is never
-modified.
+modified. "Separate" describes filesystem layout, not security isolation;
+replay still executes trusted commands and feature modules with the current
+user's permissions.
 
 | field | meaning |
 |---|---|

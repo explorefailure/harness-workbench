@@ -15,12 +15,16 @@ it resolved against is not. So `--in` must be supplied by a human, and this
 module records that it was supplied rather than recovered -- a replay that
 needed outside information is not evidence the record is sufficient.
 
-THE SANDBOX. Replaying in the original directory would overwrite the state
-the original run left, and a family that damages what it measures is the
+THE COPIED WORKLOAD. Replaying in the original directory would overwrite the
+state the original run left, and a family that damages what it measures is the
 catch campaign's third defect wearing a new name. So the declared inputs are
-copied -- with their modes, because a lost executable bit is exactly how
-that defect presented -- into a scratch directory, together with the spec
-under its ORIGINAL basename.
+copied -- with their modes, because a lost executable bit is exactly how that
+defect presented -- into a scratch directory, together with the spec under its
+ORIGINAL basename.
+
+That directory is not a security sandbox. Replayed commands and imported
+feature modules are trusted code and retain the current user's OS access. The
+copy prevents ordinary measurement-state collisions only.
 
 The basename matters and is not cosmetic. A feature with persistent state
 keys it to the spec stem, so replaying under a fresh name would put every
@@ -70,8 +74,8 @@ def _recorded_digests(record: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _sandbox(spec_raw: Dict[str, Any], spec_name: str, source_dir: str,
-             dst: str) -> Tuple[List[str], List[str]]:
+def _copy_workload(spec_raw: Dict[str, Any], spec_name: str, source_dir: str,
+                   dst: str) -> Tuple[List[str], List[str]]:
     """The declared inputs, copied with their modes, plus the spec.
 
     Returns (copied, undeclared). `undeclared` is the finding: files a step's
@@ -79,7 +83,7 @@ def _sandbox(spec_raw: Dict[str, Any], spec_name: str, source_dir: str,
     feature may digest, so an executable missing from it is invisible to
     `freeze` -- the script that produced the run can be swapped without any
     digest moving. That is the same shape as an undeclared environment knob,
-    one layer down, and replay is what surfaces it because a sandbox built
+    one layer down, and replay is what surfaces it because a workload built
     only from the declared list simply cannot run the step.
     """
     os.makedirs(dst, exist_ok=True)
@@ -113,7 +117,7 @@ def _sandbox(spec_raw: Dict[str, Any], spec_name: str, source_dir: str,
         # State a feature keyed to this spec's stem. Carried across so a
         # stateful feature reaches its DECIDING path on replay instead of its
         # initialising one; without this every such feature diverges and the
-        # divergence is about the sandbox, not the record.
+        # divergence is about the copied workload, not the record.
         if fn.startswith(stem + ".") and fn != spec_name and \
                 os.path.isfile(os.path.join(source_dir, fn)):
             shutil.copy2(os.path.join(source_dir, fn), os.path.join(dst, fn))
@@ -171,7 +175,7 @@ def replay(runs_root: str, run_id: str, replays_root: str,
     # files if possible and otherwise `spec.json`. Only used for naming.
     spec_name = (os.path.basename(recorded) if recorded
                  else _original_spec_name(record) or "spec.json")
-    copied, undeclared = _sandbox(spec_raw, spec_name, source_dir, box)
+    copied, undeclared = _copy_workload(spec_raw, spec_name, source_dir, box)
 
     # Replaying against inputs that are not the recorded ones is not a
     # replay. The digests the ORIGINAL run recorded are the evidence, and

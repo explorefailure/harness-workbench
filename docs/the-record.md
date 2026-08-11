@@ -249,6 +249,11 @@ is why `hwb replay` requires `--in` from a human, and records that the frame
 was **supplied rather than recovered.** A replay that needed outside
 information is not evidence the record is sufficient.
 
+Preservation is not containment. Replaying imports the preserved feature
+source and executes the preserved command description as trusted code with the
+current user's permissions. The copied replay workload keeps routine state
+away from the original directory; it does not form a security boundary.
+
 ## Reading one without `hwb`
 
 ```console

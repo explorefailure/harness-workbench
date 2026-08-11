@@ -26,6 +26,8 @@ authoritative publication evidence.
 - Ship six builtin example features plus documentation and network-free
   examples.
 - Support CPython 3.11–3.14 on Linux and macOS; Windows is unsupported.
+- State the trusted-code execution boundary, publish a private vulnerability
+  reporting policy, and add pinned CodeQL and Dependabot configuration.
 
 ## Published releases
 

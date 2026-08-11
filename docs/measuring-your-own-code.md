@@ -22,6 +22,11 @@ was produced by the commands above it, and the test suite re-runs them.
 Only the second involves writing against an interface. If all you want is a
 recorded run, you never leave the first row.
 
+Both rows are trusted execution. A workload command and a `feature.py` module
+run with your user's permissions; the workbench does not sandbox either one.
+Inspecting a spec and its JSON manifests is inert, but executing them is a
+deliberate trust-boundary crossing.
+
 ---
 
 ## 1. Your workload becomes a step
@@ -307,7 +312,9 @@ hwb sensitivity "$RUN"
 The engine universe comes from the same public command metadata that registers
 the CLI. A new verdict engine without a probe therefore produces `UNPROBED`
 and a nonzero exit instead of disappearing from the coverage count. Record
-probes operate on copies and replay builds a fresh isolated fixture.
+probes operate on copies and replay builds a fresh separate fixture. That
+copied directory prevents ordinary test-state collisions; it does not isolate
+hostile commands or feature code from the operating system.
 Campaign-oriented probes may enter at the smallest production observation or
 classification boundary named in their `detail`; that proves the boundary
 rejects one known-red case, not that the whole acquisition protocol ran.

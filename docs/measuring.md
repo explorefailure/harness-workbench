@@ -466,7 +466,7 @@ detected 15/16
 checker coverage: 14/14
 ```
 
-Record probes run on copies and replay uses a fresh isolated workload —
+Record probes run on copies and replay uses a fresh separate workload —
 nothing touches the real store. Most probes call the public checker directly.
 Four campaign-oriented probes enter at the smallest production boundary that
 decides their result, rather than pretending to exercise an entire campaign:
@@ -510,9 +510,12 @@ that was rooted. So `--in` must be supplied by a human, and the manifest
 records that it was **supplied rather than recovered** — a replay that needed
 outside information is not evidence the record is sufficient.
 
-Replays run in a sandbox: declared inputs are copied with their modes, under
-the spec's original basename, because a feature with persistent state keys it
-to the spec stem.
+Replays run in a separate copied workload directory: declared inputs are
+copied with their modes, under the spec's original basename, because a feature
+with persistent state keys it to the spec stem. This copy protects the
+original workload from ordinary replay state changes; it is **not a security
+sandbox or OS isolation boundary**. The replayed commands and preserved
+feature modules are trusted code and run with the current user's permissions.
 
 ---
 

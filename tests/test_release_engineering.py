@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,96 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertIn(
             'python tools/verify_release_tag.py "$GITHUB_REF_NAME"', workflow
         )
+
+    def test_execution_trust_boundary_and_replay_copy_are_explicit(self):
+        required = {
+            "README.md": ("not a security sandbox", "arbitrary Python code"),
+            "docs/the-spec.md": ("does not contain or isolate hostile code",),
+            "docs/writing-a-feature.md": ("trusted executable code",),
+            "docs/measuring.md": ("not a security\nsandbox or OS isolation boundary",),
+            "docs/measuring-your-own-code.md": ("trusted execution",),
+            "docs/campaign-manifests.md": ("not security isolation",),
+            "docs/the-record.md": ("Preservation is not containment",),
+        }
+        for relative, phrases in required.items():
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            for phrase in phrases:
+                with self.subTest(file=relative, phrase=phrase):
+                    self.assertIn(phrase, text)
+
+        documentation = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [ROOT / "README.md", *(ROOT / "docs").glob("*.md")]
+        )
+        for misleading in (
+            "Replays run in a sandbox",
+            "into its sandbox",
+            "isolated scratch evidence",
+            "fresh isolated workload",
+            "fresh isolated fixture",
+        ):
+            with self.subTest(misleading=misleading):
+                self.assertNotIn(misleading, documentation)
+
+    def test_security_policy_has_truthful_private_route_and_support_window(self):
+        policy = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("No Harness Workbench version has been published yet", policy)
+        self.assertIn("only the newest published release", policy)
+        self.assertIn(
+            "https://github.com/explorefailure/harness-workbench/security/advisories/new",
+            policy,
+        )
+        self.assertRegex(
+            policy, r"There is currently no published security email\s+address"
+        )
+        self.assertIn("not a hostile-code sandbox", policy)
+
+    def test_all_workflow_actions_are_official_and_pinned_to_full_shas(self):
+        allowed = {
+            "actions/checkout",
+            "actions/setup-python",
+            "github/codeql-action/init",
+            "github/codeql-action/analyze",
+        }
+        uses = []
+        for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            text = workflow.read_text(encoding="utf-8")
+            uses.extend(
+                re.findall(
+                    r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", text, re.MULTILINE
+                )
+            )
+        self.assertTrue(uses)
+        for action, revision in uses:
+            with self.subTest(action=action):
+                self.assertIn(action, allowed)
+                self.assertRegex(revision, r"^[0-9a-f]{40}$")
+
+    def test_codeql_and_dependabot_security_configuration(self):
+        codeql = (ROOT / ".github" / "workflows" / "codeql.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("permissions:\n  contents: read", codeql)
+        self.assertIn("security-events: write", codeql)
+        self.assertIn("solely so", codeql)
+        self.assertNotIn("contents: write", codeql)
+
+        dependabot = (ROOT / ".github" / "dependabot.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(1, dependabot.count("package-ecosystem: pip"))
+        self.assertEqual(1, dependabot.count("package-ecosystem: github-actions"))
+
+    def test_secret_scan_allowlist_is_limited_to_the_documented_fake_token(self):
+        config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+        self.assertIn("useDefault = true", config)
+        self.assertEqual(1, config.count("[[allowlists]]"))
+        self.assertIn("notakey-live-[0-9a-f]{12}", config)
+        self.assertNotIn("paths =", config)
+        releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("GITLEAKS_VERSION=8.30.1", releasing)
+        self.assertIn("--log-opts='--all'", releasing)
+        self.assertIn("--max-archive-depth 2 dist", releasing)
 
 
 if __name__ == "__main__":

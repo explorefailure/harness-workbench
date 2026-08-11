@@ -13,6 +13,33 @@ Tags are signed, annotated, immutable, and must point at the exact commit whose
 source produced the uploaded files. Never move or reuse a failed tag; fix the
 source, increment the candidate number, and run the gate again.
 
+## Public-visibility security gate
+
+Repository files cannot enable GitHub security features or enforce repository
+rules. As part of the public flip, the maintainer must verify these settings on
+the target repository rather than treating the checked-in configuration as
+proof that GitHub is enforcing it:
+
+- enable private vulnerability reporting and verify that
+  `https://github.com/explorefailure/harness-workbench/security/advisories/new`
+  presents a private form;
+- enable secret scanning, push protection, Dependabot alerts, and Dependabot
+  security updates;
+- keep the default Actions token read-only and do not allow workflows from
+  pull requests to approve pull requests;
+- restrict Actions to GitHub-owned actions or require full-length commit SHA
+  pins; the checked-in workflows use both;
+- let the pinned CodeQL workflow complete and confirm Python results appear in
+  code scanning; and
+- add branch and release-tag rulesets after their required check names exist,
+  then require the CI and CodeQL checks on the protected branch.
+
+Some security features may become available only after the repository is
+public. If so, enable and verify them immediately after the visibility change,
+before announcing the repository or creating the prerelease. Record the
+settings evidence in the release conformance record. These are external
+release-gate actions, not changes this procedure or a local commit can perform.
+
 ## 1. Prepare a clean candidate commit
 
 First turn the preparation branch into a release commit: change the README
@@ -36,12 +63,19 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check '.[release]'
+GITLEAKS_VERSION=8.30.1
+test "$(gitleaks version)" = "$GITLEAKS_VERSION"
+gitleaks git --no-banner --redact=100 --log-opts='--all' .
 ```
 
 Stop if the commit is not the reviewed commit, the checkout is dirty, dependency
-installation fails, or the release-tool versions differ from `pyproject.toml`.
-Do not clean an uncertain directory to make this check pass; start another
-fresh clone.
+installation fails, the release-tool versions differ from `pyproject.toml`, or
+the history-wide secret scan reports a finding. Obtain Gitleaks from its
+official release, verify the published archive checksum, and install it outside
+the repository. `.gitleaks.toml` allowlists only the explicit `notakey-live-…`
+fixture used by redaction tests and examples. Do not broaden that allowlist to
+make a candidate pass. Do not clean an uncertain directory to make this check
+pass; start another fresh clone.
 
 ## 2. Run the source and artifact gate
 
@@ -58,6 +92,8 @@ test ! -e dist
 python -m build --sdist --wheel
 python -m twine check --strict dist/*.whl dist/*.tar.gz
 python tools/verify_release_artifacts.py dist
+gitleaks dir --no-banner --redact=100 --config .gitleaks.toml \
+  --max-archive-depth 2 dist
 python tools/verify_installed_artifact.py dist/*.whl
 python tools/verify_installed_artifact.py dist/*.tar.gz
 python tools/release_checksums.py write dist

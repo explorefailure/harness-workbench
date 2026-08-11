@@ -17,7 +17,7 @@ record and check the checkers still reject it.
 
 Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
 candidate has not been published. Zero runtime dependencies, Python 3.11+,
-310 tests.
+315 tests.
 
 ---
 
@@ -66,6 +66,26 @@ preserve and inspect executable modes, symlinks, and special nodes such as
 FIFOs, and the shipped examples execute `/bin/sh` scripts. Workload commands
 are passed directly to `subprocess` without a shell, so users choose their own
 POSIX command or request `/bin/sh -c` explicitly.
+
+## Security boundary
+
+Harness Workbench is an execution tool, **not a security sandbox**. Reading and
+validating a JSON spec and its feature manifests is inert, but running that
+spec crosses a trust boundary: every `steps[].argv` command executes with the
+current user's permissions, and every selected `feature.py` module is imported
+as arbitrary Python code. Only run specs, commands, feature roots, and
+preserved feature source that you trust.
+
+Campaigns do not change that boundary. In particular, `hwb replay` copies
+declared workload files into a separate directory to avoid overwriting the
+original workload. That directory is ordinary filesystem organization, not
+OS-level isolation: replayed commands and feature modules retain the user's
+filesystem, process, environment, and network access.
+
+Run records preserve stdout, stderr, selected environment values, specs, and
+feature source. Do not put secrets in a spec's `env` list or commands unless
+you intend those values to enter the run store. See [SECURITY.md](SECURITY.md)
+for supported versions and private vulnerability reporting.
 
 ## First run, no features and no model
 

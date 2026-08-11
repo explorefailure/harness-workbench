@@ -2174,7 +2174,7 @@ class TestReplay(Base):
             self.assertEqual(os.stat(p).st_mode, before[p][1],
                              "replay changed the mode of %s" % p)
 
-    def test_the_sandbox_preserves_the_executable_bit(self):
+    def test_the_copied_workload_preserves_the_executable_bit(self):
         """The step is `./probe.sh`; a copy without its mode cannot run."""
         rec = self.run_spec(["freeze", "timing"], name="r5.json")
         man = self.replay(rec, "r5")

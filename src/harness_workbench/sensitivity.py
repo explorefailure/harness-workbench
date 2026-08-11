@@ -25,8 +25,9 @@ it damaged the workload it measured -- restoring a deleted input without its
 executable bit -- and the damage read as a step failure rather than as the
 instrument breaking. Nothing here touches the real store: record readers get
 a copied run, campaign-level probes enter at their named observation or
-classification boundary, and replay gets a fresh isolated fixture under the
-campaign directory. A boundary probe does not claim to execute the whole
+classification boundary, and replay gets a fresh separate fixture under the
+campaign directory. The fixture prevents measurement-state collisions; it is
+not a security boundary. A boundary probe does not claim to execute the whole
 campaign; its detail names the exact production function it exercised.
 
 A POSITIVE CONTROL IS INCLUDED DELIBERATELY (`diff_exit_code`). If every
@@ -522,7 +523,7 @@ def _probe_replay_changed_executable(runs_root: str, run_id: str,
     """
     from . import replay, runner, spec as specmod
 
-    # A featureless fixture isolates the replay verdict from stateful feature
+    # A featureless fixture separates the replay verdict from stateful feature
     # baselines. It deliberately changes only an undeclared executable while
     # leaving the declared input fixed, which is a gap replay already reports.
     source = os.path.join(work, "source")

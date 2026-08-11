@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented fake token used by redaction tests and examples"
+regexTarget = "match"
+regexes = [
+  '''notakey-live-[0-9a-f]{12}''',
+]

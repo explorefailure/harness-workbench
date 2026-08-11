@@ -8,6 +8,12 @@ can still be inspected. Manifests are validated before any feature code is
 imported, for the same reason. If you want a matrix, write a generator that
 *emits* specs rather than a spec that computes itself.
 
+Inspection is the safe boundary; execution is not. `hwb run` and the campaign
+commands execute every `steps[].argv` and import every selected `feature.py`
+with the current user's permissions. Treat the spec, its referenced commands,
+its feature root, and preserved feature source used by replay as trusted code.
+Harness Workbench does not contain or isolate hostile code.
+
 ## Minimum
 
 ```json
@@ -94,7 +100,9 @@ things consume that:
 
 - `freeze` digests exactly these and reports drift against a baseline,
 - `hwb catch` perturbs exactly these to see whether a detector fires,
-- `hwb replay` copies exactly these — with their modes — into its sandbox.
+- `hwb replay` copies exactly these — with their modes — into a separate
+  workload directory. That copy prevents ordinary state collisions; it is not
+  an OS security boundary.
 
 **Anything you do not declare is outside all three checks.** An undeclared
 file can change under you while declared-input drift remains clean, which is
