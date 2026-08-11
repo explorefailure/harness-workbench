@@ -148,7 +148,7 @@ $ hwb interrupt <spec>        # kill the runner at each durable lifecycle bounda
 $ hwb steady <spec>           # is the unchanged baseline stable enough to compare
 $ hwb efficacy <spec>         # invert a feature's decision; did anything notice
 $ hwb catch <spec>            # perturb declared inputs; did a detector fire
-$ hwb sensitivity <run id>    # does every verdict engine reject a known violation
+$ hwb sensitivity <run id>    # does every registered verdict engine reject a known violation
 $ hwb sweep <spec> && hwb interfere <sweep id>   # do features disturb each other
 $ hwb diff <run a> <run b>    # what changed, and what was masked
 $ hwb fidelity <run id>       # what can be answered from the record alone

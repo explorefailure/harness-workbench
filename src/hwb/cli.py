@@ -12,7 +12,8 @@ import os
 import sys
 from typing import List, Optional
 
-from . import (blast as blastmod, catch as catchmod, confine as confmod,
+from . import (blast as blastmod, catch as catchmod, commands,
+               confine as confmod,
                conform, diff as diffmod, efficacy as effmod,
                effects as effectsmod, features,
                fidelity as fidmod, replay as replaymod, runner,
@@ -453,7 +454,8 @@ def cmd_sensitivity(args) -> int:
     res = sensmod.summarise(man)
 
     sys.stdout.write("%s  subject %s\n\n" % (man["campaign_id"], args.run_id))
-    sys.stdout.write("each probe builds a violation ONE checker must reject\n\n")
+    sys.stdout.write("each probe builds a violation ONE checker must reject\n")
+    sys.stdout.write("detail names the exact production boundary exercised\n\n")
     sys.stdout.write("%-28s %-9s %-10s %s\n"
                      % ("PROBE", "CHECKER", "VERDICT", "DETAIL"))
     for r in man["probes"]:
@@ -767,70 +769,70 @@ def build_parser() -> argparse.ArgumentParser:
                         "disjoint from run store)")
     sub = p.add_subparsers(dest="cmd")
 
-    r = sub.add_parser("run", help="execute a spec")
+    registered = []
+
+    def command(name: str):
+        """Register only commands present in the shared public registry."""
+        registered.append(name)
+        return sub.add_parser(name, help=commands.metadata(name)["help"])
+
+    r = command("run")
     r.add_argument("spec", help="path to a spec JSON file")
     r.set_defaults(func=cmd_run)
 
-    l = sub.add_parser("ls", help="list runs")
+    l = command("ls")
     l.set_defaults(func=cmd_ls)
 
-    s = sub.add_parser("show", help="inspect one run")
+    s = command("show")
     s.add_argument("run_id", help="run id (see `hwb ls`)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_show)
 
-    v = sub.add_parser("verify", help="check a run has not been edited")
+    v = command("verify")
     v.add_argument("run_id", help="run id (see `hwb ls`)")
     v.set_defaults(func=cmd_verify)
 
-    d = sub.add_parser("diff", help="compare two runs structurally")
+    d = command("diff")
     d.add_argument("a", metavar="run_a", help="run id (see `hwb ls`)")
     d.add_argument("b", metavar="run_b", help="run id (see `hwb ls`)")
     d.add_argument("--quiet", action="store_true",
                    help="verdict only; omit cost and the mask")
     d.set_defaults(func=cmd_diff)
 
-    sw = sub.add_parser("sweep", help="run a spec under many feature configurations")
+    sw = command("sweep")
     sw.add_argument("spec", help="path to a spec JSON file")
     sw.add_argument("--mode", default="pairs", choices=sweepmod.MODES,
                     help="which subsets to run (default: pairs)")
     sw.set_defaults(func=cmd_sweep)
 
-    it = sub.add_parser("interfere",
-                        help="check a sweep for cross-feature interference")
+    it = command("interfere")
     it.add_argument("sweep_id", help="sweep id (printed by `hwb sweep`)")
     it.set_defaults(func=cmd_interfere)
 
-    bl = sub.add_parser("blast",
-                        help="inject faults into each feature, measure what survived")
+    bl = command("blast")
     bl.add_argument("spec", help="path to a spec JSON file")
     bl.add_argument("--seam-timeout-ms", type=int, default=400,
                     help="bound for the `hang` fault (default: 400)")
     bl.set_defaults(func=cmd_blast)
 
-    ca = sub.add_parser("catch",
-                        help="perturb declared inputs, measure what a detector catches")
+    ca = command("catch")
     ca.add_argument("spec", help="path to a spec JSON file")
     ca.set_defaults(func=cmd_catch)
 
-    fi = sub.add_parser("fidelity",
-                        help="which questions can be answered from the record alone")
+    fi = command("fidelity")
     fi.add_argument("run_id", help="run id (see `hwb ls`)")
     fi.set_defaults(func=cmd_fidelity)
 
-    se = sub.add_parser("sensitivity",
-                        help="account for every verdict engine with a deliberate violation")
+    se = command("sensitivity")
     se.add_argument("run_id", help="run id (see `hwb ls`)")
     se.set_defaults(func=cmd_sensitivity)
 
-    ef = sub.add_parser("efficacy",
-                        help="invert each feature's decision, measure what noticed")
+    ef = command("efficacy")
     ef.add_argument("spec", help="path to a spec JSON file")
     ef.add_argument("--seam-timeout-ms", type=int, default=400)
     ef.set_defaults(func=cmd_efficacy)
 
-    st = sub.add_parser("steady",
-                        help="repeat an unchanged spec and reject a moving baseline")
+    st = command("steady")
     st.add_argument("spec", help="path to a spec JSON file")
     st.add_argument("--repeats", type=int, default=steadymod.DEFAULT_REPEATS,
                     help="unchanged runs to compare (default: 3; minimum: 2)")
@@ -838,8 +840,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="permit one exact moving axis (repeatable; default: none)")
     st.set_defaults(func=cmd_steady)
 
-    fx = sub.add_parser(
-        "effects", help="compare bounded filesystem effects with an allowance")
+    fx = command("effects")
     fx.add_argument("spec", help="path to a spec JSON file")
     fx.add_argument("--watch", action="append", required=True, metavar="SUBDIR",
                     help="existing spec-relative subdirectory to snapshot "
@@ -849,31 +850,33 @@ def build_parser() -> argparse.ArgumentParser:
                          "(repeatable; default: none)")
     fx.set_defaults(func=cmd_effects)
 
-    ix = sub.add_parser(
-        "interrupt", help="terminate the runner at named lifecycle checkpoints")
+    ix = command("interrupt")
     ix.add_argument("spec", help="path to a spec JSON file")
     ix.add_argument("--child-timeout-seconds", type=float,
                     default=intmod.DEFAULT_TIMEOUT_SECONDS,
                     help="bound for each child/checkpoint (default: 30)")
     ix.set_defaults(func=cmd_interrupt)
 
-    od = sub.add_parser("order",
-                        help="check a permutations sweep for order sensitivity")
+    od = command("order")
     od.add_argument("sweep_id", help="sweep id (printed by `hwb sweep`)")
     od.set_defaults(func=cmd_order)
 
-    cf = sub.add_parser("confine",
-                        help="audit declared record-power channels (not filesystem effects)")
+    cf = command("confine")
     cf.add_argument("run_id", help="run id (see `hwb ls`)")
     cf.set_defaults(func=cmd_confine)
 
-    rp = sub.add_parser("replay",
-                        help="re-execute a run from its own preserved spec and features")
+    rp = command("replay")
     rp.add_argument("run_id", help="run id (see `hwb ls`)")
     rp.add_argument("--in", dest="in_dir", default=None,
                     help="directory the workload's declared inputs live in "
                          "(the record cannot supply this; defaults to cwd)")
     rp.set_defaults(func=cmd_replay)
+    expected = set(commands.cli_commands())
+    if set(registered) != expected:
+        missing = sorted(expected - set(registered))
+        extra = sorted(set(registered) - expected)
+        raise RuntimeError("CLI registry mismatch (missing=%r, extra=%r)"
+                           % (missing, extra))
     return p
 
 

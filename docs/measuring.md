@@ -444,9 +444,10 @@ A checker whose passing verdict is silence — `equivalent`, `clean`,
 looking. So each probe constructs a violation one checker **must** reject,
 and records whether it noticed.
 
-The checker universe is declared separately from the probe list. Adding a
-public verdict engine without a probe produces an `UNPROBED` row and a
-non-zero exit instead of quietly shrinking the claimed coverage.
+The checker universe is derived from the same public command/engine metadata
+the CLI uses to register commands. Adding a verdict engine there without a
+probe produces an `UNPROBED` row and a non-zero exit instead of requiring a
+second hand-maintained checker list that can quietly omit the newest engine.
 
 ```console
 PROBE                        CHECKER   VERDICT    DETAIL
@@ -464,11 +465,25 @@ detected 15/16
 checker coverage: 14/14
 ```
 
-Record probes run on copies, verdict reducers receive deliberately red
-in-memory manifests, and replay uses a fresh isolated workload — nothing
-touches the real store. The positive control is deliberate: if every probe
-reports "detected", that is *also* what a broken probe harness reports. If
-the control fails, no other row on the table can be believed.
+Record probes run on copies and replay uses a fresh isolated workload —
+nothing touches the real store. Most probes call the public checker directly.
+Four campaign-oriented probes enter at the smallest production boundary that
+decides their result, rather than pretending to exercise an entire campaign:
+
+- `blast` calls `_survival` on copied run evidence, then its reducer;
+- `catch` calls `_drift_reported` on a copied record carrying a drift flag,
+  then its reducer;
+- `efficacy` calls `_wellformed`, `_conforms`, and `_differs` on copied run
+  evidence, then derives the mutant verdict consumed by its reducer; and
+- `steady` creates genuinely different stored output and calls `compare_pair`
+  followed by `classify`.
+
+The probe detail names that boundary. These rows prove those production
+observation/classification paths can reject their known-red case; they do not
+claim that sensitivity executed the whole campaign's acquisition protocol.
+The positive control is deliberate: if every probe reports "detected", that
+is *also* what a broken probe harness reports. If the control fails, no other
+row on the table can be believed.
 
 The current known red is replay: its comparison consumes harness-field
 differences but drops `diff`'s separate output-difference axis, so changed

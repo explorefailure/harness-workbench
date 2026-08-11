@@ -24,8 +24,10 @@ EVERY RECORD PROBE RUNS ON A COPY. The catch campaign's third defect was that
 it damaged the workload it measured -- restoring a deleted input without its
 executable bit -- and the damage read as a step failure rather than as the
 instrument breaking. Nothing here touches the real store: record readers get
-a copied run, manifest reducers get a deliberately red in-memory manifest,
-and replay gets a fresh isolated fixture under the campaign directory.
+a copied run, campaign-level probes enter at their named observation or
+classification boundary, and replay gets a fresh isolated fixture under the
+campaign directory. A boundary probe does not claim to execute the whole
+campaign; its detail names the exact production function it exercised.
 
 A POSITIVE CONTROL IS INCLUDED DELIBERATELY (`diff_exit_code`). If every
 probe reports "detected", that is also what a broken probe harness reports
@@ -43,6 +45,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Tuple
 
 from .canon import canon_bytes
+from . import commands
 from .runner import _stamp
 
 # Verdict vocabulary. `detected` is the only passing value; the others say
@@ -52,29 +55,6 @@ DETECTED = "detected"
 MISSED = "MISSED"
 ERRORED = "errored"
 UNPROBED = "UNPROBED"
-
-# The public verdict engines, declared independently of the probes. Adding a
-# checker here without adding a probe cannot produce a quietly smaller green
-# table: campaign() emits an UNPROBED row and the command fails. `sweep` is a
-# configuration producer, not a verdict engine; `sensitivity` does not probe
-# itself.
-PUBLIC_VERDICT_ENGINES = (
-    "blast",
-    "catch",
-    "confine",
-    "conform",
-    "diff",
-    "efficacy",
-    "effects",
-    "fidelity",
-    "interfere",
-    "interrupt",
-    "order",
-    "replay",
-    "steady",
-    "verify",
-)
-
 
 class SensitivityError(Exception):
     """The campaign could not be set up."""
@@ -411,62 +391,101 @@ def _probe_order_changed_run(runs_root: str, run_id: str,
 
 def _probe_blast_broken_survival(runs_root: str, run_id: str,
                                  work: str) -> Tuple[str, str]:
-    """A fault whose damage violates every promised survival bit."""
+    """A failed run classified through blast's survival-bit acquisition."""
     from . import blast
 
-    man = {"injections": [{"feature": "probe", "fault": "raise",
-                            "power": "annotate", "completed": False,
-                            "conforms": False, "others_intact": False,
-                            "steps_retained": False}]}
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
+    baseline = _read_json(os.path.join(d, "record.json"))
+    if not baseline.get("features"):
+        return ERRORED, "run has no feature for blast survival acquisition"
+    target = baseline["features"][0]["name"]
+    power = baseline["features"][0].get("power") or "annotate"
+    injured = dict(baseline)
+    injured["status"] = "failed-by-the-sensitivity-probe"
+    bits = blast._survival(baseline, injured, target, work)
+    row = {"feature": target, "fault": "synthetic_failed_record",
+           "power": power, **bits}
+    man = {"injections": [row]}
     res = blast.summarise(man)
     if not res["findings"]:
-        return MISSED, "reported no blast finding when all survival bits failed"
-    return DETECTED, "violated " + ", ".join(res["findings"][0]["violated"])
+        return MISSED, ("blast._survival did not classify a failed run as "
+                        "violating completion")
+    return DETECTED, ("blast._survival: violated "
+                      + ", ".join(res["findings"][0]["violated"]))
 
 
 def _probe_catch_missed_declared_drift(runs_root: str, run_id: str,
                                        work: str) -> Tuple[str, str]:
-    """A declared content mutation with no detector reporting drift."""
+    """A recorded drift flag acquired through catch's detector reader."""
     from . import catch as catchmod
 
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
+    record = _read_json(os.path.join(d, "record.json"))
+    record.setdefault("extras", {})["sensitivity-probe-detector"] = {
+        "drifted": True}
+    _write_json(os.path.join(d, "record.json"), record)
+    acquired = catchmod._drift_reported(_read_json(
+        os.path.join(d, "record.json")))
     man = {"results": [{"mutation": "append_byte", "input": "declared.txt",
                          "expected": "caught", "why": "known red",
-                         "detected_by": None}]}
+                         "detected_by": acquired}]}
     res = catchmod.summarise(man)
-    if not res["missed"]:
-        return MISSED, "reported no miss for an undetected declared-input mutation"
-    return DETECTED, res["notes"][0]["verdict"]
+    if res["missed"]:
+        return MISSED, "catch._drift_reported did not acquire a recorded drift flag"
+    if res["caught"] != 1:
+        return ERRORED, "catch classification did not count one acquired drift"
+    return DETECTED, "catch._drift_reported: acquired drift from %s" % acquired
 
 
 def _probe_efficacy_surviving_opposite(runs_root: str, run_id: str,
                                        work: str) -> Tuple[str, str]:
-    """A well-formed opposite that leaves the measurable run unchanged."""
+    """Identical evidence classified through efficacy's mutant boundaries."""
     from . import efficacy
 
-    man = {"mutants": [{"feature": "probe", "power": "annotate",
-                         "intent": "capability", "verdict": efficacy.SURVIVED,
-                         "decision": "known red", "detail": "equivalent"}]}
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
+    record = _read_json(os.path.join(d, "record.json"))
+    ok, why_bad = efficacy._wellformed(record)
+    if not ok:
+        return ERRORED, "subject cannot be a well-formed mutant fixture: %s" % why_bad
+    conforms, why_not = efficacy._conforms(work, run_id)
+    if not conforms:
+        return ERRORED, "subject cannot be a conforming mutant fixture: %s" % why_not
+    moved, detail = efficacy._differs(work, run_id, run_id)
+    verdict = efficacy.KILLED if moved else efficacy.SURVIVED
+    feature = (record.get("features") or [{"name": "probe",
+                                            "power": "annotate"}])[0]
+    man = {"mutants": [{"feature": feature["name"],
+                         "power": feature.get("power") or "annotate",
+                         "intent": "capability", "verdict": verdict,
+                         "decision": "identical-evidence control",
+                         "detail": detail}]}
     res = efficacy.summarise(man)
     if not res["inert"]:
-        return MISSED, "reported no inert feature for a surviving opposite"
-    return DETECTED, "surviving opposite classified inert"
+        return MISSED, ("efficacy._differs did not leave identical run "
+                        "evidence as a surviving opposite")
+    return DETECTED, ("efficacy._wellformed/_conforms/_differs: identical "
+                      "evidence classified SURVIVED")
 
 
 def _probe_steady_moving_baseline(runs_root: str, run_id: str,
                                   work: str) -> Tuple[str, str]:
-    """An unchanged-control series with an unallowed moving output axis."""
+    """Differing copied artifacts classified by steady's pair relation."""
     from . import steady
 
-    man = {"verdict": steady.UNSTABLE,
-           "run_ids": ["A", "B", "C"],
-           "comparisons": [{"verdict": steady.UNSTABLE}],
-           "moving_axes": ["output:steps/01/attempts/0/stdout.bin"],
-           "unallowed_axes": ["output:steps/01/attempts/0/stdout.bin"],
-           "setup_error": None}
-    res = steady.summarise(man)
-    if res["verdict"] != steady.UNSTABLE or not res["unallowed_axes"]:
-        return MISSED, "reduced a moving unallowed baseline without instability"
-    return DETECTED, "unallowed output axis classified unstable"
+    _copy_run(runs_root, run_id, os.path.join(work, "A"))
+    b = _copy_run(runs_root, run_id, os.path.join(work, "B"))
+    target = _first_stdout(b)
+    if not target:
+        return ERRORED, "run has no stored stdout to mutate"
+    with open(target, "ab") as fh:
+        fh.write(b"\nMOVING BASELINE FROM SENSITIVITY\n")
+    pair = steady.compare_pair(work, "A", "B")
+    verdict = steady.classify([pair])
+    if verdict != steady.UNSTABLE or not pair.get("unallowed_axes"):
+        return MISSED, ("steady.compare_pair/classify did not reject copied "
+                        "runs with different stored output")
+    return DETECTED, ("steady.compare_pair/classify: %s"
+                      % pair["unallowed_axes"][0])
 
 
 def _probe_effects_out_of_envelope(runs_root: str, run_id: str,
@@ -646,7 +665,7 @@ def campaign(runs_root: str, run_id: str, sens_root: str) -> Dict[str, Any]:
                      "why": why, "verdict": verdict, "detail": detail})
 
     probed = {row["checker"] for row in rows}
-    declared = set(PUBLIC_VERDICT_ENGINES)
+    declared = set(commands.public_verdict_engines())
     for row in rows:
         if row["checker"] not in declared:
             row["verdict"] = ERRORED
@@ -667,6 +686,7 @@ def campaign(runs_root: str, run_id: str, sens_root: str) -> Dict[str, Any]:
         "campaign_id": campaign_id,
         "subject_run": run_id,
         "runs_root": os.path.abspath(runs_root),
+        "public_verdict_engines": sorted(declared),
         "probes": rows,
     }
     with open(os.path.join(cdir, "campaign.json"), "wb") as fh:
@@ -676,6 +696,8 @@ def campaign(runs_root: str, run_id: str, sens_root: str) -> Dict[str, Any]:
 
 def summarise(manifest: Dict[str, Any]) -> Dict[str, Any]:
     rows = manifest["probes"]
+    declared = set(manifest.get("public_verdict_engines")
+                   or commands.public_verdict_engines())
     control_ok = all(r["verdict"] == DETECTED for r in rows if r["control"])
     missed = [r for r in rows if r["verdict"] == MISSED and not r["control"]]
     errored = [r for r in rows if r["verdict"] == ERRORED]
@@ -692,6 +714,6 @@ def summarise(manifest: Dict[str, Any]) -> Dict[str, Any]:
         "blind_checkers": sorted({r["checker"] for r in missed}),
         "total": len([r for r in rows if not r["control"]]),
         "checker_coverage": "%d/%d" % (
-            len(set(PUBLIC_VERDICT_ENGINES) - {r["checker"] for r in unprobed}),
-            len(PUBLIC_VERDICT_ENGINES)),
+            len(declared - {r["checker"] for r in unprobed}),
+            len(declared)),
     }

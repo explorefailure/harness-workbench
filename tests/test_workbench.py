@@ -3125,38 +3125,90 @@ class TestSensitivity(Base):
                          len(set(res["blind_checkers"])))
 
     def test_every_public_verdict_engine_is_mechanically_accounted_for(self):
-        """The universe and the probes are independent declarations.
+        """The CLI/engine registry is independent of the probe declarations.
 
         Adding a checker without a probe must create a red row; otherwise the
-        newest checker is exactly the one an old hand-maintained list omits.
+        newest checker is exactly the one a hand-maintained probe map omits.
         """
-        from hwb import sensitivity as sens
+        from hwb import commands, sensitivity as sens
         man = self.campaign()
         reported = {r["checker"] for r in man["probes"]}
-        self.assertEqual(reported, set(sens.PUBLIC_VERDICT_ENGINES))
-        n = len(sens.PUBLIC_VERDICT_ENGINES)
+        universe = set(commands.public_verdict_engines())
+        self.assertEqual(reported, universe)
+        self.assertEqual(set(man["public_verdict_engines"]), universe)
+        n = len(universe)
         self.assertEqual(sens.summarise(man)["checker_coverage"], "%d/%d" % (n, n))
 
-    def test_an_unprobed_public_engine_is_reported_and_fails_the_command(self):
+    def test_a_metadata_registered_verdict_command_is_automatically_unprobed(self):
         from unittest import mock
-        from hwb import cli, sensitivity as sens
+        from types import SimpleNamespace
+        from hwb import cli, commands, sensitivity as sens
 
-        man = {"campaign_id": "probe", "subject_run": "subject", "probes": [
-            {"probe": "control", "checker": "diff", "control": True,
-             "why": "control", "verdict": sens.DETECTED, "detail": "ok"},
-            {"probe": "unprobed_new", "checker": "new", "control": False,
-             "why": "every engine needs a probe", "verdict": sens.UNPROBED,
-             "detail": "declared public verdict engine has no probe"},
-        ]}
-        universe = sens.PUBLIC_VERDICT_ENGINES + ("new",)
-        with mock.patch.object(sens, "PUBLIC_VERDICT_ENGINES", universe), \
-                mock.patch.object(cli.sensmod, "campaign", return_value=man):
-            code = cli.main(["sensitivity", "subject"])
+        rec = self.run_spec(["freeze", "timing"], name="sens-new.json")
+        added = {"new-verdict": {"help": "new public verdict",
+                                  "verdict_engine": True}}
+        with mock.patch.dict(commands.COMMANDS, added):
+            man = sens.campaign(self.runs, rec["run_id"],
+                                os.path.join(self.tmp, "sens-new"))
             summary = sens.summarise(man)
+            with mock.patch.object(cli.sensmod, "campaign", return_value=man):
+                code = cli.cmd_sensitivity(SimpleNamespace(
+                    root=self.runs, run_id=rec["run_id"],
+                    sensitivity=os.path.join(self.tmp, "unused")))
+        rows = [r for r in summary["unprobed"]
+                if r["checker"] == "new-verdict"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["verdict"], sens.UNPROBED)
         self.assertEqual(code, 1)
-        self.assertEqual(summary["unprobed"][0]["checker"], "new")
-        n = len(sens.PUBLIC_VERDICT_ENGINES)
+        n = len(commands.public_verdict_engines())
         self.assertEqual(summary["checker_coverage"], "%d/%d" % (n, n + 1))
+
+    def _boundary_probe(self, probe, patch_target, replacement, tag):
+        from unittest import mock
+        from hwb import sensitivity as sens
+
+        rec = self.run_spec(["freeze", "timing"], name="sens-%s.json" % tag)
+        work = os.path.join(self.tmp, "boundary-%s" % tag)
+        os.makedirs(work)
+        with mock.patch(patch_target, replacement):
+            verdict, detail = probe(self.runs, rec["run_id"], work)
+        self.assertEqual(verdict, sens.MISSED, detail)
+
+    def test_blast_probe_fails_when_survival_acquisition_is_disabled(self):
+        from hwb import sensitivity as sens
+
+        self._boundary_probe(
+            sens._probe_blast_broken_survival,
+            "hwb.blast._survival",
+            lambda *a, **k: {"completed": True, "conforms": True,
+                             "others_intact": True, "steps_retained": True},
+            "blast")
+
+    def test_catch_probe_fails_when_drift_acquisition_is_disabled(self):
+        from hwb import sensitivity as sens
+
+        self._boundary_probe(
+            sens._probe_catch_missed_declared_drift,
+            "hwb.catch._drift_reported", lambda record: None, "catch")
+
+    def test_efficacy_probe_fails_when_difference_classifier_is_disabled(self):
+        from hwb import sensitivity as sens
+
+        self._boundary_probe(
+            sens._probe_efficacy_surviving_opposite,
+            "hwb.efficacy._differs",
+            lambda *a, **k: (True, "false kill from disabled classifier"),
+            "efficacy")
+
+    def test_steady_probe_fails_when_pair_classifier_is_disabled(self):
+        from hwb import sensitivity as sens, steady
+
+        self._boundary_probe(
+            sens._probe_steady_moving_baseline,
+            "hwb.steady.compare_pair",
+            lambda *a, **k: {"verdict": steady.STABLE,
+                             "moving_axes": [], "unallowed_axes": []},
+            "steady")
 
     def test_a_missed_probe_makes_the_command_exit_nonzero(self):
         """A family that reports a blind checker and exits 0 is a dashboard.
