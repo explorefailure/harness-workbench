@@ -9,6 +9,7 @@ include LICENSE
 include NOTICE
 recursive-include docs *.md
 recursive-include examples *.md *.json *.sh *.py *.txt
+recursive-include tools *.py
 
 # Run stores are outputs, not source, and are no longer tracked -- but they
 # still exist on disk after anyone runs the examples, and MANIFEST.in reads

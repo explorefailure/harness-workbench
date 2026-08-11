@@ -217,6 +217,16 @@ $ python3 -m unittest discover -s tests
 
 The test suite is network-free and needs no model installed.
 
+Release tooling is pinned in the `release` extra so local and CI artifact
+checks use the same versions:
+
+```sh
+python3 -m pip install '.[release]'
+python3 -m build
+python3 -m twine check --strict dist/*
+python3 tools/verify_release_artifacts.py dist
+```
+
 It includes a deterministic, stdlib-only generated corpus for the JSON,
 spec, feature-manifest, conformance, and partial-close boundaries. The fixed
 seed and case counts live in `tests/test_properties.py`; a generated failure

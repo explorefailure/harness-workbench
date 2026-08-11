@@ -78,6 +78,10 @@ def expected_sdist_files() -> set[str]:
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "tests").rglob("*.py")
     )
+    expected.update(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "tools").rglob("*.py")
+    )
     shipped_example_suffixes = {".json", ".md", ".py", ".sh", ".txt"}
     expected.update(
         path.relative_to(ROOT).as_posix()
@@ -87,14 +91,82 @@ def expected_sdist_files() -> set[str]:
     return expected
 
 
+def compact_requirement(requirement: str) -> str:
+    """Normalize the harmless whitespace a metadata backend may add."""
+    return re.sub(r"\s+", "", requirement)
+
+
+def expected_requirements(project: dict) -> set[tuple[str, str]]:
+    expected = {
+        ("", compact_requirement(requirement))
+        for requirement in project.get("dependencies", [])
+    }
+    for extra, requirements in project.get("optional-dependencies", {}).items():
+        expected.update(
+            (extra, compact_requirement(requirement))
+            for requirement in requirements
+        )
+    return expected
+
+
+def actual_requirements(metadata, source: str) -> set[tuple[str, str]]:
+    actual = set()
+    for value in metadata.get_all("Requires-Dist") or []:
+        requirement, separator, marker = value.partition(";")
+        extra = ""
+        if separator:
+            match = re.fullmatch(
+                r"\s*extra\s*==\s*['\"]([^'\"]+)['\"]\s*", marker
+            )
+            if match is None:
+                fail(f"{source} has an unexpected dependency marker: {value!r}")
+            extra = match.group(1)
+        actual.add((extra, compact_requirement(requirement)))
+    return actual
+
+
 def check_metadata(raw: bytes, source: str, project: dict, version: str) -> None:
     metadata = BytesParser(policy=default).parsebytes(raw)
+    if metadata["Metadata-Version"] != "2.4":
+        fail(f"{source} does not use Core Metadata 2.4 required by PEP 639")
     if normalized_distribution(metadata["Name"] or "") != normalized_distribution(project["name"]):
         fail(f"{source} Name metadata disagrees with pyproject.toml")
     if metadata["Version"] != version:
         fail(f"{source} Version metadata {metadata['Version']!r} != {version!r}")
     if metadata["Requires-Python"] != project["requires-python"]:
         fail(f"{source} Requires-Python metadata disagrees with pyproject.toml")
+    if metadata["Summary"] != project["description"]:
+        fail(f"{source} Summary metadata disagrees with pyproject.toml")
+    if metadata["License-Expression"] != project["license"]:
+        fail(f"{source} License-Expression metadata disagrees with pyproject.toml")
+    if set(metadata.get_all("License-File") or []) != set(project["license-files"]):
+        fail(f"{source} License-File metadata disagrees with pyproject.toml")
+    maintainers = project.get("maintainers", [])
+    expected_maintainer = ", ".join(person["name"] for person in maintainers)
+    if metadata["Maintainer"] != expected_maintainer:
+        fail(f"{source} Maintainer metadata disagrees with pyproject.toml")
+    keywords = {
+        keyword.strip() for keyword in (metadata["Keywords"] or "").split(",")
+        if keyword.strip()
+    }
+    if keywords != set(project.get("keywords", [])):
+        fail(f"{source} Keywords metadata disagrees with pyproject.toml")
+    if set(metadata.get_all("Classifier") or []) != set(project.get("classifiers", [])):
+        fail(f"{source} Classifier metadata disagrees with pyproject.toml")
+    urls = {}
+    for value in metadata.get_all("Project-URL") or []:
+        label, separator, url = value.partition(",")
+        if not separator:
+            fail(f"{source} has a malformed Project-URL: {value!r}")
+        urls[label.strip()] = url.strip()
+    if urls != project.get("urls", {}):
+        fail(f"{source} Project-URL metadata disagrees with pyproject.toml")
+    if set(metadata.get_all("Provides-Extra") or []) != set(
+        project.get("optional-dependencies", {})
+    ):
+        fail(f"{source} Provides-Extra metadata disagrees with pyproject.toml")
+    if actual_requirements(metadata, source) != expected_requirements(project):
+        fail(f"{source} Requires-Dist metadata disagrees with pyproject.toml")
 
 
 def check_no_retired_package(names: set[str], source: str) -> None:
@@ -113,6 +185,11 @@ def check_wheel(path: Path, project: dict, version: str) -> None:
             fail("wheel must contain exactly one METADATA and one entry_points.txt")
         check_metadata(archive.read(metadata_names[0]), "wheel", project, version)
         entries = archive.read(entry_names[0]).decode("utf-8")
+        metadata_root = PurePosixPath(metadata_names[0]).parent
+        for license_path in project["license-files"]:
+            archived = str(metadata_root / "licenses" / license_path)
+            if archived in names and archive.read(archived) != (ROOT / license_path).read_bytes():
+                fail(f"wheel {license_path} content disagrees with the source tree")
 
     missing = sorted(expected_package_files() - names)
     if missing:
@@ -128,8 +205,16 @@ def check_wheel(path: Path, project: dict, version: str) -> None:
         fail("wheel contains unexpected top-level paths: " + ", ".join(unexpected_roots))
     if any(PurePosixPath(name).parts[0] in {"docs", "examples", "tests"} for name in names):
         fail("wheel unexpectedly contains project docs, examples, or tests")
-    if "hwb = harness_workbench.cli:main" not in entries:
+    expected_entry = f"hwb = {project['scripts']['hwb']}"
+    if expected_entry not in entries:
         fail("wheel does not declare the expected hwb console entry point")
+    expected_licenses = {
+        str(metadata_root / "licenses" / path)
+        for path in project["license-files"]
+    }
+    missing_licenses = sorted(expected_licenses - names)
+    if missing_licenses:
+        fail("wheel is missing license files: " + ", ".join(missing_licenses))
 
 
 def check_sdist(path: Path, project: dict, version: str) -> None:
@@ -143,6 +228,10 @@ def check_sdist(path: Path, project: dict, version: str) -> None:
             PurePosixPath(*PurePosixPath(member.name).parts[1:]).as_posix()
             for member in files
         }
+        members = {
+            PurePosixPath(*PurePosixPath(member.name).parts[1:]).as_posix(): member
+            for member in files
+        }
         pkg_info = next((member for member in files if member.name == f"{root}/PKG-INFO"), None)
         if pkg_info is None:
             fail("sdist has no top-level PKG-INFO")
@@ -150,6 +239,13 @@ def check_sdist(path: Path, project: dict, version: str) -> None:
         if extracted is None:
             fail("could not read sdist PKG-INFO")
         check_metadata(extracted.read(), "sdist", project, version)
+        for license_path in project["license-files"]:
+            member = members.get(license_path)
+            if member is None:
+                continue
+            archived = archive.extractfile(member)
+            if archived is None or archived.read() != (ROOT / license_path).read_bytes():
+                fail(f"sdist {license_path} content disagrees with the source tree")
 
     missing = sorted(expected_sdist_files() - names)
     if missing:
@@ -173,10 +269,14 @@ def main() -> None:
     parser.add_argument("dist", type=Path, help="directory containing one wheel and one sdist")
     args = parser.parse_args()
     dist = args.dist.resolve()
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject["project"]
     version = source_version()
-    if project["version"] != version:
-        fail(f"pyproject version {project['version']!r} != package __version__ {version!r}")
+    if "version" in project or "version" not in project.get("dynamic", []):
+        fail("pyproject.toml must declare version as dynamic, not duplicate it")
+    version_attr = pyproject["tool"]["setuptools"]["dynamic"]["version"].get("attr")
+    if version_attr != f"{PACKAGE}.__version__":
+        fail("pyproject.toml does not source version from the import package")
 
     wheel = one(dist, "*.whl")
     sdist = one(dist, "*.tar.gz")

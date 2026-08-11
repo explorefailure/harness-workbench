@@ -3666,6 +3666,42 @@ class TestPackageIdentity(unittest.TestCase):
     def test_builtin_locator_uses_the_import_namespace(self):
         self.assertEqual(features.BUILTIN, "harness_workbench:builtin")
 
+    def test_source_and_project_metadata_have_one_version_authority(self):
+        import tomllib
+        import harness_workbench
+
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
+            pyproject = tomllib.load(fh)
+        project = pyproject["project"]
+        self.assertNotIn("version", project)
+        self.assertEqual(["version"], project["dynamic"])
+        self.assertEqual(
+            "harness_workbench.__version__",
+            pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"],
+        )
+        self.assertRegex(
+            harness_workbench.__version__,
+            r"^\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?$",
+        )
+
+    def test_release_metadata_is_explicit_and_runtime_stays_stdlib_only(self):
+        import tomllib
+
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
+            project = tomllib.load(fh)["project"]
+        self.assertEqual([], project["dependencies"])
+        self.assertEqual("Apache-2.0", project["license"])
+        self.assertEqual(["LICENSE", "NOTICE"], project["license-files"])
+        self.assertEqual([{"name": "Garrett Davis"}], project["maintainers"])
+        self.assertEqual(
+            ["build==1.5.0", "twine==7.0.0"],
+            project["optional-dependencies"]["release"],
+        )
+        self.assertEqual(
+            "https://github.com/explorefailure/harness-workbench",
+            project["urls"]["Repository"],
+        )
+
 
 class TestCompatibilityContract(unittest.TestCase):
     """Packaging and the public compatibility claim must move together."""

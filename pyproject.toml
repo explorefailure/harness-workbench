@@ -1,23 +1,53 @@
 [build-system]
-# 64, not 58: PEP 660 `build_editable` landed in setuptools 64, so anything
-# below it cannot do `pip install -e .` at all. The old floor was permissive
-# enough to admit a backend that fails, and it failed confusingly -- "build
-# backend is missing the 'build_editable' hook" rather than a version
-# complaint. A floor that admits a build which cannot work is not a floor.
-requires = ["setuptools>=64"]
+# 77, not 64: support for PEP 639 SPDX expressions and project.license-files
+# landed in setuptools 77. The backend floor must implement the metadata this
+# file declares; 77 also retains the PEP 660 editable-install support that
+# originally established the lower bound.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "harness-workbench"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Explore Failure's Harness Workbench — a workbench for building and testing harness ideas"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 # Copyright is held by the individual. "Explore Failure" is a research
 # and project identity, not a legal entity -- see NOTICE.
 authors = [{ name = "Garrett Davis" }]
+maintainers = [{ name = "Garrett Davis" }]
+keywords = [
+    "harness",
+    "reproducibility",
+    "test-harness",
+    "testing",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = []
+
+[project.optional-dependencies]
+release = [
+    "build==1.5.0",
+    "twine==7.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/explorefailure/harness-workbench"
+Repository = "https://github.com/explorefailure/harness-workbench"
+Issues = "https://github.com/explorefailure/harness-workbench/issues"
 
 [project.scripts]
 hwb = "harness_workbench.cli:main"
@@ -32,6 +62,12 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 harness_workbench = ["builtin/*/*.py", "builtin/*/FEATURE.json"]
+
+[tool.setuptools.dynamic]
+# A literal assignment lets setuptools read the value without importing the
+# package. Source, wheel, and sdist therefore share one version declaration
+# without adding a runtime dependency.
+version = { attr = "harness_workbench.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
