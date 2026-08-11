@@ -23,9 +23,12 @@ the step runs, not what is recorded of it.
 WHAT IT COSTS TO BE HONEST, which is the finding this feature exists to
 produce. `confine` states the rule for a wrap plainly -- "no write either. A
 wrap's power is over EXECUTION ... it has no declared channel into extras at
-all." A wrap therefore has no way to report what it did. Rewriting the
-bytes silently is `clean`; saying so is a recorded breach. Set `report` and
-watch which verdict you get.
+all." A wrap therefore has no way to report what it did. Rewriting the bytes
+is outside `confine`'s record-channel relation; saying so through `extras` is
+a recorded breach. Close-time byte counts and digests still describe the
+final redacted artifacts, but attributing the filesystem write requires a
+separate effects measurement. Set `report` and watch which record-channel
+verdict you get.
 
 CONFIG
     patterns     list of regexes, matched against the captured BYTES

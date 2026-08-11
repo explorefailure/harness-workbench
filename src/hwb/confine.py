@@ -1,9 +1,10 @@
-"""Did each feature stay inside the power it declared?
+"""Did each feature stay inside its declared RECORD-power channel?
 
 Family 8. The manifest is what every other family trusts: blast picks its
 fault library from `power`, interference excuses a consumer because of
 `requires`, and the seam table refuses a power at the wrong seam. All of
-that assumes the declaration describes what the feature actually does.
+that assumes the declaration describes what the feature does through the
+record. Filesystem, process, and network effects are outside this relation.
 
 Nothing checked it. `extras_view()` hands every hook the live record, so an
 `observe` feature -- whose return value is discarded by contract, and which

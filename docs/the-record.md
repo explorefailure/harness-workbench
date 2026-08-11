@@ -4,16 +4,17 @@ The project's load-bearing claim is that **a run is readable without this
 tool.** `hwb fidelity` checks that claim mechanically; this document is the
 other half of it, for a human with `cat` and `python3 -m json.tool`.
 
-Everything here is written once, at close, and never revised. There is no
-database and no index — a run is a directory, and copying the directory
-copies the run.
+Everything here is sealed at close and never revised afterwards. Attempt
+lines are appended while execution is live, then their artifact descriptors
+are finalised once after every feature hook. There is no database and no
+index — a run is a directory, and copying the directory copies the run.
 
 ## Layout
 
 ```
 runs/20260807T174244Z-947867-1117/
   record.json          what happened, and under what configuration
-  attempts.jsonl       one line per attempt, append-only
+  attempts.jsonl       one line per attempt, never collapsed; sealed at close
   integrity.json       sha256 per file, written last
   spec.json            the spec that ran, preserved verbatim
   features/            the source of every attached feature
@@ -24,7 +25,7 @@ runs/20260807T174244Z-947867-1117/
   steps/
     check/
       attempts/
-        0/stdout.bin   raw bytes, exactly as captured
+        0/stdout.bin   final stored bytes for this attempt
         0/stderr.bin
         1/stdout.bin
         ...
@@ -34,9 +35,11 @@ The run id is `<UTC timestamp>-<spec digest prefix>-<random>`. The middle
 field means two runs of the same spec sort together and are recognisable as
 the same experiment at a glance.
 
-**Output is bytes, not text.** No decoding, no normalisation, no trailing
-newline policy. A workload that emits invalid UTF-8 or binary is recorded
-faithfully, because the alternative is a harness that quietly edits evidence.
+**Output is bytes, not text.** No decoding or newline policy is imposed by the
+base. A feature may transform captured bytes before close (the shipped
+`redact` feature does); the attempt descriptors are computed afterwards and
+therefore describe the final stored artifacts, not the earlier subprocess
+buffers.
 
 ## `record.json`
 
@@ -50,6 +53,7 @@ faithfully, because the alternative is a harness that quietly edits evidence.
 | `spec_digest` | digest of the spec that ran — the experiment's identity |
 | `spec_path` | where the spec was read from |
 | `seam_contract` | e.g. `seams/0.2.0`, the hook API this run used |
+| `attempt_artifact_contract` | `attempt-artifacts/0.1`; final attempt byte counts and digests are sealed to stored stdout/stderr |
 | `steps` | `[{"id", "argv"}]` — what was asked for |
 | `features` | one entry per attached feature, see below |
 | `features_source` | which route supplied them, see below |
@@ -115,12 +119,18 @@ secret puts it in the record. Declare what determines the experiment.
 One JSON object per line, in execution order, **never collapsed**:
 
 ```json
-{"step_id":"check","n":0,"exit":1,"duration_ms":8,"started":"...","stdout_bytes":65,"stderr_bytes":25,"caused_by":[{"feature":"retry","i":0}]}
-{"step_id":"check","n":1,"exit":1,"duration_ms":8,"started":"...","stdout_bytes":65,"stderr_bytes":25,"caused_by":[{"feature":"retry","i":1}]}
-{"step_id":"check","n":2,"exit":0,"duration_ms":7,"started":"...","stdout_bytes":81,"stderr_bytes":0,"caused_by":[{"feature":"retry","i":2}]}
+{"step_id":"check","n":0,"exit":1,"duration_ms":8,"started":"...","stdout_bytes":65,"stdout_digest":"sha256:...","stderr_bytes":25,"stderr_digest":"sha256:...","caused_by":[{"feature":"retry","i":0}]}
+{"step_id":"check","n":1,"exit":1,"duration_ms":8,"started":"...","stdout_bytes":65,"stdout_digest":"sha256:...","stderr_bytes":25,"stderr_digest":"sha256:...","caused_by":[{"feature":"retry","i":1}]}
+{"step_id":"check","n":2,"exit":0,"duration_ms":7,"started":"...","stdout_bytes":81,"stdout_digest":"sha256:...","stderr_bytes":0,"stderr_digest":"sha256:...","caused_by":[{"feature":"retry","i":2}]}
 ```
 
 `n` indexes attempts within a step and maps to `steps/<id>/attempts/<n>/`.
+
+`stdout_bytes`, `stderr_bytes`, `stdout_digest`, and `stderr_digest` are
+finalised after `after_run`, over the files that are actually sealed into the
+run. `hwb verify` covers post-close edits; conformance independently checks
+that these descriptors still agree with the files. Agreement makes an output
+rewrite visible in the record but does not identify which feature wrote it.
 
 `caused_by` is a **stack**, outermost first, one frame per wrap activation
 carrying that feature's own call ordinal. Nested wraps produce multiple
@@ -158,6 +168,7 @@ from different eras and unknown keys are always ignored:
 | `timed_out` | the attempt did not time out (safe) |
 | `seam_timings` | no hook was dispatched (safe) |
 | `replicates` | this run makes no reproduction claim (safe) |
+| `attempt_artifact_contract` | the run predates close-time artifact sealing; byte counts may be capture-time and digests may be absent |
 
 A field recording something **positive and rare** is safe to read as
 absent-means-no. A field recording something **structural and usual** is not,

@@ -175,7 +175,9 @@ exploration.
 
 ### `hwb confine <run id>`
 
-Did each feature stay inside the power it **declared**? The manifest is what
+Did each feature stay inside the **record channel** its power declared? The
+relation is deliberately narrower than filesystem or process confinement.
+The manifest is what
 every other family trusts — blast picks its fault library from `power`,
 interference excuses a consumer because of `requires` — and until this
 existed, nothing checked it.
@@ -303,21 +305,34 @@ A checker whose passing verdict is silence — `equivalent`, `clean`,
 looking. So each probe constructs a violation one checker **must** reject,
 and records whether it noticed.
 
+The checker universe is declared separately from the probe list. Adding a
+public verdict engine without a probe produces an `UNPROBED` row and a
+non-zero exit instead of quietly shrinking the claimed coverage.
+
 ```console
 PROBE                        CHECKER   VERDICT    DETAIL
-conform_fabricated_attempt   conform   detected   Invariant 1: attempt names step 'ghost-step' ...
+confine_record_reach         confine   detected   reached into somebody-else
+conform_artifact_mismatch    conform   detected   Invariant 1: stdout_bytes disagrees ...
 diff_exit_code *             diff      detected   ...
+replay_changed_executable    replay    MISSED     reported `matched` after output changed
 verify_tamper                verify    detected   drifted (drifted: record.json)
 
 * = positive control
 
-detected 4/4
+detected 12/13
+checker coverage: 11/11
 ```
 
-**Every probe runs on a copy** — nothing touches the real store. And the
-positive control is deliberate: if every probe reports "detected", that is
-*also* what a broken probe harness reports. If the control fails, no other
-row on the table can be believed.
+Record probes run on copies, verdict reducers receive deliberately red
+in-memory manifests, and replay uses a fresh isolated workload — nothing
+touches the real store. The positive control is deliberate: if every probe
+reports "detected", that is *also* what a broken probe harness reports. If
+the control fails, no other row on the table can be believed.
+
+The current known red is replay: its comparison consumes harness-field
+differences but drops `diff`'s separate output-difference axis, so changed
+replay output can still be labelled `matched`. Sensitivity reports that blind
+checker and exits non-zero; it does not turn a missing observation into green.
 
 This is a family rather than a habit because a practice applied from memory
 covers the tools you are already thinking about, which are never the ones you
@@ -380,16 +395,16 @@ stale, never that an explanation stopped being a good one.
 Stated because a measurement whose limits are undocumented gets trusted
 further than it holds.
 
-- **`confine` watches the record, not the filesystem.** A feature that
-  rewrites captured output on disk passes every confinement check, while the
-  honest version of the same feature — one that annotates what it changed —
-  is reported as a breach. The families measure the surfaces that existed
-  when they were designed, so each genuinely new *kind* of feature tests the
-  instrument before it tests anything else.
+- **`confine` watches record-power channels, not the filesystem.** A feature
+  that rewrites captured output on disk is outside that relation, while the
+  version that writes `extras` through an undeclared channel is a recorded
+  breach. Final byte counts and digests prove the record agrees with stored
+  output, but they do not attribute the write. Filesystem-effect confinement
+  requires a separate measurement surface.
 - **Seam budgets are advisory at the edges.** Main thread only, cannot
   interrupt a blocking C call, and a hook catching `BaseException` can absorb
   the escalation. Real isolation needs a subprocess.
-- **`freeze` digests only declared inputs.** Not the interpreter, the
+- **`freeze` and `catch` cover only declared inputs.** Not the interpreter, the
   environment, the clock, or anything you forgot to declare.
 - **Injected faults are not real defects.** A large fault-injection study put
   the mismatch as high as 72%.

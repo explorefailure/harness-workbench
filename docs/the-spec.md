@@ -86,9 +86,10 @@ things consume that:
 - `hwb catch` perturbs exactly these to see whether a detector fires,
 - `hwb replay` copies exactly these — with their modes — into its sandbox.
 
-**Anything you do not declare is invisible to all three.** An undeclared file
-can change under you and every check reports clean, which is the blind spot
-`hwb catch` states out loud rather than leaving you to find.
+**Anything you do not declare is outside all three checks.** An undeclared
+file can change under you while declared-input drift remains clean, which is
+the bounded observation `hwb catch` states out loud rather than leaving you
+to overread.
 
 ## `features[]`
 

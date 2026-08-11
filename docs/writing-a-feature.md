@@ -63,8 +63,10 @@ arbitrary code execution; keeping resolution inert is what makes that safe.
 
 ## Powers
 
-A power is a claim about what a feature is allowed to do. It is enforced at
-dispatch and audited afterwards by `hwb confine`.
+A power is a claim about what a feature is allowed to do through the
+dispatcher. Its return channel is enforced at dispatch and record-channel
+reach-through is audited afterwards by `hwb confine`. Filesystem, process,
+and network effects are outside that check.
 
 | power | may return | may write to extras | failure semantics |
 |---|---|---|---|
@@ -237,5 +239,6 @@ Attaching a feature and then measuring it is a task rather than a contract, so
 it has its own guide: [`measuring-your-own-code.md`](measuring-your-own-code.md).
 
 The short version is that `hwb confine` is the one to run first — it checks
-that the manifest you wrote describes the code you wrote, and every other
-family trusts that declaration.
+that the manifest describes how the feature used the record channels, and
+every other family trusts that declaration. It does not prove the feature had
+no filesystem, process, or network effects.

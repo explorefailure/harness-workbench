@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from .seams import SEAM_POWERS, SEAMS
+from .runner import ATTEMPT_ARTIFACT_CONTRACT
 
 RECORD_SCHEMA = "hwbrun/v0.1"
 # The project was renamed hb -> hwb on 2026-08-06 (Open Decision 2). The
@@ -72,7 +73,7 @@ def validate_record(record: Dict[str, Any],
     _namespaces(record)
     _self_attestation(record)
     if run_dir is not None:
-        _against_the_store(attempts, run_dir)
+        _against_the_store(record, attempts, run_dir)
         _preserved_spec(record, run_dir)
         _preserved_features(record, run_dir)
 
@@ -177,7 +178,8 @@ def _provenance(a: Dict[str, Any]) -> None:
                  % (frame["i"],))
 
 
-def _against_the_store(attempts: List[Dict[str, Any]], run_dir: str) -> None:
+def _against_the_store(record: Dict[str, Any],
+                       attempts: List[Dict[str, Any]], run_dir: str) -> None:
     """The raw bytes are the ground truth the stream can be checked against.
 
     One attempt directory is created per execution, before the attempt line
@@ -186,6 +188,8 @@ def _against_the_store(attempts: List[Dict[str, Any]], run_dir: str) -> None:
     collapsed; a line with no directory means a line was invented.
     """
     import os
+
+    from .canon import digest_file
 
     # No early return when `steps/` is absent. It used to skip the whole
     # check, which meant a run where nothing executed was never compared
@@ -221,6 +225,37 @@ def _against_the_store(attempts: List[Dict[str, Any]], run_dir: str) -> None:
         # Not a collapse -- the opposite. A line with no bytes behind it.
         _bad("1", "the stream lists %d attempt(s) with nothing in the store "
                   "(%s)" % (len(invented), ", ".join("%s#%d" % d for d in invented[:5])))
+
+    sealed = record.get("attempt_artifact_contract")
+    if sealed not in (None, ATTEMPT_ARTIFACT_CONTRACT):
+        _bad("1", "attempt_artifact_contract is %r, expected %r"
+             % (sealed, ATTEMPT_ARTIFACT_CONTRACT))
+
+    for attempt in attempts:
+        if not attempt.get("executed", True):
+            continue
+        adir = os.path.join(run_dir, "steps", str(attempt["step_id"]),
+                            "attempts", str(attempt["n"]))
+        for stream in ("stdout", "stderr"):
+            path = os.path.join(adir, stream + ".bin")
+            size_key = stream + "_bytes"
+            digest_key = stream + "_digest"
+            if not os.path.isfile(path):
+                _bad("1", "%s#%s has no stored %s.bin"
+                     % (attempt["step_id"], attempt["n"], stream))
+            if size_key in attempt and attempt[size_key] != os.path.getsize(path):
+                _bad("1", "%s#%s records %s=%s but %s.bin contains %s bytes"
+                     % (attempt["step_id"], attempt["n"], size_key,
+                        attempt[size_key], stream, os.path.getsize(path)))
+            if digest_key in attempt and attempt[digest_key] != digest_file(path):
+                _bad("1", "%s#%s records %s=%s but %s.bin digests to %s"
+                     % (attempt["step_id"], attempt["n"], digest_key,
+                        attempt[digest_key], stream, digest_file(path)))
+            if sealed == ATTEMPT_ARTIFACT_CONTRACT and \
+                    (size_key not in attempt or digest_key not in attempt):
+                _bad("1", "%s#%s is sealed under %s but lacks %s or %s"
+                     % (attempt["step_id"], attempt["n"], sealed,
+                        size_key, digest_key))
 
 
 def _self_attestation(r: Dict[str, Any]) -> None:

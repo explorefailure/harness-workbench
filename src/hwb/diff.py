@@ -47,11 +47,14 @@ MASK_RECORD = ("run_id", "started_at", "ended_at", "seam_timings",
                # masked; two runs using identical feature code
                # from different routes are the same experiment.
                "features_source")
-MASK_ATTEMPT = ("started", "duration_ms", "stdout_bytes", "stderr_bytes")
+MASK_ATTEMPT = ("started", "duration_ms", "stdout_bytes", "stderr_bytes",
+                "stdout_digest", "stderr_digest")
 MASK_REPORTED = ("run_id", "started_at", "ended_at", "attempt.started",
                  "attempt.duration_ms",
                  "attempt.stdout_bytes / stderr_bytes (the SIZE; the "
                  "CONTENT is compared, reported separately as output)",
+                 "attempt.stdout_digest / stderr_digest (the CONTENT is "
+                 "read from artifacts and reported separately as output)",
                  "env.undeclared_names",
                  "seam_timings (reported separately as cost)",
                  "identity values inside extras: run_id, spec_digest, the "

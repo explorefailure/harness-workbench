@@ -23,11 +23,11 @@ literature names:
   Observing that it catches it proves the implementation runs, not that the
   design earns itself. Marked as such so it cannot be read as a result.
 
-  BLIND SPOTS, which are knowable in advance and worth stating rather than
-  discovering later. `freeze` digests only `spec.all_inputs()`, so a file
-  nobody declared is invisible to it -- and so are the model weights, the
-  interpreter, the environment and the clock. A run can be entirely
-  incomparable to its baseline with `drifted: false`.
+  BOUNDED OBSERVATION, which is knowable in advance and worth stating rather
+  than discovering later. `freeze` digests only `spec.all_inputs()`, so a file
+  nobody declared is outside this detector -- as are the model weights, the
+  interpreter, the environment and the clock. `drifted: false` means no drift
+  in the declared set, not that every dependency was observed.
 """
 from __future__ import annotations
 

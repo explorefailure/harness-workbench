@@ -20,11 +20,12 @@ applied from memory covers the tools you are already thinking about, which
 are never the ones you have trusted for months. Enumerating the checkers
 makes the coverage checkable instead of attentional.
 
-EVERY PROBE RUNS ON A COPY. The catch campaign's third defect was that it
-damaged the workload it measured -- restoring a deleted input without its
+EVERY RECORD PROBE RUNS ON A COPY. The catch campaign's third defect was that
+it damaged the workload it measured -- restoring a deleted input without its
 executable bit -- and the damage read as a step failure rather than as the
-instrument breaking. Nothing here touches the real store: each probe copies
-the run into the campaign directory and mutates the copy.
+instrument breaking. Nothing here touches the real store: record readers get
+a copied run, manifest reducers get a deliberately red in-memory manifest,
+and replay gets a fresh isolated fixture under the campaign directory.
 
 A POSITIVE CONTROL IS INCLUDED DELIBERATELY (`diff_exit_code`). If every
 probe reports "detected", that is also what a broken probe harness reports
@@ -50,6 +51,26 @@ from .runner import _stamp
 DETECTED = "detected"
 MISSED = "MISSED"
 ERRORED = "errored"
+UNPROBED = "UNPROBED"
+
+# The public verdict engines, declared independently of the probes. Adding a
+# checker here without adding a probe cannot produce a quietly smaller green
+# table: campaign() emits an UNPROBED row and the command fails. `sweep` is a
+# configuration producer, not a verdict engine; `sensitivity` does not probe
+# itself.
+PUBLIC_VERDICT_ENGINES = (
+    "blast",
+    "catch",
+    "confine",
+    "conform",
+    "diff",
+    "efficacy",
+    "fidelity",
+    "interfere",
+    "order",
+    "replay",
+    "verify",
+)
 
 
 class SensitivityError(Exception):
@@ -256,6 +277,221 @@ def _probe_conform_swapped_digest(runs_root: str, run_id: str,
     return MISSED, "reported `conforms` for a record whose spec_digest is false"
 
 
+def _probe_conform_artifact_mismatch(runs_root: str, run_id: str,
+                                     work: str) -> Tuple[str, str]:
+    """An attempt descriptor whose stored stdout no longer satisfies it."""
+    from . import conform, diff as diffmod
+
+    d = _copy_run(runs_root, run_id, os.path.join(work, "M"))
+    target = _first_stdout(d)
+    if not target:
+        return ERRORED, "run has no stored stdout to mutate"
+    with open(target, "ab") as fh:
+        fh.write(b"\nARTIFACT MOVED AFTER ITS DESCRIPTOR\n")
+    record, attempts, _ = diffmod.load_run(work, "M")
+    try:
+        conform.validate_record(record, attempts, run_dir=d)
+    except conform.NonConforming as e:
+        return DETECTED, str(e)[:120]
+    except Exception as e:                                   # noqa: BLE001
+        return ERRORED, "%s: %s" % (type(e).__name__, e)
+    return MISSED, "reported `conforms` when stored output disagreed with its descriptor"
+
+
+def _probe_confine_record_reach(runs_root: str, run_id: str,
+                                work: str) -> Tuple[str, str]:
+    """A feature recorded as reaching through into another namespace."""
+    from . import confine
+
+    d = _copy_run(runs_root, run_id, os.path.join(work, "C"))
+    rp = os.path.join(d, "record.json")
+    rec = _read_json(rp)
+    if not rec.get("features"):
+        return ERRORED, "run has no feature to mark as reaching through"
+    feat = rec["features"][0]
+    feat["breaches"] = [{"seam": "after_run", "step": None,
+                         "namespace": "somebody-else", "kind": "foreign",
+                         "power": feat.get("power")}]
+    _write_json(rp, rec)
+    res = confine.assess(d)
+    if not res["breached"]:
+        return MISSED, "reported no record-power breach for recorded foreign reach"
+    return DETECTED, res["breached"][0]["detail"][:120]
+
+
+def _probe_fidelity_missing_output(runs_root: str, run_id: str,
+                                   work: str) -> Tuple[str, str]:
+    """A run that lists an attempt but no longer carries all of its output."""
+    from . import fidelity
+
+    d = _copy_run(runs_root, run_id, os.path.join(work, "L"))
+    target = _first_stdout(d)
+    if not target:
+        return ERRORED, "run has no stored stdout to remove"
+    os.remove(target)
+    res = fidelity.assess(d)
+    row = next(r for r in res["questions"] if r["key"] == "what_was_produced")
+    if row["verdict"] == fidelity.ANSWERED:
+        return MISSED, "answered what was produced after stored output was removed"
+    return DETECTED, "%s: %s" % (row["verdict"], row["detail"])
+
+
+def _probe_interfere_namespace_move(runs_root: str, run_id: str,
+                                    work: str) -> Tuple[str, str]:
+    """A's record namespace moves when B is attached."""
+    from . import sweep
+
+    solo = _copy_run(runs_root, run_id, os.path.join(work, "solo"))
+    pair = _copy_run(runs_root, run_id, os.path.join(work, "pair"))
+    rp = os.path.join(solo, "record.json")
+    rec = _read_json(rp)
+    names = [f["name"] for f in rec.get("features", [])]
+    if len(names) < 2:
+        return ERRORED, "run needs at least two features for interference"
+    a, b = names[:2]
+    rec["features"] = [f for f in rec["features"] if f["name"] == a]
+    rec["extras"] = {a: rec.get("extras", {}).get(a, {})}
+    _write_json(rp, rec)
+
+    pp = os.path.join(pair, "record.json")
+    paired = _read_json(pp)
+    blob = paired.setdefault("extras", {}).setdefault(a, {})
+    if not isinstance(blob, dict):
+        return ERRORED, "feature %s has a non-object extras namespace" % a
+    blob["sensitivity_probe"] = "moved only when %s attached" % b
+    _write_json(pp, paired)
+
+    man = {"configurations": [
+        {"config": [a], "run_id": "solo", "executed": True},
+        {"config": [a, b], "run_id": "pair", "executed": True},
+    ]}
+    res = sweep.interference(man, work)
+    if not res["findings"]:
+        return MISSED, "reported no interference after extras[%s] moved" % a
+    return DETECTED, "%s perturbed by %s at %s" % (
+        a, b, ", ".join(res["findings"][0]["fields"]))
+
+
+def _probe_order_changed_run(runs_root: str, run_id: str,
+                             work: str) -> Tuple[str, str]:
+    """Two declared orders of one feature set produce different attempts."""
+    from . import sweep
+
+    _copy_run(runs_root, run_id, os.path.join(work, "declared"))
+    changed = _copy_run(runs_root, run_id, os.path.join(work, "reversed"))
+    rec = _read_json(os.path.join(changed, "record.json"))
+    names = [f["name"] for f in rec.get("features", [])]
+    if len(names) < 2:
+        return ERRORED, "run needs at least two features for order"
+    ap = os.path.join(changed, "attempts.jsonl")
+    with open(ap, "r", encoding="utf-8") as fh:
+        attempts = [json.loads(line) for line in fh if line.strip()]
+    if not attempts:
+        return ERRORED, "run recorded no attempts"
+    attempts[0]["exit"] = (attempts[0].get("exit") or 0) + 91
+    with open(ap, "w", encoding="utf-8") as fh:
+        for attempt in attempts:
+            fh.write(json.dumps(attempt, sort_keys=True) + "\n")
+    man = {"configurations": [
+        {"config": names, "run_id": "declared", "executed": True},
+        {"config": list(reversed(names)), "run_id": "reversed", "executed": True},
+    ]}
+    res = sweep.order_significance(man, work)
+    if not res["findings"]:
+        return MISSED, "reported order insignificant when the run changed"
+    return DETECTED, res["findings"][0]["differences"][0][:120]
+
+
+def _probe_blast_broken_survival(runs_root: str, run_id: str,
+                                 work: str) -> Tuple[str, str]:
+    """A fault whose damage violates every promised survival bit."""
+    from . import blast
+
+    man = {"injections": [{"feature": "probe", "fault": "raise",
+                            "power": "annotate", "completed": False,
+                            "conforms": False, "others_intact": False,
+                            "steps_retained": False}]}
+    res = blast.summarise(man)
+    if not res["findings"]:
+        return MISSED, "reported no blast finding when all survival bits failed"
+    return DETECTED, "violated " + ", ".join(res["findings"][0]["violated"])
+
+
+def _probe_catch_missed_declared_drift(runs_root: str, run_id: str,
+                                       work: str) -> Tuple[str, str]:
+    """A declared content mutation with no detector reporting drift."""
+    from . import catch as catchmod
+
+    man = {"results": [{"mutation": "append_byte", "input": "declared.txt",
+                         "expected": "caught", "why": "known red",
+                         "detected_by": None}]}
+    res = catchmod.summarise(man)
+    if not res["missed"]:
+        return MISSED, "reported no miss for an undetected declared-input mutation"
+    return DETECTED, res["notes"][0]["verdict"]
+
+
+def _probe_efficacy_surviving_opposite(runs_root: str, run_id: str,
+                                       work: str) -> Tuple[str, str]:
+    """A well-formed opposite that leaves the measurable run unchanged."""
+    from . import efficacy
+
+    man = {"mutants": [{"feature": "probe", "power": "annotate",
+                         "intent": "capability", "verdict": efficacy.SURVIVED,
+                         "decision": "known red", "detail": "equivalent"}]}
+    res = efficacy.summarise(man)
+    if not res["inert"]:
+        return MISSED, "reported no inert feature for a surviving opposite"
+    return DETECTED, "surviving opposite classified inert"
+
+
+def _probe_replay_changed_executable(runs_root: str, run_id: str,
+                                     work: str) -> Tuple[str, str]:
+    """Replay from unchanged declared inputs but a changed step executable.
+
+    The executable is intentionally undeclared: replay names that bounded
+    input gap and still must not call changed output a match.
+    """
+    from . import replay, runner, spec as specmod
+
+    # A featureless fixture isolates the replay verdict from stateful feature
+    # baselines. It deliberately changes only an undeclared executable while
+    # leaving the declared input fixed, which is a gap replay already reports.
+    source = os.path.join(work, "source")
+    fixture_runs = os.path.join(work, "runs")
+    os.makedirs(source)
+    script = os.path.join(source, "probe.sh")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho ORIGINAL-REPLAY-OUTPUT\n")
+    os.chmod(script, 0o755)
+    with open(os.path.join(source, "in.txt"), "w", encoding="utf-8") as fh:
+        fh.write("unchanged declared input\n")
+    spec_path = os.path.join(source, "replay-probe.json")
+    _write_json(spec_path, {
+        "schema": "hwbspec/v0.1",
+        "run_class": "discovery",
+        "features": [],
+        "steps": [{"id": "01", "argv": ["./probe.sh"],
+                   "inputs": ["in.txt"]}],
+    })
+    original = runner.execute(specmod.load(spec_path), [], fixture_runs)
+    # Replay requires a preserved feature tree even for the empty set. The
+    # runner quite reasonably stores no tree when there was no source to copy.
+    os.makedirs(os.path.join(fixture_runs, original["run_id"], "features"))
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho CHANGED-REPLAY-OUTPUT\n")
+    os.chmod(script, 0o755)
+
+    try:
+        man = replay.replay(fixture_runs, original["run_id"],
+                            os.path.join(work, "campaigns"), source_dir=source)
+    except replay.ReplayError as e:
+        return DETECTED, "replay refused changed execution: %s" % e
+    if man["verdict"] == replay.MATCHED:
+        return MISSED, "reported `matched` after the replay executable changed output"
+    return DETECTED, man["verdict"]
+
+
 # name -> (checker, probe, control?, why this violation must be caught)
 PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "diff_exit_code": (
@@ -275,6 +511,33 @@ PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "conform_swapped_digest": (
         "conform", _probe_conform_swapped_digest, False,
         "a spec_digest that does not match the preserved spec is a false claim"),
+    "conform_artifact_mismatch": (
+        "conform", _probe_conform_artifact_mismatch, False,
+        "attempt byte counts and digests must agree with final stored output"),
+    "confine_record_reach": (
+        "confine", _probe_confine_record_reach, False,
+        "a recorded write outside the feature's declared record channel is a breach"),
+    "fidelity_missing_output": (
+        "fidelity", _probe_fidelity_missing_output, False,
+        "a record missing attempt output cannot answer what was produced"),
+    "interfere_namespace_move": (
+        "interfere", _probe_interfere_namespace_move, False,
+        "extras[A] moving only when B is attached violates the relation"),
+    "order_changed_run": (
+        "order", _probe_order_changed_run, False,
+        "different runs under two declared orders make order significant"),
+    "blast_broken_survival": (
+        "blast", _probe_blast_broken_survival, False,
+        "a fault that breaks promised survival bits is blast damage"),
+    "catch_missed_declared_drift": (
+        "catch", _probe_catch_missed_declared_drift, False,
+        "a declared content mutation expected to be caught must not disappear"),
+    "efficacy_surviving_opposite": (
+        "efficacy", _probe_efficacy_surviving_opposite, False,
+        "a well-formed opposite that changes nothing is an inert feature"),
+    "replay_changed_executable": (
+        "replay", _probe_replay_changed_executable, False,
+        "a replay whose execution produces different output must not match"),
 }
 
 
@@ -297,6 +560,23 @@ def campaign(runs_root: str, run_id: str, sens_root: str) -> Dict[str, Any]:
         rows.append({"probe": name, "checker": checker, "control": is_control,
                      "why": why, "verdict": verdict, "detail": detail})
 
+    probed = {row["checker"] for row in rows}
+    declared = set(PUBLIC_VERDICT_ENGINES)
+    for row in rows:
+        if row["checker"] not in declared:
+            row["verdict"] = ERRORED
+            row["detail"] = ("probe names undeclared verdict engine %r"
+                             % row["checker"])
+    for checker in sorted(declared - probed):
+        rows.append({
+            "probe": "unprobed_%s" % checker,
+            "checker": checker,
+            "control": False,
+            "why": "every public verdict engine requires a known-red probe",
+            "verdict": UNPROBED,
+            "detail": "declared public verdict engine has no probe",
+        })
+
     manifest = {
         "schema": "hwbsensitivity/v0.1",
         "campaign_id": campaign_id,
@@ -314,14 +594,19 @@ def summarise(manifest: Dict[str, Any]) -> Dict[str, Any]:
     control_ok = all(r["verdict"] == DETECTED for r in rows if r["control"])
     missed = [r for r in rows if r["verdict"] == MISSED and not r["control"]]
     errored = [r for r in rows if r["verdict"] == ERRORED]
+    unprobed = [r for r in rows if r["verdict"] == UNPROBED]
     detected = [r for r in rows if r["verdict"] == DETECTED and not r["control"]]
     return {
         "control_ok": control_ok,
         "detected": len(detected),
         "missed": missed,
         "errored": errored,
+        "unprobed": unprobed,
         # Blind checkers, deduplicated: the actionable unit is the TOOL, not
         # the probe. Two probes missing on one tool is one blind tool.
         "blind_checkers": sorted({r["checker"] for r in missed}),
         "total": len([r for r in rows if not r["control"]]),
+        "checker_coverage": "%d/%d" % (
+            len(set(PUBLIC_VERDICT_ENGINES) - {r["checker"] for r in unprobed}),
+            len(PUBLIC_VERDICT_ENGINES)),
     }

@@ -17,6 +17,10 @@ meets records written before they existed. Getting this wrong is silent:
   timed_out      absent = the attempt did not time out. Safe to assume.
   seam_timings   absent or empty = no hook was dispatched. Safe to assume.
   replicates     null = this run makes no reproduction claim. Safe.
+  attempt_artifact_contract
+                 absent = attempt descriptors predate close-time sealing;
+                 byte counts may describe capture-time buffers and digests
+                 may be absent. It must NOT be read as final agreement.
 
 The distinction: a field that records something POSITIVE and rare (a
 timeout) is safe to read as absent-means-no. A field that records something
@@ -39,6 +43,7 @@ from .seams import Dispatcher
 
 RECORD_SCHEMA = "hwbrun/v0.1"
 SEAM_CONTRACT = "seams/0.2.0"
+ATTEMPT_ARTIFACT_CONTRACT = "attempt-artifacts/0.1"
 
 
 def _utc() -> str:
@@ -175,6 +180,7 @@ class Recorder:
     # ---- close ---------------------------------------------------------
     def close(self, status: str, features, gates=None) -> Dict[str, Any]:
         self._attempts.close()
+        self._finalise_attempt_artifacts()
         # A DECLARED variable that is unset records as null, not absent.
         # Iterating os.environ alone made "the spec declared nothing" and
         # "the spec declared OLLAMA_HOST and it was unset" produce the same
@@ -202,6 +208,13 @@ class Recorder:
             # `_digest_conflict`, which refuses rather than compares.
             "spec_path": os.path.abspath(self.spec.path),
             "seam_contract": SEAM_CONTRACT,
+            # Attempt lines are written while the run is live, but a wrap
+            # may legitimately inspect (or, today, rewrite) the captured
+            # files after the step returns. The descriptors are therefore
+            # finalised only after every feature hook has completed. This
+            # contract tells readers that byte counts and digests describe
+            # the bytes that were actually sealed into the run directory.
+            "attempt_artifact_contract": ATTEMPT_ARTIFACT_CONTRACT,
             # WHERE the features came from. What RAN is already
             # identified by each feature's own digest; this answers the
             # different question of which route supplied it -- the
@@ -226,6 +239,45 @@ class Recorder:
             fh.write(canon_bytes(record))
         _write_integrity(self.run_dir)
         return record
+
+    def _finalise_attempt_artifacts(self) -> None:
+        """Seal each executed attempt to the stdout/stderr bytes on disk.
+
+        Capture-time lengths are provisional: an outer wrap regains control
+        after ``run_step`` and can change the files before the run closes.
+        Re-reading here makes the append-only attempt stream describe the
+        final artifacts rather than the earlier in-memory byte strings.
+
+        This proves agreement, not authority. It cannot attribute a rewrite
+        to a feature; filesystem-effect confinement is a separate campaign.
+        """
+        path = os.path.join(self.run_dir, "attempts.jsonl")
+        with open(path, "r", encoding="utf-8") as fh:
+            attempts = [json.loads(line) for line in fh if line.strip()]
+
+        for attempt in attempts:
+            if not attempt.get("executed", True):
+                continue
+            adir = os.path.join(self.run_dir, "steps", str(attempt["step_id"]),
+                                "attempts", str(attempt["n"]))
+            for stream in ("stdout", "stderr"):
+                artifact = os.path.join(adir, stream + ".bin")
+                if not os.path.isfile(artifact):
+                    raise HarnessError(
+                        "attempt %s#%s lost %s.bin before close"
+                        % (attempt["step_id"], attempt["n"], stream))
+                attempt[stream + "_bytes"] = os.path.getsize(artifact)
+                attempt[stream + "_digest"] = digest_file(artifact)
+
+        tmp = path + ".finalising"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for attempt in attempts:
+                    fh.write(json.dumps(attempt, sort_keys=True) + "\n")
+            os.replace(tmp, path)
+        finally:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
 
 
 from . import features as featmod  # noqa: E402

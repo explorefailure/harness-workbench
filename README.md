@@ -135,11 +135,11 @@ nothing but `cat`.
 ## Measuring the harness
 
 ```console
-$ hwb confine <run id>        # did each feature stay inside its declared power
+$ hwb confine <run id>        # did each feature use only its declared record channel
 $ hwb blast <spec>            # break a feature; was the damage contained
 $ hwb efficacy <spec>         # invert a feature's decision; did anything notice
-$ hwb catch <spec>            # perturb the inputs; did a detector fire
-$ hwb sensitivity <run id>    # do the checkers still reject a known violation
+$ hwb catch <spec>            # perturb declared inputs; did a detector fire
+$ hwb sensitivity <run id>    # does every verdict engine reject a known violation
 $ hwb sweep <spec> && hwb interfere <sweep id>   # do features disturb each other
 $ hwb diff <run a> <run b>    # what changed, and what was masked
 $ hwb fidelity <run id>       # what can be answered from the record alone

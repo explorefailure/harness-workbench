@@ -2550,6 +2550,40 @@ class TestSensitivity(Base):
         self.assertEqual(len(res["blind_checkers"]),
                          len(set(res["blind_checkers"])))
 
+    def test_every_public_verdict_engine_is_mechanically_accounted_for(self):
+        """The universe and the probes are independent declarations.
+
+        Adding a checker without a probe must create a red row; otherwise the
+        newest checker is exactly the one an old hand-maintained list omits.
+        """
+        from hwb import sensitivity as sens
+        man = self.campaign()
+        reported = {r["checker"] for r in man["probes"]}
+        self.assertEqual(reported, set(sens.PUBLIC_VERDICT_ENGINES))
+        n = len(sens.PUBLIC_VERDICT_ENGINES)
+        self.assertEqual(sens.summarise(man)["checker_coverage"], "%d/%d" % (n, n))
+
+    def test_an_unprobed_public_engine_is_reported_and_fails_the_command(self):
+        from unittest import mock
+        from hwb import cli, sensitivity as sens
+
+        man = {"campaign_id": "probe", "subject_run": "subject", "probes": [
+            {"probe": "control", "checker": "diff", "control": True,
+             "why": "control", "verdict": sens.DETECTED, "detail": "ok"},
+            {"probe": "unprobed_new", "checker": "new", "control": False,
+             "why": "every engine needs a probe", "verdict": sens.UNPROBED,
+             "detail": "declared public verdict engine has no probe"},
+        ]}
+        universe = sens.PUBLIC_VERDICT_ENGINES + ("new",)
+        with mock.patch.object(sens, "PUBLIC_VERDICT_ENGINES", universe), \
+                mock.patch.object(cli.sensmod, "campaign", return_value=man):
+            code = cli.main(["sensitivity", "subject"])
+            summary = sens.summarise(man)
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["unprobed"][0]["checker"], "new")
+        n = len(sens.PUBLIC_VERDICT_ENGINES)
+        self.assertEqual(summary["checker_coverage"], "%d/%d" % (n, n + 1))
+
     def test_a_missed_probe_makes_the_command_exit_nonzero(self):
         """A family that reports a blind checker and exits 0 is a dashboard.
 
@@ -2576,10 +2610,10 @@ def _read_record(runs, run_id):
 class TestRedact(Base):
     """The first feature whose subject is the captured output itself.
 
-    Two of these tests assert behaviour that is WRONG and known to be wrong.
-    They are characterisation tests, named so, because the alternative is a
-    comment nobody executes: if a future `mutate` power closes either hole,
-    the test fails and points at itself.
+    Redact still exposes the missing `mutate` power and filesystem-effects
+    measurement. What is enforceable without inventing that power is the
+    record/artifact agreement: after every hook, the sealed attempt must
+    describe the bytes that actually remain on disk.
     """
 
     SECRET = "notakey-live-4f9a2b7c1e8d"
@@ -2640,41 +2674,49 @@ class TestRedact(Base):
         row = [r for r in res["features"] if r["feature"] == "redact"][0]
         self.assertEqual(row["verdict"], confine.BREACHED)
 
-    def test_a_silent_rewrite_is_invisible_to_confine(self):
-        """CHARACTERISATION -- this is the hole, not the design.
+    def test_filesystem_rewrite_is_outside_record_power_confinement(self):
+        """An explicit boundary, pending the separate effects campaign.
 
-        `confine` compares extras snapshots, so it sees writes to the record
-        and nothing else. A feature that rewrote the evidence on disk stayed
-        inside its declared power by every measure the harness has.
+        `confine` measures record-power channels collected by the dispatcher;
+        it does not attribute filesystem writes. Calling this clean is scoped
+        to that relation and must not be worded as filesystem confinement.
         """
         from hwb import confine
         rec = self.run_leaky(self.cfg(), "r5.json")
         self.assertNotIn(self.SECRET.encode(), self.captured(rec))
         res = confine.assess(os.path.join(self.runs, rec["run_id"]))
         row = [r for r in res["features"] if r["feature"] == "redact"][0]
-        self.assertEqual(
-            row["verdict"], confine.CLEAN,
-            "confine now sees filesystem writes -- delete this test and the "
-            "byte-count one below, they were recording its blind spot")
+        self.assertEqual(row["verdict"], confine.CLEAN)
 
-    def test_the_recorded_byte_count_no_longer_matches_the_file(self):
-        """CHARACTERISATION -- the second hole, and the more general one.
+    def test_final_attempt_describes_the_rewritten_artifact(self):
+        """Close-time descriptors are over final bytes, not capture-time bytes."""
+        from hwb.canon import digest_file
 
-        `stdout_bytes` is taken from memory at capture (runner.py) and never
-        checked against the artifact, and `diff` masks the size explicitly.
-        So the record can describe an artifact that no longer exists, for any
-        reason, and nothing in the system disagrees.
-        """
         rec = self.run_leaky(self.cfg(), "r6.json")
         d = os.path.join(self.runs, rec["run_id"])
         ats = [json.loads(l) for l
                in read_text(os.path.join(d, "attempts.jsonl")).splitlines()
                if l.strip()]
-        on_disk = len(self.captured(rec))
-        self.assertNotEqual(
-            ats[0]["stdout_bytes"], on_disk,
-            "the record and the artifact agree -- if a check now enforces "
-            "that, this test has served its purpose and should go")
+        stdout = os.path.join(d, "steps", "01", "attempts", "0", "stdout.bin")
+        self.assertEqual(ats[0]["stdout_bytes"], os.path.getsize(stdout))
+        self.assertEqual(ats[0]["stdout_digest"], digest_file(stdout))
+        self.assertEqual(rec["attempt_artifact_contract"],
+                         runner.ATTEMPT_ARTIFACT_CONTRACT)
+        self.assertValidRecord(rec)
+
+    def test_store_agreement_rejects_a_post_close_artifact_rewrite(self):
+        """The descriptor is an invariant a reader can independently check."""
+        rec = self.run_leaky(self.cfg(), "r6b.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        stdout = os.path.join(d, "steps", "01", "attempts", "0", "stdout.bin")
+        with open(stdout, "ab") as fh:
+            fh.write(b"post-close mutation\n")
+        ats = [json.loads(l) for l
+               in read_text(os.path.join(d, "attempts.jsonl")).splitlines()
+               if l.strip()]
+        with self.assertRaisesRegex(conform.NonConforming,
+                                    "records stdout_bytes"):
+            conform.validate_record(rec, ats, run_dir=d)
 
     def test_an_output_only_difference_states_its_reason(self):
         """Regression. `efficacy._differs` joined only the harness-field

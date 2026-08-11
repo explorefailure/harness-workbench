@@ -47,7 +47,8 @@ wrong:
   `hwb` from — so the same spec means the same thing from anywhere.
 - **`inputs` is a declaration, not a filter.** It does not affect execution. It
   tells `freeze` what to digest, `hwb catch` what to perturb, and `hwb replay`
-  what to copy. Anything you leave out is invisible to all three.
+  what to copy. Anything you leave out is outside all three checks; `clean`
+  means no drift in this declared set, not that every dependency was observed.
 
 If your workload reads environment variables that change its behaviour, declare
 them with `env` so their **values** land in the record — and for the same
@@ -158,20 +159,24 @@ remembers anything between runs — a counter, a cache, a file it appends to —
 every comparison is measuring the leftovers. Point the campaigns at a stateless
 version of your workload.
 
-Now the first question, and the one to ask before any other: does the manifest
-you wrote describe the code you wrote?
+Now the first question, and the one to ask before any other: did the feature
+use only the record channel its manifest declared?
 
 ```console
 $ hwb confine "$RUN"
 20260807T205423Z-d72f0e-91e4
 
-did each feature stay inside the power it declared?
+did each feature use only its declared record-power channel?
+scope: record extras; filesystem/process/network effects unmeasured
 
 FEATURE      POWER      VERDICT      DETAIL
 myfeature    annotate   clean        wrote only through its declared channel
 
 1 clean, 0 breached, 0 unmeasured
 ```
+
+This result is scoped to record channels. `confine` does not observe files,
+processes, or network activity performed by feature code.
 
 Every other campaign trusts that declaration, so a breach here invalidates
 what the rest tell you.

@@ -420,6 +420,9 @@ def cmd_sensitivity(args) -> int:
     sys.stdout.write("\ndetected %d/%d\n" % (res["detected"], res["total"]))
     for r in res["errored"]:
         sys.stdout.write("  errored: %s -- %s\n" % (r["probe"], r["detail"]))
+    for r in res["unprobed"]:
+        sys.stdout.write("  UNPROBED: %s -- %s\n"
+                         % (r["checker"], r["detail"]))
     for r in res["missed"]:
         sys.stdout.write("\n  BLIND: %s did not reject %s\n"
                          % (r["checker"], r["probe"]))
@@ -429,7 +432,8 @@ def cmd_sensitivity(args) -> int:
         sys.stdout.write("\nfor these checkers, a passing verdict and a "
                          "verdict it cannot reach are the same output: %s\n"
                          % ", ".join(res["blind_checkers"]))
-    return 1 if res["missed"] else 0
+    sys.stdout.write("checker coverage: %s\n" % res["checker_coverage"])
+    return 1 if (res["missed"] or res["errored"] or res["unprobed"]) else 0
 
 
 def cmd_efficacy(args) -> int:
@@ -573,7 +577,8 @@ def cmd_confine(args) -> int:
         return _fail(str(e))
 
     sys.stdout.write("%s\n\n" % args.run_id)
-    sys.stdout.write("did each feature stay inside the power it declared?\n\n")
+    sys.stdout.write("did each feature use only its declared record-power channel?\n")
+    sys.stdout.write("scope: record extras; filesystem/process/network effects unmeasured\n\n")
     sys.stdout.write("%-12s %-10s %-12s %s\n"
                      % ("FEATURE", "POWER", "VERDICT", "DETAIL"))
     for r in res["features"]:
@@ -667,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     fi.set_defaults(func=cmd_fidelity)
 
     se = sub.add_parser("sensitivity",
-                        help="show each checker firing against a deliberate violation")
+                        help="account for every verdict engine with a deliberate violation")
     se.add_argument("run_id", help="run id (see `hwb ls`)")
     se.set_defaults(func=cmd_sensitivity)
 
@@ -683,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     od.set_defaults(func=cmd_order)
 
     cf = sub.add_parser("confine",
-                        help="did each feature stay inside its declared power")
+                        help="audit declared record-power channels (not filesystem effects)")
     cf.add_argument("run_id", help="run id (see `hwb ls`)")
     cf.set_defaults(func=cmd_confine)
 
