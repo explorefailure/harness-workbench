@@ -132,7 +132,12 @@ def _derive(raw: Dict[str, Any], keep: Tuple[str, ...]) -> Dict[str, Any]:
 
 def run_sweep(spec_path: str, runs_root: str, sweeps_root: str,
               mode: str = "pairs") -> Dict[str, Any]:
-    from . import features as featmod, runner, spec as specmod
+    from . import features as featmod, runner, spec as specmod, stores
+
+    try:
+        stores.require_disjoint(runs_root, sweeps_root, "sweep store")
+    except stores.StoreOverlapError as e:
+        raise SweepError(str(e))
 
     base = specmod.load(spec_path)
     names = [f.name for f in base.features]

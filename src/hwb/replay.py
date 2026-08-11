@@ -126,7 +126,13 @@ def _sandbox(spec_raw: Dict[str, Any], spec_name: str, source_dir: str,
 
 def replay(runs_root: str, run_id: str, replays_root: str,
            source_dir: Optional[str] = None) -> Dict[str, Any]:
-    from . import diff as diffmod, features as featmod, runner, spec as specmod
+    from . import (diff as diffmod, features as featmod, runner,
+                   spec as specmod, stores)
+
+    try:
+        stores.require_disjoint(runs_root, replays_root, "replay store")
+    except stores.StoreOverlapError as e:
+        raise ReplayError(str(e))
 
     record, rdir = _load(runs_root, run_id)
 

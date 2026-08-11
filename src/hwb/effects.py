@@ -256,8 +256,13 @@ def classify(changes: List[Dict[str, Any]], special_paths: List[str],
 def campaign(spec_path: str, runs_root: str, effects_root: str,
              watches: Iterable[str], allowances: Iterable[str]
              ) -> Dict[str, Any]:
-    from . import features as featmod, runner, spec as specmod
+    from . import features as featmod, runner, spec as specmod, stores
 
+    try:
+        stores.require_disjoint(runs_root, effects_root,
+                                "effects-campaign store")
+    except stores.StoreOverlapError as e:
+        raise EffectsError(str(e))
     try:
         base_spec = specmod.load(spec_path)
     except specmod.SpecError as e:

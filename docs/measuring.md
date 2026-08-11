@@ -21,6 +21,16 @@ Reference for what these read and write:
 
 The first group produces runs; the second interrogates them.
 
+Commands that write a campaign manifest keep it in a store separate from the
+run evidence they execute or inspect. The selected campaign store and run
+store must be disjoint real paths: the same path, either path nested beneath
+the other, and symlink aliases are rejected before any campaign or run
+directory is created. This prevents `ls`, which intentionally exposes
+incomplete run directories, from misclassifying a campaign directory as run
+evidence. The check applies only when creating a campaign; it does not change
+the format or readability of campaigns already on disk. The default stores
+are siblings and already satisfy the boundary.
+
 ---
 
 ## Does the record hold together?

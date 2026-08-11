@@ -620,6 +620,13 @@ PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
 
 
 def campaign(runs_root: str, run_id: str, sens_root: str) -> Dict[str, Any]:
+    from . import stores
+
+    try:
+        stores.require_disjoint(runs_root, sens_root,
+                                "sensitivity-campaign store")
+    except stores.StoreOverlapError as e:
+        raise SensitivityError(str(e))
     campaign_id = "%s-%s" % (_stamp(), uuid.uuid4().hex[:6])
     cdir = os.path.join(sens_root, campaign_id)
     os.makedirs(cdir)

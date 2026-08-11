@@ -92,7 +92,13 @@ def _drift_reported(record: Dict[str, Any]) -> Optional[str]:
 
 def campaign(spec_path: str, runs_root: str, catches_root: str
              ) -> Dict[str, Any]:
-    from . import features as featmod, runner, spec as specmod
+    from . import features as featmod, runner, spec as specmod, stores
+
+    try:
+        stores.require_disjoint(runs_root, catches_root,
+                                "catch-campaign store")
+    except stores.StoreOverlapError as e:
+        raise CatchError(str(e))
 
     base = specmod.load(spec_path)
     inputs = base.all_inputs()

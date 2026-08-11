@@ -2425,6 +2425,16 @@ class TestEffects(Base):
                                     "instrument-owned writes"):
             effects.campaign(path, self.runs, inside, ["state"], [])
 
+    def test_campaign_store_cannot_be_the_run_store(self):
+        from hwb import effects
+
+        path = self.spec([], name="same-store-effects.json")
+        self.assertFalse(os.path.exists(self.runs))
+        with self.assertRaisesRegex(effects.EffectsError, "must not overlap"):
+            effects.campaign(path, self.runs, self.runs, ["state"], [])
+        self.assertFalse(os.path.exists(self.runs),
+                         "setup refusal must not leave campaign or run evidence")
+
     def test_subject_setup_error_is_not_a_scoped_pass(self):
         from hwb import effects
         path = self.spec(["does-not-exist"], name="bad-effects.json")
@@ -2675,6 +2685,90 @@ class TestInterruptions(Base):
             interrupt.campaign(path, self.runs,
                                os.path.join(self.runs, "campaigns"),
                                timeout_seconds=5)
+
+
+class TestCampaignStoreBoundaries(Base):
+    """Campaign manifests and run evidence never share a directory tree."""
+
+    def test_steady_rejects_equal_stores_before_creating_evidence(self):
+        from hwb import steady
+
+        path = self.spec([], name="same-store-steady.json")
+        self.assertFalse(os.path.exists(self.runs))
+        with self.assertRaisesRegex(steady.SteadyError, "must not overlap"):
+            steady.campaign(path, self.runs, self.runs)
+        self.assertFalse(os.path.exists(self.runs),
+                         "setup refusal must not leave campaign or run evidence")
+
+    def test_nesting_is_rejected_in_both_directions_without_partial_stores(self):
+        from hwb import steady
+
+        path = self.spec([], name="nested-stores.json")
+        cases = (
+            (os.path.join(self.tmp, "outer-runs"),
+             os.path.join(self.tmp, "outer-runs", "steadies")),
+            (os.path.join(self.tmp, "outer-steadies", "runs"),
+             os.path.join(self.tmp, "outer-steadies")),
+        )
+        for runs_root, campaign_root in cases:
+            with self.subTest(runs_root=runs_root,
+                              campaign_root=campaign_root):
+                with self.assertRaisesRegex(steady.SteadyError,
+                                            "must not overlap"):
+                    steady.campaign(path, runs_root, campaign_root)
+                self.assertFalse(os.path.exists(runs_root))
+                self.assertFalse(os.path.exists(campaign_root))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlink support")
+    def test_realpath_check_rejects_a_symlink_alias(self):
+        from hwb import steady
+
+        real_store = os.path.join(self.tmp, "real-store")
+        alias = os.path.join(self.tmp, "store-alias")
+        os.makedirs(real_store)
+        try:
+            os.symlink(real_store, alias)
+        except OSError as e:
+            self.skipTest("cannot create symlink: %s" % e)
+
+        path = self.spec([], name="alias-stores.json")
+        with self.assertRaisesRegex(steady.SteadyError, "must not overlap"):
+            steady.campaign(path, real_store, alias)
+        self.assertEqual(os.listdir(real_store), [],
+                         "alias refusal must not create campaign or run evidence")
+
+    def test_every_manifest_producer_uses_the_shared_boundary(self):
+        from hwb import (blast, catch, efficacy, interrupt, replay,
+                         sensitivity, sweep)
+
+        path = self.spec(["freeze"], name="all-campaign-stores.json")
+        subject = self.run_spec(["freeze"], name="existing-subject.json")
+        before = sorted(os.listdir(self.runs))
+        cases = (
+            ("sweep", sweep.SweepError,
+             lambda: sweep.run_sweep(path, self.runs, self.runs)),
+            ("blast", blast.BlastError,
+             lambda: blast.campaign(path, self.runs, self.runs)),
+            ("catch", catch.CatchError,
+             lambda: catch.campaign(path, self.runs, self.runs)),
+            ("efficacy", efficacy.EfficacyError,
+             lambda: efficacy.campaign(path, self.runs, self.runs)),
+            ("replay", replay.ReplayError,
+             lambda: replay.replay(self.runs, subject["run_id"], self.runs,
+                                   source_dir=self.tmp)),
+            ("sensitivity", sensitivity.SensitivityError,
+             lambda: sensitivity.campaign(self.runs, subject["run_id"],
+                                           self.runs)),
+            ("interrupt", interrupt.InterruptError,
+             lambda: interrupt.campaign(path, self.runs, self.runs,
+                                        timeout_seconds=5)),
+        )
+        for name, error, invoke in cases:
+            with self.subTest(campaign=name):
+                with self.assertRaisesRegex(error, "must not overlap"):
+                    invoke()
+                self.assertEqual(sorted(os.listdir(self.runs)), before,
+                                 "%s left partial evidence" % name)
 
 
 class TestInvertsDeclaration(Base):

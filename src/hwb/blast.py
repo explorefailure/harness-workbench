@@ -171,7 +171,13 @@ def _attempts(runs_root: str, run_id: str) -> List[Dict[str, Any]]:
 
 def campaign(spec_path: str, runs_root: str, blasts_root: str,
              seam_timeout_ms: int = 400) -> Dict[str, Any]:
-    from . import features as featmod, runner, spec as specmod
+    from . import features as featmod, runner, spec as specmod, stores
+
+    try:
+        stores.require_disjoint(runs_root, blasts_root,
+                                "blast-campaign store")
+    except stores.StoreOverlapError as e:
+        raise BlastError(str(e))
 
     base = specmod.load(spec_path)
     if not base.features:

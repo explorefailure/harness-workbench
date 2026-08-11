@@ -182,7 +182,13 @@ def _conforms(runs_root: str, run_id: str) -> Tuple[bool, str]:
 
 def campaign(spec_path: str, runs_root: str, eff_root: str,
              seam_timeout_ms: int = 400) -> Dict[str, Any]:
-    from . import features as featmod, spec as specmod
+    from . import features as featmod, spec as specmod, stores
+
+    try:
+        stores.require_disjoint(runs_root, eff_root,
+                                "efficacy-campaign store")
+    except stores.StoreOverlapError as e:
+        raise EfficacyError(str(e))
 
     base = specmod.load(spec_path)
     if not base.features:

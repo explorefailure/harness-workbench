@@ -73,6 +73,12 @@ $ hwb show 20260807T170423Z-6beee9-4472
 That works with no configuration, nothing installed, and no features. The
 run store is `./runs` by default.
 
+Campaign manifests use their own stores (`./sweeps`, `./steadies`, and so
+on). A campaign store must be disjoint from the run store: equality or
+nesting in either direction is rejected after resolving symlinks, before
+either kind of evidence is created. The separate defaults already satisfy
+this contract.
+
 **`completed` describes the harness, not your command.** `hwb run` exits 0
 whenever the harness itself worked. A non-zero exit from your workload is
 data — the run recorded exactly what happened, which is the run succeeding.

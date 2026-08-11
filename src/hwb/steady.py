@@ -161,10 +161,15 @@ def classify(comparisons: List[Dict[str, Any]],
 def campaign(spec_path: str, runs_root: str, steadies_root: str,
              repeats: int = DEFAULT_REPEATS,
              allowance: Optional[List[str]] = None) -> Dict[str, Any]:
-    from . import features as featmod, runner, spec as specmod
+    from . import features as featmod, runner, spec as specmod, stores
 
     if repeats < 2:
         raise SteadyError("repeats must be at least 2, got %d" % repeats)
+    try:
+        stores.require_disjoint(runs_root, steadies_root,
+                                "steady-campaign store")
+    except stores.StoreOverlapError as e:
+        raise SteadyError(str(e))
     try:
         base = specmod.load(spec_path)
     except specmod.SpecError as e:

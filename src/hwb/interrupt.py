@@ -338,19 +338,15 @@ def _run_uninterrupted(spec_path: str, runs_root: str,
 
 def campaign(spec_path: str, runs_root: str, interrupt_root: str,
              timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
-    from . import spec as specmod
+    from . import spec as specmod, stores
 
     if timeout_seconds <= 0:
         raise InterruptError("timeout_seconds must be greater than zero")
-    real_runs = os.path.realpath(runs_root)
-    real_interrupts = os.path.realpath(interrupt_root)
     try:
-        common = os.path.commonpath((real_runs, real_interrupts))
-    except ValueError:
-        common = ""
-    if common in (real_runs, real_interrupts):
-        raise InterruptError(
-            "run store and interruption-campaign store must not overlap")
+        stores.require_disjoint(runs_root, interrupt_root,
+                                "interruption-campaign store")
+    except stores.StoreOverlapError as e:
+        raise InterruptError(str(e))
     try:
         base = specmod.load(spec_path)
     except specmod.SpecError as e:

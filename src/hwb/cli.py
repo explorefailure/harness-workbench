@@ -739,23 +739,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hwb", description="run things, record what happened")
     p.add_argument("--root", default=DEFAULT_ROOT, help="run store (default: ./runs)")
     p.add_argument("--sweeps", default=DEFAULT_SWEEPS,
-                   help="sweep store (default: ./sweeps)")
+                   help="sweep store (default: ./sweeps; disjoint from run "
+                        "store)")
     p.add_argument("--blasts", default=DEFAULT_BLASTS,
-                   help="blast-campaign store (default: ./blasts)")
+                   help="blast-campaign store (default: ./blasts; disjoint "
+                        "from run store)")
     p.add_argument("--catches", default=DEFAULT_CATCHES,
-                   help="catch-campaign store (default: ./catches)")
+                   help="catch-campaign store (default: ./catches; disjoint "
+                        "from run store)")
     p.add_argument("--sensitivity", default=DEFAULT_SENS,
-                   help="sensitivity-campaign store (default: ./sensitivity)")
+                   help="sensitivity-campaign store (default: ./sensitivity; "
+                        "disjoint from run store)")
     p.add_argument("--efficacy", default=DEFAULT_EFFICACY,
-                   help="efficacy-campaign store (default: ./efficacy)")
+                   help="efficacy-campaign store (default: ./efficacy; "
+                        "disjoint from run store)")
     p.add_argument("--replays", default=DEFAULT_REPLAYS,
-                   help="replay store (default: ./replays)")
+                   help="replay store (default: ./replays; disjoint from run "
+                        "store)")
     p.add_argument("--steadies", default=DEFAULT_STEADIES,
-                   help="steady-campaign store (default: ./steadies)")
+                   help="steady-campaign store (default: ./steadies; "
+                        "disjoint from run store)")
     p.add_argument("--effects-store", default=DEFAULT_EFFECTS,
-                   help="effects-campaign store (default: ./effects)")
+                   help="effects-campaign store (default: ./effects; "
+                        "disjoint from run store)")
     p.add_argument("--interrupts", default=DEFAULT_INTERRUPTS,
-                   help="interruption-campaign store (default: ./interrupts)")
+                   help="interruption-campaign store (default: ./interrupts; "
+                        "disjoint from run store)")
     sub = p.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="execute a spec")
