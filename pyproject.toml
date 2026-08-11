@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 name = "harness-workbench"
 version = "0.1.0"
 description = "Explore Failure's Harness Workbench — a workbench for building and testing harness ideas"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 # Copyright is held by the individual. "Explore Failure" is a research
 # and project identity, not a legal entity -- see NOTICE.

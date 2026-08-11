@@ -3667,6 +3667,25 @@ class TestPackageIdentity(unittest.TestCase):
         self.assertEqual(features.BUILTIN, "harness_workbench:builtin")
 
 
+class TestCompatibilityContract(unittest.TestCase):
+    """Packaging and the public compatibility claim must move together."""
+
+    def test_python_floor_matches_the_readme(self):
+        pyproject = read_text(os.path.join(ROOT, "pyproject.toml"))
+        readme = read_text(os.path.join(ROOT, "README.md"))
+        self.assertRegex(pyproject,
+                         r'(?m)^requires-python = ">=3\.11"$')
+        self.assertIn("requires CPython 3.11 or newer", readme)
+
+    def test_platform_scope_and_matrix_are_explicit(self):
+        readme = read_text(os.path.join(ROOT, "README.md"))
+        self.assertIn("CPython 3.11, 3.12, 3.13, and 3.14", readme)
+        self.assertIn("on Linux and macOS", readme)
+        self.assertIn("Windows is unsupported", readme)
+        self.assertIn("Linux evidence remains", readme)
+        self.assertIn("pending until release CI supplies it", readme)
+
+
 class TestBuiltinFeatures(Base):
     """The installed distribution ships an opt-in feature tree.
 
@@ -3960,8 +3979,9 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
         cannot ship undocumented.
         """
         import re
-        source = open(os.path.join(DOCS, "src", "harness_workbench", "spec.py"),
-                      encoding="utf-8").read()
+        with open(os.path.join(DOCS, "src", "harness_workbench", "spec.py"),
+                  encoding="utf-8") as fh:
+            source = fh.read()
         read_by_loader = set(re.findall(r'raw\.get\("(\w+)"', source))
         read_by_loader |= set(re.findall(r'raw\["(\w+)"\]', source))
         text = doc("docs", "the-spec.md")

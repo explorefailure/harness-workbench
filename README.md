@@ -15,7 +15,7 @@ damage was contained, invert a feature's decision and check anything
 downstream noticed, perturb the inputs and check a detector fires, mutate a
 record and check the checkers still reject it.
 
-Status: **v0.1.0.** Zero runtime dependencies, Python 3.9+, 267 tests.
+Status: **v0.1.0.** Zero runtime dependencies, Python 3.11+, 300 tests.
 
 ---
 
@@ -38,7 +38,7 @@ $ pip install .           # from a clone
 ```
 
 **If `hwb` is not found afterwards**, the script went somewhere not on your
-PATH — commonly `~/Library/Python/3.9/bin` on macOS, `~/.local/bin` on Linux.
+PATH — commonly `~/Library/Python/3.11/bin` on macOS, `~/.local/bin` on Linux.
 Either add it, or skip the problem entirely:
 
 ```console
@@ -46,6 +46,22 @@ $ python3 -m harness_workbench --help   # equivalent, always works
 ```
 
 A virtualenv avoids it as well, and is the recommended way to try this out.
+
+## Compatibility
+
+`harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
+CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
+able to install the package, but is not claimed as supported until it joins
+that test set. Local release checks exercise macOS; Linux evidence remains
+pending until release CI supplies it.
+
+Windows is unsupported. The workbench is deliberately POSIX-oriented rather
+than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
+terminate a direct child at published checkpoints, filesystem measurements
+preserve and inspect executable modes, symlinks, and special nodes such as
+FIFOs, and the shipped examples execute `/bin/sh` scripts. Workload commands
+are passed directly to `subprocess` without a shell, so users choose their own
+POSIX command or request `/bin/sh -c` explicitly.
 
 ## First run, no features and no model
 
@@ -196,7 +212,7 @@ check is whether the *prose* is still a good explanation. See
 ## Development
 
 ```console
-$ python3 -m pytest tests/ -q
+$ python3 -m unittest discover -s tests
 ```
 
 The test suite is network-free and needs no model installed.
