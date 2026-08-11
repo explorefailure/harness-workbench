@@ -23,6 +23,10 @@ class FeatureError(Exception):
     """Resolution failed. Loud, at load time, naming the culprit."""
 
 
+def _reject_json_constant(value: str):
+    raise ValueError("non-finite number %s is not valid JSON" % value)
+
+
 class Manifest:
     __slots__ = ("name", "version", "power", "seams", "provides", "requires",
                  "record_key", "seam_contract", "root", "digest",
@@ -243,11 +247,34 @@ def read_manifest(root: str) -> Manifest:
     path = os.path.join(root, "FEATURE.json")
     if not os.path.isfile(path):
         raise FeatureError("feature at %s has no FEATURE.json" % root)
-    with open(path, "r", encoding="utf-8") as fh:
-        raw = json.load(fh)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh, parse_constant=_reject_json_constant)
+    except (OSError, ValueError) as e:
+        raise FeatureError("%s: FEATURE.json is not valid JSON: %s" % (root, e))
+    if not isinstance(raw, dict):
+        raise FeatureError("%s: FEATURE.json must be an object" % root)
     for key in ("name", "power", "seams"):
         if key not in raw:
             raise FeatureError("%s: FEATURE.json missing %r" % (root, key))
+    if not isinstance(raw["name"], str) or not raw["name"]:
+        raise FeatureError("%s: feature name must be a non-empty string" % root)
+    if (raw["name"] in (".", "..") or "/" in raw["name"] or
+            "\\" in raw["name"] or "\x00" in raw["name"]):
+        raise FeatureError("%s: feature name %r is not filesystem-safe"
+                           % (root, raw["name"]))
+    if not isinstance(raw["power"], str):
+        raise FeatureError("%s: power must be a string" % raw["name"])
+    for key in ("seams", "provides", "requires"):
+        value = raw.get(key, [])
+        if (not isinstance(value, list) or
+                any(not isinstance(item, str) or not item for item in value)):
+            raise FeatureError("%s: %s must be a list of non-empty strings"
+                               % (raw["name"], key))
+    if not raw["seams"]:
+        raise FeatureError("%s: seams must be a non-empty list" % raw["name"])
+    if not isinstance(raw.get("seam_contract", ">=0.2.0,<0.3.0"), str):
+        raise FeatureError("%s: seam_contract must be a string" % raw["name"])
     m = Manifest(root, raw)
     if m.power not in POWERS:
         raise FeatureError("%s: unknown power %r" % (m.name, m.power))
@@ -355,7 +382,12 @@ def resolve(spec) -> List[Loaded]:
         fdir = os.path.join(root, ref.name)
         if not os.path.isdir(fdir):
             raise FeatureError(unresolved_message(ref.name, root))
-        manifests.append(read_manifest(fdir))
+        manifest = read_manifest(fdir)
+        if manifest.name != ref.name:
+            raise FeatureError(
+                "feature directory %r contains manifest named %r"
+                % (ref.name, manifest.name))
+        manifests.append(manifest)
 
     # capability presence + seam ordering, in one pass
     earliest: Dict[str, int] = {}

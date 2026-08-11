@@ -14,7 +14,11 @@ from typing import Any, Dict, Iterable, List, Tuple
 def canon_bytes(obj: Any) -> bytes:
     """Canonical JSON encoding. Deterministic across runs and machines."""
     return json.dumps(
-        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        # NaN and infinities are accepted by Python's encoder but are not
+        # JSON.  Emitting them would make a digest look portable while
+        # binding bytes another standards-compliant reader must reject.
+        allow_nan=False,
     ).encode("utf-8")
 
 

@@ -63,13 +63,15 @@ imported, for the same reason. If you want a matrix, write a generator that
 {"id": "check", "argv": ["./flaky.sh", "api"], "inputs": ["flaky.sh"]}
 ```
 
-- **`id`** — required, unique within the spec. Names the directory the
-  attempts land in, so keep it filesystem-safe.
-- **`argv`** — required, non-empty. Executed with `subprocess.run`; **no
+- **`id`** — required, unique within the spec. It is one non-empty directory
+  component: Unicode is accepted; `.`, `..`, path separators and NUL are
+  rejected so an id cannot escape the run store.
+- **`argv`** — required, a non-empty list of strings whose first item is
+  non-empty. Executed with `subprocess.run`; **no
   shell.** No pipes, globs, `&&`, or variable expansion — if you want those,
   call `["/bin/sh", "-c", "..."]` explicitly and know that you have.
-- **`inputs`** — optional. Paths, relative to the spec's directory, that this
-  step reads.
+- **`inputs`** — optional list of path strings, relative to the spec's
+  directory, that this step reads.
 
 Steps run **in declared order**, and every step runs — a failing step does
 not stop the ones after it. Each runs with its working directory set to the
@@ -105,9 +107,10 @@ to overread.
 {"name": "retry", "config": {"max": 3}}
 ```
 
-`name` must match a directory under the resolved `features_root`. `config` is
-handed to that feature's hooks as `ctx.config` and is otherwise opaque to the
-core.
+`name` must be one non-empty directory component under the resolved
+`features_root`, and the manifest inside that directory must repeat the same
+name. `config` must be an object; it is handed to that feature's hooks as
+`ctx.config` and is otherwise opaque to the core.
 
 **Order is load-bearing.** For wrap features the last declared ends up
 outermost, so `[sample, retry]` is `retry(sample(step))` — a different
@@ -146,8 +149,8 @@ loudly rather than quietly succeeding with code you did not choose.
 
 ## `env`
 
-A list of names. Declared variables are captured **with values** into the
-record; everything else present is recorded **by name only**.
+A list of non-empty names. Declared variables are captured **with values**
+into the record; everything else present is recorded **by name only**.
 
 Declare what determines the experiment. A variable your workload reads but
 you did not declare is not in the record, so a run that behaved differently
@@ -220,4 +223,6 @@ every pre-rename run says so, and refusing it would make those runs
 unreproducible for a purely cosmetic reason.
 
 Unknown keys are **always ignored**, at every level. The record contract is
-additive; a strict schema would break on the next field added.
+additive; a strict schema would break on the next field added. Known fields
+still fail closed when their type is malformed, and Python's non-standard
+`NaN`/`Infinity` JSON extensions are rejected at the file boundary.

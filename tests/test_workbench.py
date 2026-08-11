@@ -3367,8 +3367,11 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
         m = re.search(r"(\d+) tests", doc("README.md"))
         self.assertIsNotNone(m, "README no longer states a test count")
         claimed = int(m.group(1))
-        actual = unittest.defaultTestLoader.loadTestsFromModule(
-            sys.modules[__name__]).countTestCases()
+        # Count the suite, not this file.  The deterministic property corpus
+        # deliberately lives in its own module so generated contracts do not
+        # make this already-large behavioural suite harder to navigate.
+        actual = unittest.defaultTestLoader.discover(
+            os.path.join(ROOT, "tests")).countTestCases()
         self.assertLessEqual(claimed, actual,
                              "README claims %d tests, there are %d"
                              % (claimed, actual))

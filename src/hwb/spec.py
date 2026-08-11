@@ -41,6 +41,26 @@ class SpecError(Exception):
     """Malformed spec. A harness failure, not a step failure."""
 
 
+def _reject_json_constant(value: str):
+    """Python accepts NaN/Infinity as an extension; the spec is JSON."""
+    raise ValueError("non-finite number %s is not valid JSON" % value)
+
+
+def _safe_component(value: Any, field: str) -> str:
+    """Validate a name used as one directory component in the run store.
+
+    Unicode names are valid.  Separators, dot segments, and NUL are not:
+    those turn a declarative id into a path outside its assigned namespace.
+    Both separator spellings are refused so a spec cannot become unsafe when
+    moved between POSIX and Windows.
+    """
+    if not isinstance(value, str) or not value:
+        raise SpecError("%s must be a non-empty string, got %r" % (field, value))
+    if value in (".", "..") or "/" in value or "\\" in value or "\x00" in value:
+        raise SpecError("%s %r is not a filesystem-safe name" % (field, value))
+    return value
+
+
 class Step:
     __slots__ = ("id", "argv", "inputs")
 
@@ -118,8 +138,8 @@ def load(path: str) -> Spec:
         raise SpecError("no such spec: %s" % path)
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except ValueError as e:
+            raw = json.load(fh, parse_constant=_reject_json_constant)
+    except (OSError, ValueError) as e:
         raise SpecError("spec is not valid JSON: %s" % e)
 
     if not isinstance(raw, dict):
@@ -129,6 +149,28 @@ def load(path: str) -> Spec:
                         % (", ".join(READABLE_SCHEMAS), raw.get("schema")))
     if raw.get("run_class", "discovery") not in RUN_CLASSES:
         raise SpecError("run_class must be one of %s" % (RUN_CLASSES,))
+
+    features = raw.get("features", [])
+    if not isinstance(features, list):
+        raise SpecError("features must be a list")
+    for i, feature in enumerate(features):
+        if not isinstance(feature, dict) or "name" not in feature:
+            raise SpecError("feature %d must be an object with a 'name'" % i)
+        _safe_component(feature["name"], "feature %d name" % i)
+        config = feature.get("config", {})
+        if not isinstance(config, dict):
+            raise SpecError("feature %r: config must be an object"
+                            % feature["name"])
+
+    env = raw.get("env", [])
+    if (not isinstance(env, list) or
+            any(not isinstance(name, str) or not name for name in env)):
+        raise SpecError("env must be a list of non-empty strings")
+
+    feature_root = raw.get("features_root")
+    if feature_root is not None and not isinstance(feature_root, str):
+        raise SpecError("features_root must be a string or null")
+
     steps = raw.get("steps")
     if not isinstance(steps, list) or not steps:
         raise SpecError("spec needs a non-empty 'steps' list")
@@ -137,11 +179,18 @@ def load(path: str) -> Spec:
     for s in steps:
         if not isinstance(s, dict) or "id" not in s or "argv" not in s:
             raise SpecError("each step needs 'id' and 'argv'")
-        if not isinstance(s["argv"], list) or not s["argv"]:
+        step_id = _safe_component(s["id"], "step id")
+        if (not isinstance(s["argv"], list) or not s["argv"] or
+                any(not isinstance(arg, str) for arg in s["argv"]) or
+                not s["argv"][0]):
             raise SpecError("step %r: argv must be a non-empty list" % s.get("id"))
-        if s["id"] in ids:
-            raise SpecError("duplicate step id %r" % s["id"])
-        ids.add(s["id"])
+        inputs = s.get("inputs", [])
+        if (not isinstance(inputs, list) or
+                any(not isinstance(item, str) for item in inputs)):
+            raise SpecError("step %r: inputs must be a list of strings" % step_id)
+        if step_id in ids:
+            raise SpecError("duplicate step id %r" % step_id)
+        ids.add(step_id)
 
     for key in ("step_timeout_ms", "seam_timeout_ms"):
         v = raw.get(key)

@@ -15,7 +15,7 @@ damage was contained, invert a feature's decision and check anything
 downstream noticed, perturb the inputs and check a detector fires, mutate a
 record and check the checkers still reject it.
 
-Status: **v0.1.0.** Zero runtime dependencies, Python 3.9+, 224 tests.
+Status: **v0.1.0.** Zero runtime dependencies, Python 3.9+, 267 tests.
 
 ---
 
@@ -193,6 +193,11 @@ $ python3 -m pytest tests/ -q
 ```
 
 The test suite is network-free and needs no model installed.
+
+It includes a deterministic, stdlib-only generated corpus for the JSON,
+spec, feature-manifest, conformance, and partial-close boundaries. The fixed
+seed and case counts live in `tests/test_properties.py`; a generated failure
+should be reduced to an ordinary regression case before its fix lands.
 
 ## Licence
 
