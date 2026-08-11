@@ -242,6 +242,80 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertIn("--log-opts='--all'", releasing)
         self.assertIn("--max-archive-depth 2 dist", releasing)
 
+    def test_conformance_record_routes_every_release_claim_surface(self):
+        record_path = ROOT / "docs" / "release-conformance-0.1.0rc1.md"
+        record = record_path.read_text(encoding="utf-8")
+
+        # Reader-facing Markdown at the root and under docs, every shipped
+        # example/demo, and GitHub's rendered workflow/intake surfaces are the
+        # places a new public claim can appear without touching the package
+        # implementation. Discover them instead of maintaining a second list.
+        surfaces = {
+            path.relative_to(ROOT).as_posix()
+            for path in ROOT.glob("*.md")
+        }
+        surfaces.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "docs").rglob("*.md")
+        )
+        shipped_example_suffixes = {".json", ".md", ".py", ".sh", ".txt"}
+        surfaces.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "examples").rglob("*")
+            if path.is_file() and path.suffix in shipped_example_suffixes
+        )
+        surfaces.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / ".github").rglob("*")
+            if path.is_file() and path.suffix in {".md", ".yml", ".yaml"}
+        )
+        surfaces.update({"LICENSE", "NOTICE", "pyproject.toml"})
+
+        for relative in sorted(surfaces):
+            with self.subTest(surface=relative):
+                self.assertIn(
+                    f"`{relative}`",
+                    record,
+                    f"claim-bearing release surface is not routed: {relative}",
+                )
+
+        from harness_workbench import commands
+
+        for name in commands.cli_commands():
+            with self.subTest(command=name):
+                self.assertIn(f"`hwb {name} --help`", record)
+        self.assertIn("`hwb --help`", record)
+        self.assertIn("`hwb --version`", record)
+        self.assertIn("`python -m harness_workbench --help`", record)
+        self.assertIn("`harness_workbench.conform`", record)
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        link = "docs/release-conformance-0.1.0rc1.md"
+        self.assertIn(f"]({link})", readme)
+        self.assertIn(f"]({link})", releasing)
+
+    def test_conformance_record_pins_standards_and_stays_pre_release(self):
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+            encoding="utf-8"
+        )
+        pins = (
+            "EF-SRS",
+            "EF-RS-REL",
+            "0.4.0",
+            "671379e920e64fa0c68c5086f0acac4c1512d4f6",
+            "03e0211f8784c28aa87be8978108e753c6b64088",
+            "d4d8d5cd278bbe0f9dffe2661ef09e851e87d028",
+            "a6a89937ede2b7e672868d75d995604b0ec4c2f15169d79d7ac114477915cf85",
+            "81bf7d24f775355459a0787f6f54bcc68f08fe04abffce32a12ae9d1c94347cb",
+        )
+        for pin in pins:
+            with self.subTest(pin=pin):
+                self.assertIn(pin, record)
+        self.assertIn("PREPARED; NOT RELEASED; PUBLICATION BLOCKED", record)
+        self.assertIn("Release commit: **PENDING**", record)
+        self.assertIn("**Outside assurance:** none", record)
+
 
 if __name__ == "__main__":
     unittest.main()

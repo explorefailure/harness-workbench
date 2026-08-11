@@ -45,8 +45,11 @@ release-gate actions, not changes this procedure or a local commit can perform.
 First turn the preparation branch into a release commit: change the README
 status from "preparing" to an accurate candidate-release statement, change the
 changelog heading to `## 0.1.0rc1 — YYYY-MM-DD`, remove its preparation note,
-and commit those release-only edits. Do not claim that a GitHub prerelease
-exists yet. Push that reviewed commit to `release/0.1.0rc1` so a fresh clone can
+and review
+[`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md).
+That record must continue to say that no GitHub prerelease exists yet and must
+not promote preparation self-runs to release evidence. Commit the release-only
+edits. Push that reviewed commit to `release/0.1.0rc1` so a fresh clone can
 resolve it, then do the gate from the fresh clone rather than a development
 worktree.
 
@@ -178,6 +181,16 @@ python tools/verify_installed_artifact.py "$DOWNLOAD_DIR"/*.tar.gz
 
 Stop and mark the release with a clear warning if uploaded bytes or first-run
 behavior differ. Never replace assets silently.
+
+After the downloaded bytes pass, finalize the release copy of
+`docs/release-conformance-0.1.0rc1.md` with the exact release commit, tag and
+verification, run URLs, setting/route evidence, asset filenames and SHA-256
+values, downloaded-asset result, assessor/approver, and residual limitations.
+Publish that finalized copy beside the assets or in the GitHub release body.
+The source-tree record is necessarily prepared before its own containing
+commit exists; the release copy is the content-addressed per-artefact record.
+Do not rewrite the tagged source commit or claim an outside assurance label for
+an author-side run.
 
 ## 6. Promote to final `v0.1.0`
 

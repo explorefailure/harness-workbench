@@ -231,6 +231,7 @@ Two kinds, and mixing them up is the most common first mistake:
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
+| [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the prepared R2 conformance record, claim routes, release blockers, and final-evidence fields |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,

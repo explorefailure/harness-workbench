@@ -1,0 +1,368 @@
+# Harness Workbench 0.1.0rc1 release conformance record
+
+> **Prepared record — NOT RELEASED.** This is the repository-owned
+> pre-release record for an intended R2 public release. It is not evidence
+> that a tag, GitHub release, hosted CI run, public security setting, or
+> downloadable release asset exists. Rows marked **BLOCKING PUBLICATION** must
+> be closed with release-final evidence before this record can describe a
+> released artefact.
+
+## Artefact identity and declared reach
+
+| Field | Value |
+|---|---|
+| Artefact | Harness Workbench |
+| Python distribution | `harness-workbench` |
+| Import package / command | `harness_workbench` / `hwb` |
+| Intended version | `0.1.0rc1` |
+| Intended readable tag | `v0.1.0-rc.1` |
+| Lifecycle state | `unreleased` |
+| Declared reach | **R2 — public**, declared 2026-08-11 for the intended release |
+| Preparation baseline | Git commit `017cabcede344fd01a004d67ae008c14a5127460` |
+| Record-preparation revision | The commit containing this file; resolve with `git rev-parse HEAD` in the reviewed checkout |
+| Release commit | **PENDING — BLOCKING PUBLICATION.** No release commit has been frozen or pushed. |
+| Release tag / GitHub release | **PENDING — BLOCKING PUBLICATION.** Neither exists. |
+| Release wheel, sdist, and checksums | **PENDING — BLOCKING PUBLICATION.** Locally built preparation artefacts are disposable self-run evidence, not released assets. |
+
+The release commit cannot be written inside the commit it identifies without
+creating a self-reference. At freeze, the exact 40-character commit is recorded
+in the signed tag, the GitHub release, and the finalized copy of this record
+distributed beside the release assets. Until those agree, this record remains
+prepared rather than released.
+
+## Governing standards pins
+
+Both standards were read from the clean committed versions in the Explore
+Failure standards repository. Their source files had no working-tree changes
+when pinned.
+
+| Standard | Version | Content-addressed source commit | Git blob | File SHA-256 |
+|---|---|---|---|---|
+| Explore Failure Software Release Standard (`EF-SRS`) | `0.4.0` | `671379e920e64fa0c68c5086f0acac4c1512d4f6` | `03e0211f8784c28aa87be8978108e753c6b64088` | `a6a89937ede2b7e672868d75d995604b0ec4c2f15169d79d7ac114477915cf85` |
+| Explore Failure Research Release Standard (`EF-RS-REL`) | `0.4.0` | `671379e920e64fa0c68c5086f0acac4c1512d4f6` | `d4d8d5cd278bbe0f9dffe2661ef09e851e87d028` | `81bf7d24f775355459a0787f6f54bcc68f08fe04abffce32a12ae9d1c94347cb` |
+
+The standards repository is not included in this artefact and no public URL
+for these exact bytes is asserted. The hashes make drift detectable when the
+source is available; departure `D-08` records the recipient consequence.
+
+## Maintenance posture (verbatim)
+
+The first recipient surface, [README.md](../README.md), states:
+
+> Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
+> documentation, and tests are welcome for best-effort review; larger changes
+> should start with an issue. There is no response, merge, compatibility, or
+> support SLA.
+
+The operational detail is in [CONTRIBUTING.md](../CONTRIBUTING.md),
+[SUPPORT.md](../SUPPORT.md), and [SECURITY.md](../SECURITY.md).
+
+## EF-SRS release gate
+
+| Gate | Pre-release status | Exact evidence / remaining predicate |
+|---|---|---|
+| `EF-SRS-01` — purpose and liveness | **MET IN PREPARED SOURCE** | README opening states the problem and behavior; the verbatim maintenance posture appears above and in README. The release-final README status must still be checked after freeze. |
+| `EF-SRS-02` — licence granted | **MET IN PREPARED SOURCE** | `LICENSE` contains Apache License 2.0; `NOTICE` names the copyright holder; `pyproject.toml` declares SPDX `Apache-2.0` and both licence files; `tools/verify_release_artifacts.py` checks wheel/sdist metadata and bytes. |
+| `EF-SRS-03` — first run from received artefact | **BLOCKING PUBLICATION** | The exact wheel and sdist path below pass locally as author-side self-run preparation. No tagged or GitHub-downloaded release asset exists, so the artefact a public recipient will receive has not been verified. |
+| `EF-SRS-08` — claim routing | **BLOCKING PUBLICATION** | Every current repository surface is routed below and mechanically inventoried. The final release notes/assets do not exist; hosted matrix, disclosure review, correction/security-route test, and exact release identity remain unresolved at T1. |
+
+**Gate decision:** do not publish. `EF-SRS-03` and `EF-SRS-08` remain blocking
+for the actual release even though their repository preparation is in place.
+
+### EF-SRS non-gate assessment
+
+| Requirement | Pre-release status | Evidence / departure |
+|---|---|---|
+| `EF-SRS-04` — examples do not narrow the tool | **MET IN PREPARED SOURCE** | The first recommended example is model-free; examples cover shell workloads, local-model adjacency, custom features, failures, retries, redaction, and bounded filesystem effects. README explicitly says Ollama is an example rather than a requirement. |
+| `EF-SRS-05` — documentation separated by reader need | **CONFORMS FOR THE R2 SHOULD** | README routes learning/first-run, doing, reference, feature-authoring, measurement, and release/conformance needs to separate pages. |
+| `EF-SRS-06` — contribution/support posture | **MET IN PREPARED SOURCE** | The verbatim posture above links to the actual solo-maintainer process and best-effort support route without promising governance or an SLA. |
+| `EF-SRS-07` — hand-off sufficiency | **MET IN PREPARED SOURCE** | `CONTRIBUTING.md` gives tests; README gives development/build checks; `RELEASING.md` gives clean source, artifact, CI, tag, release, download, and promotion procedures. The procedures pass locally where their predicates exist; external release steps remain explicitly pending. |
+| `EF-SRS-09` — mechanical checks | **CONFORMS FOR THE R2 SHOULD IN SOURCE; EXTERNAL CHECKS PENDING** | The table below identifies the machine checks and where each runs. `D-03`, `D-05`, `D-06`, and `D-07` prevent checked-in configuration from being reported as hosted evidence. |
+| `EF-SRS-10` — recorded departure | **MET** | `D-01` through `D-09` name every known unmet predicate, the reason, recipient consequence, and closure evidence. |
+
+## Verified first-run record
+
+### Assurance label and verifier
+
+- Label: **Self-run verification (preparation only)**.
+- Verifier: Codex release-preparation agent acting in the project owner's
+  repository on 2026-08-11.
+- Relationship and prior access: author-side agent with full source-tree and
+  implementation context; not an outsider and not independent.
+- Owner help/intervention: the agent prepared this record and its checks before
+  running them. No outside operator was involved.
+- Credentials/network: no application credentials; the unit suite and first
+  run are network-free. Package build isolation may obtain declared build
+  tooling if it is not already cached.
+- Starting environment: macOS 26.5 (`25F71`), Darwin `25.5.0`, arm64; CPython
+  3.11.15 for the package gate. Locally available 3.12.13, 3.13.15, and 3.14.7
+  are not substitutes for the required hosted Linux/macOS matrix.
+- Source identity: the clean commit containing this record. It is preparation
+  evidence, not the still-pending release commit.
+
+### Exact artefact forms and commands
+
+The two received forms tested locally are one wheel and one source distribution
+built from a clean archive of the record-preparation commit:
+
+```sh
+python3.11 -m unittest discover -s tests -v
+python3.11 -m build --sdist --wheel
+python3.11 -m twine check --strict dist/*.whl dist/*.tar.gz
+python3.11 tools/verify_release_artifacts.py dist
+python3.11 tools/verify_installed_artifact.py dist/*.whl
+python3.11 tools/verify_installed_artifact.py dist/*.tar.gz
+python3.11 tools/release_checksums.py write dist
+python3.11 tools/release_checksums.py check dist
+```
+
+`verify_installed_artifact.py` creates a new temporary virtual environment for
+each form, removes `PYTHONPATH`, sets `PYTHONNOUSERSITE=1`, installs only the
+named archive, runs `pip check`, checks installed metadata/import identity,
+and exercises both command entry forms. It then creates this exact spec in an
+otherwise empty temporary working directory:
+
+```json
+{"schema":"hwbspec/v0.1","features":[],"steps":[{"id":"01","argv":["/bin/echo","hello"]}]}
+```
+
+The public path it executes is equivalent to:
+
+```sh
+hwb --version
+hwb --help
+python -m harness_workbench --help
+hwb run hello.json
+hwb ls
+hwb show "$RUN_ID"
+hwb verify "$RUN_ID"
+```
+
+Expected and observed preparation outcome: installation succeeds; `pip check`
+reports no broken requirements; package, metadata, `hwb --version`, and source
+versions agree at `0.1.0rc1`; the run reports `completed`; `hwb ls` contains its
+run ID; `show` and `verify` accept the complete record. Both disposable local
+artefact forms passed on 2026-08-11. This supplies no outside assurance and
+does not verify a future tagged or downloaded byte sequence.
+
+Release-final evidence must add the frozen commit, asset filenames and SHA-256
+values, hosted run URLs, downloaded-asset commands/results, verifier identity,
+owner intervention, and final disposition. An outsider run may be recorded as
+an outside artifact check only if the EF-RS-REL separation predicate is met.
+
+## Claim card
+
+- **Release and tier:** Harness Workbench `0.1.0rc1`; deterministic software
+  and conformance claims are routed at **EF-RS-REL T1**; H/F overlay is not
+  triggered because the release has no human-subject, private-person, field,
+  or human-effect evidence or claim.
+- **Question:** can the stated package execute a JSON workload, retain the
+  documented evidence, and exercise the documented harness-measurement paths
+  within their named boundaries?
+- **Exact system and conditions:** the content-addressed release commit is
+  pending; intended package version `0.1.0rc1`, CPython 3.11–3.14 target,
+  Linux/macOS target, POSIX command environment, no runtime dependencies.
+- **Preparation observation:** source tests and separate clean installs from a
+  locally built wheel and sdist pass on the macOS environment recorded above.
+- **What that supports:** author-side evidence that the prepared source can
+  produce installable archives whose documented minimal `/bin/echo` run works.
+- **What it does not support:** publication, availability, hostile-code
+  containment, Windows compatibility, workload quality, model quality,
+  correctness outside documented invariants, all-Python/all-OS compatibility,
+  an independent artifact check, independent reproduction, or long-term
+  maintenance.
+- **Important threats:** author-side verification shares implementation
+  assumptions; the final commit and hosted bytes may differ; only one local OS
+  supplies preparation evidence; generated and prose documentation checks are
+  incomplete by design; security settings live outside Git.
+- **Outside assurance:** none.
+- **Withholding:** no claim-sufficient run evidence is intentionally withheld,
+  but the governing standards source is not shipped and external GitHub state
+  is not yet available. See `D-08` and the pending release rows.
+- **Current version / correction route:** this is an unreleased preparation
+  record. For a public release, GitHub Issues is the planned correction route
+  and GitHub private vulnerability reporting is the planned confidential route;
+  neither route is claimed tested here.
+
+## Claim-to-evidence trace
+
+The claim ceiling for every row is the bounded wording in this table. Repeated
+wording may reuse the claim ID; a new population, condition, result,
+uncertainty, or assurance meaning requires a new ID or revision.
+
+| Claim ID and bounded claim | Principal source / evidence | Expected and observed result | Public verification state |
+|---|---|---|---|
+| `C-HWB-01` — the distribution/import/CLI are `harness-workbench` / `harness_workbench` / `hwb`, version `0.1.0rc1`, with zero runtime dependencies | `pyproject.toml`, `src/harness_workbench/__init__.py`, built `METADATA`/`PKG-INFO`, `tools/verify_release_artifacts.py`, installed-artifact verifier | Exact identity/version/dependency agreement; passed for local wheel and sdist | Self-run preparation; final assets absent |
+| `C-HWB-02` — the minimal feature-free POSIX spec runs and leaves a complete verifiable record | README first run, `examples/bare.json`, runner tests, installed-artifact verifier | `run` completed; ID visible to `ls`; `show` and `verify` exit zero; passed locally | Self-run preparation; final assets absent |
+| `C-HWB-03` — run records preserve the documented attempts/spec/feature-source/integrity surfaces, with stated partial-run classifications | `docs/the-record.md`, runner/conformance/interrupt tests, artifact-content checks | Documented keys/layout match generated records and known incomplete/recoverable/complete cases | Reconstructible from source tests; no outside check |
+| `C-HWB-04` — six opt-in builtin features expose the documented powers and seams, and an omitted/mistyped root does not silently load them | README feature table, `docs/writing-a-feature.md`, builtin manifests/source, feature/dispatcher tests | Builtin names, seam table, powers, load failure, source preservation match code | Reconstructible from source tests; no outside check |
+| `C-HWB-05` — measurement commands implement only the bounded relations and verdicts documented for them | `docs/measuring.md`, `docs/campaign-manifests.md`, `docs/measuring-your-own-code.md`, `src/harness_workbench/commands.py`, behavioral and sensitivity tests | Registered command/verdict universe, schemas, transcripts, known-red probes, and named limitations agree | T1 self-run source evidence; campaign generality is not claimed |
+| `C-HWB-06` — selected documentation surfaces are mechanically checked, not guaranteed as prose | docs drift/transcript tests and `tests/test_release_engineering.py` | Field/table/command inventories and registered transcripts pass; unregistered transcript ceiling does not rise | Self-run; exact checked surfaces are named in README |
+| `C-HWB-07` — the tool executes trusted commands/modules and replay is not OS isolation | README, `SECURITY.md`, all core docs, command/module execution tests | Required trust-boundary wording is present; misleading sandbox wording is rejected | Inspectable source plus self-run tests; not a security audit |
+| `C-HWB-08` — examples demonstrate model-free, model-adjacent, feature-attachment, retry/redaction, and bounded-effects use without making a provider a requirement | exact example inventory below, example transcripts, package-content verifier | Shipped examples are included in sdist; selected transcripts re-run; no runtime dependency or network reference in the unit suite | Partly machine checked; unregistered examples remain inspectable demonstrations |
+| `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Local macOS interpreters exist; hosted Linux/macOS matrix is **pending** | Target disclosed with Linux evidence pending; not release-final evidence |
+| `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
+| `C-HWB-11` — the candidate is in preparation and has not been tagged or published | README, `CHANGELOG.md`, local tag absence, this record | Source surfaces consistently say unreleased | Local state only; remote/public state must be verified at freeze |
+| `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately | `MANIFEST.in`, `pyproject.toml`, release tools/tests | Strict Twine, archive inspection, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
+
+## Complete claim-bearing surface inventory
+
+Every current public-facing or release-facing repository surface is assigned a
+route. The exact path manifest below is machine checked; adding a root Markdown
+file, docs page, shipped example, GitHub workflow/template, or public CLI
+command fails the suite until this record routes it.
+
+| Surface group | Exact surfaces | EF-RS-REL route |
+|---|---|---|
+| Front door | `README.md` | T1: `C-HWB-01` through `C-HWB-12`; purpose, ceiling, evidence state, limits, and routes |
+| Reference and guides | `docs/campaign-manifests.md`; `docs/measuring-your-own-code.md`; `docs/measuring.md`; `docs/the-record.md`; `docs/the-spec.md`; `docs/writing-a-feature.md` | T1: primarily `C-HWB-02` through `C-HWB-08` |
+| This conformance/front-door supplement | `docs/release-conformance-0.1.0rc1.md` | T1 claim card, trace, assurance, departures, and current status |
+| Examples and demonstration code/data | every exact `examples/` path in the manifest below | T1 demonstrations: `C-HWB-02`, `C-HWB-04`, `C-HWB-05`, `C-HWB-08`; no performance/generalization claim |
+| CLI/help and runtime claims | `hwb --help`; `hwb --version`; `python -m harness_workbench --help`; every exact subcommand help surface below; runtime output from those commands | T1: `C-HWB-01` through `C-HWB-07`; source of truth is `src/harness_workbench/commands.py` plus parser/behavior tests |
+| Package-index metadata | `pyproject.toml`; generated wheel `METADATA`; generated sdist `PKG-INFO`; README rendered as long description | T1: `C-HWB-01`, `C-HWB-09`, `C-HWB-10`, `C-HWB-12`; no package-index publication is authorized or claimed |
+| Release history/process | `CHANGELOG.md`; `RELEASING.md`; future Git tag; future GitHub release notes; future wheel/sdist/`SHA256SUMS` | T1: `C-HWB-11`, `C-HWB-12`; future surfaces are **pending and must be reviewed before publication** |
+| Licence, continuity, and reporting | `LICENSE`; `NOTICE`; `CONTRIBUTING.md`; `SUPPORT.md`; `SECURITY.md` | Licence routes under EF-SRS-02; policy declarations under `C-HWB-10`; any factual security/result claim routes at T1 under `C-HWB-07` |
+| GitHub intake and automation | all exact `.github/` paths in the manifest below | Workflow/configuration facts route at T1 under `C-HWB-09`/`C-HWB-12`; intake wording routes under `C-HWB-10`; hosted execution/settings remain pending |
+
+### Exact shipped-example manifest
+
+- `examples/attaching/check.sh`
+- `examples/attaching/features/myfeature/FEATURE.json`
+- `examples/attaching/features/myfeature/feature.py`
+- `examples/attaching/mine.json`
+- `examples/attaching/workload.json`
+- `examples/bare.json`
+- `examples/determinism-14b.json`
+- `examples/determinism.json`
+- `examples/echo.sh`
+- `examples/effect-boundary/README.md`
+- `examples/effect-boundary/breach.json`
+- `examples/effect-boundary/clean.json`
+- `examples/effect-boundary/features/spill/FEATURE.json`
+- `examples/effect-boundary/features/spill/feature.py`
+- `examples/effect-boundary/state/README.txt`
+- `examples/effect-boundary/write-allowed.sh`
+- `examples/flaky/README.md`
+- `examples/flaky/config.txt`
+- `examples/flaky/flaky.sh`
+- `examples/flaky/noretry.json`
+- `examples/flaky/redact.json`
+- `examples/flaky/retry.json`
+- `examples/flaky/stable.json`
+- `examples/flaky/stable.sh`
+- `examples/leak.sh`
+- `examples/ollama_probe.py`
+- `examples/p1.txt`
+- `examples/p2.txt`
+- `examples/prompts/q1.txt`
+- `examples/prompts/q2.txt`
+- `examples/prompts/q3.txt`
+- `examples/redact.json`
+- `examples/retry.json`
+- `examples/smoke.json`
+
+### Exact GitHub-surface manifest
+
+- `.github/ISSUE_TEMPLATE/bug_report.yml`
+- `.github/ISSUE_TEMPLATE/change_proposal.yml`
+- `.github/ISSUE_TEMPLATE/config.yml`
+- `.github/ISSUE_TEMPLATE/usage_question.yml`
+- `.github/dependabot.yml`
+- `.github/pull_request_template.md`
+- `.github/workflows/ci.yml`
+- `.github/workflows/codeql.yml`
+
+### Exact CLI/help manifest
+
+- `hwb --help`
+- `hwb --version`
+- `python -m harness_workbench --help`
+- `hwb run --help`
+- `hwb ls --help`
+- `hwb show --help`
+- `hwb verify --help`
+- `hwb diff --help`
+- `hwb sweep --help`
+- `hwb interfere --help`
+- `hwb blast --help`
+- `hwb catch --help`
+- `hwb fidelity --help`
+- `hwb sensitivity --help`
+- `hwb efficacy --help`
+- `hwb steady --help`
+- `hwb effects --help`
+- `hwb interrupt --help`
+- `hwb order --help`
+- `hwb confine --help`
+- `hwb replay --help`
+- library verdict surface `harness_workbench.conform` (no top-level command)
+
+## EF-RS-REL component status
+
+This is a proportional T1 packet for deterministic software claims. Statuses
+describe the intended release, not merely whether a file has been drafted.
+
+| Requirement | Status | Evidence / next action |
+|---|---|---|
+| `EF-RS-REL-01` canonical front door | **not yet due** | README plus this record prepare the function; public URL/current release identity do not exist. |
+| `EF-RS-REL-02` release abstract | **not yet due** | README opening and claim card prepare the question, bounded result, evidence state, importance, and non-claims. Recheck after release-status edits. |
+| `EF-RS-REL-03` technical report | **not yet due** | This record, README, guides, tests, and release tools prepare deterministic questions, conditions, expected/observed results, limits, failures, and next gates. |
+| `EF-RS-REL-04` claim card | **not yet due** | Claim card is prepared above; it is not yet a public released claim card. |
+| `EF-RS-REL-05` evidence/reproduction package | **unresolved — blocking** | Source trace and local clean-install path exist; final content-addressed commit, released checksums/assets, and downloaded-asset run are absent. |
+| `EF-RS-REL-06` inspection aid | **not yet due** | The minimal first run and model-free example prepare immediately executable aids. Reassess the SHOULD at freeze if final claims become harder to inspect. |
+| `EF-RS-REL-07` version/archive/citation | **unresolved — blocking** | Package version is prepared; exact release commit, signed tag, asset checksums, public URL, and release record are absent. DOI trigger is not asserted. |
+| `EF-RS-REL-08` disclosure/withholding | **unresolved — blocking** | Trust/data boundaries and store exclusions are documented; history/archive secret scan, public-setting review, and final licence/security review remain pending. |
+| `EF-RS-REL-09` roles/challenge/assurance | **not yet due** | Author-side preparation agent and conditions are disclosed; no outside, independent, methods-challenged, or artifact-checked label is used. Release approver remains pending. |
+| `EF-RS-REL-10` criticism/correction/security routes | **unresolved — blocking** | Files name planned issue/private routes; private vulnerability reporting, public issue intake, triage retention, and route tests are not verified. |
+| `EF-RS-REL-11` derivative consistency | **not yet due** | Exact current-surface manifest and claim IDs are machine checked. Future release notes, tags, package-index page, announcements, figures, talks, or dashboards require review before publication. |
+| `EF-RS-REL-12` post-release maintenance | **not yet due** | No release exists. README/CHANGELOG/support/security surfaces prepare lifecycle and correction locations. |
+
+## Recorded departures and unresolved predicates
+
+An unresolved MUST remains unmet; recording it does not waive it.
+
+| ID | Requirement / reason | Recipient consequence | Closure evidence |
+|---|---|---|---|
+| `D-01` | `EF-SRS-03`, `EF-RS-REL-05`: no frozen/tagged/downloaded release asset exists | A recipient cannot rely on the local first run as evidence for the bytes they will download | Exact release commit, asset SHA-256, downloaded wheel and sdist clean-install logs |
+| `D-02` | `EF-SRS-08`, `EF-RS-REL-07`: release identity and public derivative do not exist | A recipient cannot resolve a canonical immutable release or tell whether release notes match source | Signed immutable tag, GitHub prerelease URL, exact target commit, release notes and assets reviewed against claim IDs |
+| `D-03` | Hosted Linux/macOS CPython 3.11–3.14 CI has not been observed for the release commit | A recipient has no release-final evidence for the full compatibility target | Required CI run URLs and conclusions for the exact commit |
+| `D-04` | No outside artifact check or independent run has occurred | A recipient receives author-side functionality evidence only and cannot infer independent assurance | Eligible outside checker record with relationship, prior access, environment, help, raw result, and digest |
+| `D-05` | Private vulnerability reporting and public issue/correction intake are not verified | A public recipient may lack a confidential reporting path or a tested correction path | Enable settings, exercise both routes safely, retain dated evidence and named owner |
+| `D-06` | History/archive secret scan and final disclosure review are pending | A recipient cannot rely on this preparation record as evidence that publication material is secret/private/PII clean | Pinned Gitleaks history and archive results plus manual licence/privacy/security disposition |
+| `D-07` | Branch/tag rulesets, token settings, code scanning results, Dependabot settings, and public visibility are external and unverified | Checked-in YAML does not prove GitHub enforces the intended controls | Dated repository-settings evidence and successful CodeQL/CI runs for exact commit |
+| `D-08` | The exact governing-standard source bytes are pinned but not shipped or asserted publicly reachable | A recipient without the standards repository can detect a supplied file's equality but cannot independently inspect the complete governing text from this artefact alone | Publish or ship the exact pinned standards, or record a stable public content-addressed location |
+| `D-09` | No final release approver/date/disposition exists | A recipient cannot treat preparation as an authorization to release | Named approver, date, decision, and residual limitations after all blockers close |
+
+## Mechanical checks
+
+| Check | Requirement/claim guarded | Where it runs | Preparation state |
+|---|---|---|---|
+| Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; hosted matrix pending |
+| Conformance surface inventory test | `EF-SRS-08`, `EF-SRS-09`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Prepared and passing locally |
+| Standards-pin assertions | exact EF-SRS/EF-RS-REL version, commit, blob, and SHA-256 | `tests/test_release_engineering.py` | Prepared and passing locally |
+| Relative Markdown link/anchor check | navigable front door and docs | `tests/test_workbench.py` | Passing locally |
+| Spec/record/seam/feature/command table drift checks | `C-HWB-03` through `C-HWB-06` | `tests/test_workbench.py` | Passing locally |
+| Registered transcript replay and unverified-transcript ceiling | evidence behind example/CLI output claims | `tests/test_workbench.py` | Passing locally |
+| Build plus strict Twine | package metadata/README rendering | local gate and package CI job | Passed locally; hosted job pending |
+| Archive content/licence/generated-store verifier | `C-HWB-01`, `C-HWB-12`, EF-SRS-02 | `tools/verify_release_artifacts.py` | Passed on disposable local artefacts; final assets pending |
+| Separate clean wheel and sdist install/first run | EF-SRS-03, `C-HWB-02`, `C-HWB-12` | `tools/verify_installed_artifact.py` | Passed locally as self-run; downloaded assets pending |
+| Checksums and tag/version verifier | content/version identity | release tools and CI | Local archive checks pass; final tag/assets pending |
+| Gitleaks history and archive scan | disclosure review | maintainer release gate | **Not run in this preparation environment; blocking** |
+| Hosted matrix, CodeQL, repository settings, routes, tag and release | external release predicates | GitHub | **Not run/not enabled/not created here; blocking** |
+
+## Release-final completion block
+
+This block is deliberately empty until the release exists. Do not copy local
+preparation values into it.
+
+- Release commit: **PENDING**
+- Signed tag and verification: **PENDING**
+- GitHub prerelease URL and target commit: **PENDING**
+- Hosted CI/CodeQL evidence: **PENDING**
+- Repository rules/security-setting evidence: **PENDING**
+- Released wheel/sdist/`SHA256SUMS` filenames and digests: **PENDING**
+- Downloaded-asset clean-install results: **PENDING**
+- Correction-route and confidential-security-route test: **PENDING**
+- Outside check, if obtained (never required to relabel self-run): **NONE**
+- Release approver, date, decision, residual limitations: **PENDING**
+- Overall conformance: **PREPARED; NOT RELEASED; PUBLICATION BLOCKED**
