@@ -1,7 +1,7 @@
 {
   "schema": "hwbspec/v0.1",
   "run_class": "discovery",
-  "features_root": "hwb:builtin",
+  "features_root": "harness_workbench:builtin",
   "features": [
     {"name": "redact", "config": {"patterns": ["notakey-live-[0-9a-f]{12}"]}},
     {"name": "retry", "config": {"max": 3}}

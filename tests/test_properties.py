@@ -20,8 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from hwb import conform, features, interrupt, runner, spec as specmod  # noqa: E402
-from hwb.canon import canon_bytes, digest_obj  # noqa: E402
+from harness_workbench import conform, features, interrupt, runner, spec as specmod  # noqa: E402
+from harness_workbench.canon import canon_bytes, digest_obj  # noqa: E402
 
 
 SEED = 0x485742

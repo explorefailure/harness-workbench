@@ -21,12 +21,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from hwb import conform, features, runner, spec as specmod   # noqa: E402
+from harness_workbench import conform, features, runner, spec as specmod   # noqa: E402
 
 # The ONE feature tree. It lives inside the package so it ships with
 # `pip install`; there is no second copy at the repo root to drift
 # from, which is why the drift guard that used to sit here is gone.
-REAL_FEATURES = os.path.join(ROOT, "src", "hwb", "builtin")
+REAL_FEATURES = os.path.join(ROOT, "src", "harness_workbench", "builtin")
 
 
 def _installed_features():
@@ -663,7 +663,7 @@ class TestResidue(Base):
         import ast
 
         names = set(ALL) | {"content-digest"}
-        src = os.path.join(ROOT, "src", "hwb")
+        src = os.path.join(ROOT, "src", "harness_workbench")
         for fn in sorted(os.listdir(src)):
             if not fn.endswith(".py"):
                 continue
@@ -803,7 +803,7 @@ class TestWrapOrdering(WrapBase):
 
 class TestDiff(WrapBase):
     def diff(self, a, b):
-        from hwb import diff as diffmod
+        from harness_workbench import diff as diffmod
         return diffmod.compare(diffmod.load_run(self.runs, a["run_id"]),
                                diffmod.load_run(self.runs, b["run_id"]))
 
@@ -849,7 +849,7 @@ class TestDiff(WrapBase):
                         res["differences"])   # ...different experiments
 
     def test_diff_refuses_a_drifted_pair(self):
-        from hwb import diff as diffmod
+        from harness_workbench import diff as diffmod
         a = self.run_spec(["freeze"], name="dr.json")
         with open(os.path.join(self.tmp, "in.txt"), "w") as fh:
             fh.write("CHANGED\n")
@@ -867,7 +867,7 @@ class TestDiff(WrapBase):
         its own baseline; the pair was still incomparable. The drift flag is
         an opinion about mutable state -- the digests are the evidence.
         """
-        from hwb import diff as diffmod
+        from harness_workbench import diff as diffmod
         a = self.run_spec(["freeze"], name="rb.json")
         os.remove(os.path.join(self.tmp, "rb.freeze.lock"))
         with open(os.path.join(self.tmp, "in.txt"), "w") as fh:
@@ -885,7 +885,7 @@ class TestDiff(WrapBase):
         `baseline_file` as a difference where `interfere` masked it, so two
         runs of one configuration looked non-identical purely because their
         spec files had different names."""
-        from hwb import diff as diffmod
+        from harness_workbench import diff as diffmod
         a = self.run_spec(["freeze"], name="mk1.json")
         b = self.run_spec(["freeze"], name="mk2.json")
         res = self.diff(a, b)
@@ -938,7 +938,7 @@ class TestDiff(WrapBase):
     def test_missing_provenance_is_not_the_same_as_no_wraps(self):
         """A pre-provenance record must not read as equivalent to a run that
         genuinely had no wrap features."""
-        from hwb import diff as diffmod
+        from harness_workbench import diff as diffmod
         a = self.run_spec([], name="p1.json")
         path = os.path.join(self.runs, a["run_id"], "attempts.jsonl")
         rows = [json.loads(l) for l in read_text(path).splitlines() if l.strip()]
@@ -1123,7 +1123,7 @@ class TestBounds(Base):
     def test_the_escalation_is_not_an_ordinary_exception(self):
         """Structural: if SeamAbort were an Exception the careless handler
         would absorb it too, and the escalation would buy nothing."""
-        from hwb.seams import SeamAbort, SeamTimeout
+        from harness_workbench.seams import SeamAbort, SeamTimeout
         self.assertTrue(issubclass(SeamAbort, BaseException))
         self.assertFalse(issubclass(SeamAbort, Exception))
         self.assertTrue(issubclass(SeamTimeout, Exception))
@@ -1374,7 +1374,7 @@ class TestConformance(Base):
 
     def test_verify_reports_conformance(self):
         rec, _ = self.good()
-        from hwb import cli
+        from harness_workbench import cli
         rc = cli.main(["--root", self.runs, "verify", rec["run_id"]])
         self.assertEqual(rc, 0)
 
@@ -1413,7 +1413,7 @@ class TestConformance(Base):
         match their recorded digests. The tool reported `conforms: yes` on a
         record whose spec had been altered."""
         rec, _ = self.good()
-        from hwb import cli
+        from harness_workbench import cli
         p = os.path.join(self.rundir, "spec.json")
         body = read(p)
         body["run_class"] = "confirmation"
@@ -1434,12 +1434,12 @@ class TestSweep(Base):
         return self.spec(feats, name=name)
 
     def sweep(self, feats, mode="pairs", name="sw.json"):
-        from hwb import sweep as sweepmod
+        from harness_workbench import sweep as sweepmod
         return sweepmod.run_sweep(self.base_spec(feats, name), self.runs,
                                   self.sweeps, mode)
 
     def test_configuration_sets(self):
-        from hwb import sweep as sweepmod
+        from harness_workbench import sweep as sweepmod
         names = ["a", "b", "c"]
         self.assertEqual(sweepmod.configurations(names, "singletons"),
                          [(), ("a",), ("b",), ("c",)])
@@ -1449,7 +1449,7 @@ class TestSweep(Base):
         self.assertEqual(len(sweepmod.configurations(names, "powerset")), 8)
 
     def test_powerset_is_capped(self):
-        from hwb import sweep as sweepmod
+        from harness_workbench import sweep as sweepmod
         with self.assertRaises(sweepmod.SweepError) as cm:
             sweepmod.configurations(list("abcdefgh"), "powerset")
         self.assertIn("pairs", str(cm.exception))
@@ -1498,7 +1498,7 @@ class TestInterference(Base):
         self.sweeps = os.path.join(self.tmp, "sweeps")
 
     def analyse(self, feats, name):
-        from hwb import sweep as sweepmod
+        from harness_workbench import sweep as sweepmod
         man = sweepmod.run_sweep(self.spec(feats, name=name), self.runs,
                                  self.sweeps, "pairs")
         return sweepmod.interference(man, self.runs)
@@ -1547,7 +1547,7 @@ class TestInterference(Base):
         self.assertTrue(any("filename" in m for m in res["masked"]))
 
     def test_runs_that_never_executed_are_excluded(self):
-        from hwb import sweep as sweepmod
+        from harness_workbench import sweep as sweepmod
         man = sweepmod.run_sweep(self.spec(["freeze", "timing"], name="ex.json"),
                                  self.runs, self.sweeps, "pairs")
         for r in man["configurations"]:
@@ -1566,7 +1566,7 @@ class TestBlast(Base):
         self.blasts = os.path.join(self.tmp, "blasts")
 
     def run_campaign(self, feats, name="bl.json"):
-        from hwb import blast as blastmod
+        from harness_workbench import blast as blastmod
         return blastmod.campaign(self.spec(feats, name=name), self.runs,
                                  self.blasts, seam_timeout_ms=300)
 
@@ -1579,7 +1579,7 @@ class TestBlast(Base):
     def test_the_fault_library_covers_more_than_raise(self):
         """A library that only raises reports excellent containment and is
         wrong: the killer case is a hook that returns None and never raises."""
-        from hwb import blast as blastmod
+        from harness_workbench import blast as blastmod
         self.assertIn("silent", blastmod.applicable("annotate"))
         self.assertIn("hang", blastmod.applicable("annotate"))
         self.assertIn("meddle", blastmod.applicable("annotate"))
@@ -1734,7 +1734,7 @@ class TestCatch(Base):
         self.catches = os.path.join(self.tmp, "catches")
 
     def campaign(self, feats=("freeze",), name="ct.json"):
-        from hwb import catch as catchmod
+        from harness_workbench import catch as catchmod
         return catchmod.campaign(self.spec(list(feats), name=name),
                                  self.runs, self.catches)
 
@@ -1809,13 +1809,13 @@ class TestCatch(Base):
         p = self.spec(["freeze"], name="mode.json",
                       steps=[{"id": "01", "argv": ["./probe.sh"],
                               "inputs": ["probe.sh"]}])
-        from hwb import catch as catchmod
+        from harness_workbench import catch as catchmod
         catchmod.campaign(p, self.runs, self.catches)
         self.assertEqual(os.stat(probe).st_mode, before,
                          "the campaign changed its own workload's mode")
 
     def test_catch_rate_carries_its_denominator(self):
-        from hwb import catch as catchmod
+        from harness_workbench import catch as catchmod
         res = catchmod.summarise(self.campaign())
         self.assertIn("/", res["catch_rate"])
 
@@ -1824,7 +1824,7 @@ class TestFidelity(Base):
     """Family 5: which questions can the record answer by itself?"""
 
     def assess(self, rec):
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         return fidmod.assess(os.path.join(self.runs, rec["run_id"]))
 
     def verdict(self, res, key):
@@ -1834,12 +1834,12 @@ class TestFidelity(Base):
         self.fail("no question %r" % key)
 
     def test_a_current_run_answers_nearly_everything(self):
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         res = self.assess(self.run_spec(["freeze", "timing"], name="f1.json"))
         self.assertEqual(res["counts"][fidmod.UNANSWERED], 0)
 
     def test_preservation_is_what_makes_reproduction_answerable(self):
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         rec = self.run_spec(["freeze"], name="f2.json")
         d = os.path.join(self.runs, rec["run_id"])
         self.assertEqual(self.assess(rec)["questions"][6]["verdict"],
@@ -1851,7 +1851,7 @@ class TestFidelity(Base):
     def test_absent_provenance_is_unanswered_not_assumed(self):
         """The distinction the whole absence rule turns on: a missing
         caused_by means 'not recorded', never 'ran once'."""
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         rec = self.run_spec([{"name": "sample", "config": {"n": 2}}],
                             name="f3.json")
         d = os.path.join(self.runs, rec["run_id"])
@@ -1867,7 +1867,7 @@ class TestFidelity(Base):
 
     def test_no_wrap_feature_makes_provenance_answerable_by_absence(self):
         """With no wrap attached, one attempt per step IS the answer."""
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         res = self.assess(self.run_spec(["timing"], name="f4.json"))
         self.assertEqual(self.verdict(res, "why_this_attempt"), fidmod.ANSWERED)
 
@@ -1875,7 +1875,7 @@ class TestFidelity(Base):
         """The claim under test is that the record is readable WITHOUT the
         tool, so a resolver that needed the harness would beg the question."""
         import inspect
-        from hwb import fidelity as fidmod
+        from harness_workbench import fidelity as fidmod
         src = inspect.getsource(fidmod)
         for forbidden in ("from .runner", "from .features", "from .seams"):
             self.assertNotIn(forbidden, src)
@@ -1895,18 +1895,18 @@ class TestOrder(Base):
             fh.write(body)
 
     def sweep(self, feats, name):
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         return sw.run_sweep(self.spec(feats, name=name), self.runs,
                             os.path.join(self.tmp, "sw-" + name),
                             mode="permutations")
 
     def test_declared_order_is_the_first_configuration(self):
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         self.assertEqual(sw.configurations(["a", "b"], "permutations")[0],
                          ("a", "b"))
 
     def test_permutations_are_capped(self):
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         with self.assertRaises(sw.SweepError):
             sw.configurations(list("abcde"), "permutations")
 
@@ -1915,21 +1915,21 @@ class TestOrder(Base):
         would emit the spec's original order and the family would report
         'order is not significant' for every input -- a green result produced
         by not varying anything."""
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         raw = {"features": [{"name": "a"}, {"name": "b"}]}
         got = sw._derive(raw, ("b", "a"))
         self.assertEqual([f["name"] for f in got["features"]], ["b", "a"])
 
     def test_subset_modes_keep_the_spec_order(self):
         """The reorder must not change what the existing modes measured."""
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         raw = {"features": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}
         for combo in sw.configurations(["a", "b", "c"], "pairs"):
             got = [f["name"] for f in sw._derive(raw, combo)["features"]]
             self.assertEqual(got, sorted(got, key=["a", "b", "c"].index))
 
     def test_order_insensitive_features_report_not_significant(self):
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         self._plant("alpha", "def after_step(step, result, ctx):\n"
                              "    return {'v': 1}\n")
         self._plant("beta", "def after_step(step, result, ctx):\n"
@@ -1942,7 +1942,7 @@ class TestOrder(Base):
         """THE REJECTION TEST. A feature that reads what earlier features
         wrote genuinely depends on sequence; if this reports 'not
         significant', the family cannot detect order effects at all."""
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         self._plant("writer", "def after_step(step, result, ctx):\n"
                               "    return {'v': 1}\n")
         self._plant("reader",
@@ -1956,7 +1956,7 @@ class TestOrder(Base):
 
     def test_the_scope_is_stated(self):
         """'No finding' must not be readable as 'order is free in general'."""
-        from hwb import sweep as sw
+        from harness_workbench import sweep as sw
         self._plant("solo", "def after_step(step, result, ctx):\n"
                             "    return {'v': 1}\n")
         man = self.sweep(["solo", "timing"], "o3.json")
@@ -1978,11 +1978,11 @@ class TestConfine(Base):
             fh.write(body)
 
     def assess(self, rec):
-        from hwb import confine
+        from harness_workbench import confine
         return confine.assess(os.path.join(self.runs, rec["run_id"]))
 
     def test_a_wellbehaved_feature_is_clean(self):
-        from hwb import confine
+        from harness_workbench import confine
         res = self.assess(self.run_spec(["freeze"], name="c1.json"))
         row = [r for r in res["features"] if r["feature"] == "freeze"][0]
         self.assertEqual(row["verdict"], confine.CLEAN)
@@ -1992,7 +1992,7 @@ class TestConfine(Base):
         contract, so it appears to have no way into the record -- and can
         write to any namespace through ctx. Without this test, `clean` and
         `cannot see writes` are the same output."""
-        from hwb import confine
+        from harness_workbench import confine
         self._plant("peeker", "observe", "after_step",
                     "def after_step(step, result, ctx):\n"
                     "    ctx['extras'].setdefault('peeker', {})['snuck'] = True\n")
@@ -2001,7 +2001,7 @@ class TestConfine(Base):
         self.assertEqual(row["verdict"], confine.BREACHED, row["detail"])
 
     def test_reaching_into_another_namespace_is_caught_and_named(self):
-        from hwb import confine
+        from harness_workbench import confine
         self._plant("reacher", "annotate", "after_step",
                     "def after_step(step, result, ctx):\n"
                     "    for k, v in (ctx.get('extras') or {}).items():\n"
@@ -2018,7 +2018,7 @@ class TestConfine(Base):
     def test_returning_a_dict_is_not_a_breach(self):
         """The declared channel must not be flagged, or the family reports
         every correct annotate feature."""
-        from hwb import confine
+        from harness_workbench import confine
         self._plant("polite", "annotate", "after_step",
                     "def after_step(step, result, ctx):\n"
                     "    return {'ok': True}\n")
@@ -2028,7 +2028,7 @@ class TestConfine(Base):
 
     def test_a_wellbehaved_wrap_is_clean(self):
         """`sample` runs the step N times and never touches the record."""
-        from hwb import confine
+        from harness_workbench import confine
         res = self.assess(self.run_spec(["sample"], name="c5.json"))
         row = [r for r in res["features"] if r["feature"] == "sample"][0]
         self.assertEqual(row["verdict"], confine.CLEAN, row["detail"])
@@ -2036,7 +2036,7 @@ class TestConfine(Base):
     def test_a_wrap_that_writes_the_record_is_caught(self):
         """A wrap's power is over EXECUTION, not over the record -- it has no
         declared channel into extras at all."""
-        from hwb import confine
+        from harness_workbench import confine
         self._plant("grabby", "wrap", "around_step",
                     "def around_step(step, run_step, ctx):\n"
                     "    ctx['extras'].setdefault('grabby', {})['x'] = 1\n"
@@ -2055,7 +2055,7 @@ class TestConfine(Base):
         damage before calibration. Measured between the wrap's own segments,
         never across a nested call.
         """
-        from hwb import confine
+        from harness_workbench import confine
         self._plant("outer", "wrap", "around_step",
                     "def around_step(step, run_step, ctx):\n"
                     "    return run_step()\n")
@@ -2075,7 +2075,7 @@ class TestConfine(Base):
 
     def test_a_record_without_the_field_is_unmeasured_not_clean(self):
         """Older runs carry no breach list. Absent means NOT RECORDED."""
-        from hwb import confine
+        from harness_workbench import confine
         rec = self.run_spec(["freeze"], name="c6.json")
         p = os.path.join(self.runs, rec["run_id"], "record.json")
         r = read(p)
@@ -2102,14 +2102,14 @@ class TestReplay(Base):
     """Family 10 -- exercising the reproducibility claim instead of reporting it."""
 
     def replay(self, rec, tag, source=None):
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         return rp.replay(self.runs, rec["run_id"],
                          os.path.join(self.tmp, "replays-" + tag),
                          source_dir=source or self.tmp)
 
     def test_a_deterministic_run_replays_to_a_match(self):
         """The SECOND run of a spec -- one that compared rather than created."""
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         self.run_spec(["freeze", "timing"], name="r1.json")
         rec = self.run_spec(["freeze", "timing"], name="r1.json")
         man = self.replay(rec, "r1")
@@ -2124,7 +2124,7 @@ class TestReplay(Base):
         original the outlier, and it needs no knowledge of WHICH feature was
         stateful.
         """
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         rec = self.run_spec(["freeze", "timing"], name="r1b.json")
         man = self.replay(rec, "r1b")
         self.assertEqual(man["verdict"], rp.STATEFUL_ORIGIN,
@@ -2141,7 +2141,7 @@ class TestReplay(Base):
     def test_changed_inputs_are_refused_not_reported_as_divergence(self):
         """A divergence caused by a changed workload is not a finding about
         the record, and must not be able to look like one."""
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         rec = self.run_spec(["freeze"], name="r2.json")
         with open(os.path.join(self.tmp, "in.txt"), "w") as fh:
             fh.write("something else\n")
@@ -2150,7 +2150,7 @@ class TestReplay(Base):
         self.assertIn("not the ones this run recorded", str(cm.exception))
 
     def test_a_run_without_a_preserved_spec_is_refused(self):
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         rec = self.run_spec(["timing"], name="r3.json")
         os.remove(os.path.join(self.runs, rec["run_id"], "spec.json"))
         with self.assertRaises(rp.ReplayError) as cm:
@@ -2202,7 +2202,7 @@ class TestReplay(Base):
     def test_replay_needs_no_in_argument(self):
         """The gap this closes: replay used to require a human to supply a
         directory the record could not name."""
-        from hwb import replay as rp
+        from harness_workbench import replay as rp
         self.run_spec(["freeze", "timing"], name="r9.json")
         rec = self.run_spec(["freeze", "timing"], name="r9.json")
         man = rp.replay(self.runs, rec["run_id"],
@@ -2215,7 +2215,7 @@ class TestReplay(Base):
     def test_the_path_is_masked_in_comparison(self):
         """Where a run sat is not what it was. Two runs of one spec must
         stay comparable, or recording the path would break every diff."""
-        from hwb import diff as d
+        from harness_workbench import diff as d
         a = self.run_spec(["timing"], name="r10.json")
         b = self.run_spec(["timing"], name="r10.json")
         res = d.compare(d.load_run(self.runs, a["run_id"]),
@@ -2245,13 +2245,13 @@ class TestEfficacy(Base):
         return d
 
     def campaign(self, feats, name):
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         return eff.campaign(self.spec(feats, name=name), self.runs,
                             os.path.join(self.tmp, "eff-" + name))
 
     def test_a_load_bearing_feature_is_killed(self):
         """Its verdict reaches the record, so inverting it is visible."""
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         self._plant(
             "verdicter",
             "def after_step(step, result, ctx):\n    return {'ok': True}\n",
@@ -2269,7 +2269,7 @@ class TestEfficacy(Base):
         inertness` would be the same output -- the exact failure Family 9
         exists to name, applied to Family 7 itself.
         """
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         self._plant(
             "decorative",
             "def after_step(step, result, ctx):\n"
@@ -2289,7 +2289,7 @@ class TestEfficacy(Base):
         Counting it as a kill would be the worst outcome available: a broken
         inversion would read as proof the feature is load-bearing.
         """
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         self._plant(
             "crasher",
             "def after_step(step, result, ctx):\n    return {'ok': True}\n",
@@ -2302,7 +2302,7 @@ class TestEfficacy(Base):
 
     def test_a_feature_declaring_no_inversion_is_skipped_not_passed(self):
         """Untestable and tested-and-fine must not print the same way."""
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         man = self.campaign(["timing"], "e4.json")
         row = [r for r in man["mutants"] if r["feature"] == "timing"][0]
         self.assertEqual(row["verdict"], eff.SKIPPED)
@@ -2310,7 +2310,7 @@ class TestEfficacy(Base):
 
     def test_an_unstable_baseline_refuses_rather_than_reporting(self):
         """Two control runs that disagree make every kill uninterpretable."""
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         self._plant(
             "drifty",
             "import time\n"
@@ -2322,7 +2322,7 @@ class TestEfficacy(Base):
 
     def test_the_real_freeze_inversion_is_wellformed_and_killed(self):
         """The shipped inversion must be a semantic mutant, not a fault."""
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         man = self.campaign(["freeze"], "e6.json")
         row = [r for r in man["mutants"] if r["feature"] == "freeze"][0]
         self.assertEqual(row["verdict"], eff.KILLED, row["detail"])
@@ -2336,7 +2336,7 @@ class TestEfficacy(Base):
         exactly the features whose decisions are checked hardest. conform is
         DOWNSTREAM; a downstream checker refusing the record is a detection.
         """
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         man = self.campaign(["freeze", "receipt"], "e7.json")
         row = [r for r in man["mutants"] if r["feature"] == "receipt"][0]
         self.assertEqual(row["verdict"], eff.KILLED, row["detail"])
@@ -2346,7 +2346,7 @@ class TestEfficacy(Base):
         """Killed-by-conform and killed-by-diff are different claims: one
         says an invariant guards the feature, the other only that the run
         came out different."""
-        from hwb import efficacy as eff
+        from harness_workbench import efficacy as eff
         man = self.campaign(["freeze"], "e8.json")
         row = [r for r in man["mutants"] if r["feature"] == "freeze"][0]
         self.assertIn(row["killed_by"], ("diff", "conform"))
@@ -2356,7 +2356,7 @@ class TestSteady(Base):
     """Family 12: is the unchanged control stable enough to compare?"""
 
     def campaign(self, steps=None, repeats=3, allowance=None, name="steady.json"):
-        from hwb import steady
+        from harness_workbench import steady
         root = os.path.join(self.tmp, "steadies")
         return steady.campaign(self.spec([], name=name, steps=steps), self.runs,
                                root, repeats=repeats, allowance=allowance)
@@ -2374,7 +2374,7 @@ class TestSteady(Base):
         return [{"id": "01", "argv": ["./moving.sh"], "inputs": []}]
 
     def test_default_is_three_preserved_runs_with_empty_allowance(self):
-        from hwb import steady
+        from harness_workbench import steady
         man = self.campaign(steps=[{"id": "01", "argv": ["/bin/echo", "same"],
                                     "inputs": []}])
         self.assertEqual(man["verdict"], steady.STABLE)
@@ -2388,7 +2388,7 @@ class TestSteady(Base):
                 self.runs, run_id, "record.json")))
 
     def test_positive_control_rejects_a_deterministically_moving_output(self):
-        from hwb import steady
+        from harness_workbench import steady
         man = self.campaign(steps=self.moving_steps(), name="moving.json")
         axis = "output:steps/01/attempts/0/stdout.bin"
         self.assertEqual(man["verdict"], steady.UNSTABLE)
@@ -2398,7 +2398,7 @@ class TestSteady(Base):
                             for r in man["comparisons"]))
 
     def test_an_explicit_exact_axis_allowance_is_not_implicit_noise(self):
-        from hwb import steady
+        from harness_workbench import steady
         axis = "output:steps/01/attempts/0/stdout.bin"
         man = self.campaign(steps=self.moving_steps(), allowance=[axis],
                             name="allowed.json")
@@ -2407,7 +2407,7 @@ class TestSteady(Base):
         self.assertEqual(man["unallowed_axes"], [])
 
     def test_a_comparison_refusal_is_uninterpretable_not_unstable(self):
-        from hwb import steady
+        from harness_workbench import steady
         a = self.run_spec(["freeze"], name="refuse.json")
         with open(os.path.join(self.tmp, "in.txt"), "w", encoding="utf-8") as fh:
             fh.write("changed\n")
@@ -2417,7 +2417,7 @@ class TestSteady(Base):
         self.assertIn("drift", row["detail"])
 
     def test_feature_tree_drift_is_a_harness_axis(self):
-        from hwb import steady
+        from harness_workbench import steady
         a = self.run_spec(["timing"], name="feature-drift.json")
         with open(os.path.join(self.feat_dir, "timing", "feature.py"), "a",
                   encoding="utf-8") as fh:
@@ -2428,7 +2428,7 @@ class TestSteady(Base):
         self.assertIn("harness:features[timing].digest", row["moving_axes"])
 
     def test_setup_error_is_not_a_stability_verdict(self):
-        from hwb import steady
+        from harness_workbench import steady
         with self.assertRaisesRegex(steady.SteadyError, "at least 2"):
             self.campaign(repeats=1)
 
@@ -2439,14 +2439,14 @@ class TestSteady(Base):
         self.assertEqual(man["run_ids"], [])
 
     def test_pair_verdicts_are_fail_closed_not_averaged(self):
-        from hwb import steady
+        from harness_workbench import steady
         rows = [{"verdict": steady.STABLE}, {"verdict": steady.UNSTABLE},
                 {"verdict": steady.UNINTERPRETABLE}]
         self.assertEqual(steady.classify(rows), steady.UNINTERPRETABLE)
         self.assertEqual(steady.classify(rows[:2]), steady.UNSTABLE)
 
     def test_cli_exit_distinguishes_stable_unstable_and_setup(self):
-        from hwb import cli
+        from harness_workbench import cli
         stable = self.spec([], name="cli-stable.json", steps=[
             {"id": "01", "argv": ["/bin/echo", "same"], "inputs": []}])
         moving = self.spec([], name="cli-moving.json", steps=self.moving_steps())
@@ -2467,14 +2467,14 @@ class TestEffects(Base):
         os.makedirs(self.state)
 
     def campaign(self, command, allowances=None, name="effects.json"):
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec([], name=name, steps=[{
             "id": "01", "argv": ["/bin/sh", "-c", command], "inputs": []}])
         return effects.campaign(path, self.runs, self.effects_store,
                                 ["state"], allowances or [])
 
     def test_allowed_endpoint_change_is_within_envelope_not_clean(self):
-        from hwb import effects
+        from harness_workbench import effects
         man = self.campaign("printf allowed > state/allowed.txt",
                             ["state/allowed.txt"])
         self.assertEqual(man["verdict"], effects.WITHIN_ENVELOPE)
@@ -2488,7 +2488,7 @@ class TestEffects(Base):
                       man["sensor"]["unobserved"])
 
     def test_known_red_write_outside_allowance_is_a_breach(self):
-        from hwb import effects
+        from harness_workbench import effects
         man = self.campaign(
             "printf allowed > state/allowed.txt; printf spill > state/spill.txt",
             ["state/allowed.txt"], name="breach.json")
@@ -2502,7 +2502,7 @@ class TestEffects(Base):
         self.assertTrue(row["after"]["digest"].startswith("sha256:"))
 
     def test_content_mode_removal_and_type_are_exact_evidence(self):
-        from hwb import effects
+        from harness_workbench import effects
         file_path = os.path.join(self.state, "subject")
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write("before")
@@ -2519,7 +2519,7 @@ class TestEffects(Base):
         self.assertEqual(row["after"]["type"], "directory")
 
     def test_no_watch_and_broad_or_overlapping_watch_are_setup_errors(self):
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec([], name="contract.json")
         with self.assertRaisesRegex(effects.EffectsError, "no default root"):
             effects.campaign(path, self.runs, self.effects_store, [], [])
@@ -2533,7 +2533,7 @@ class TestEffects(Base):
                              ["state", "state/child"], [])
 
     def test_allowance_must_belong_to_one_watch(self):
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec([], name="allow-contract.json")
         with self.assertRaisesRegex(effects.EffectsError,
                                     "inside exactly one watched root"):
@@ -2541,7 +2541,7 @@ class TestEffects(Base):
                              ["state"], ["outside.txt"])
 
     def test_instrument_stores_cannot_overlap_the_subject_watch(self):
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec([], name="store-contract.json")
         inside = os.path.join(self.state, "campaigns")
         with self.assertRaisesRegex(effects.EffectsError,
@@ -2549,7 +2549,7 @@ class TestEffects(Base):
             effects.campaign(path, self.runs, inside, ["state"], [])
 
     def test_campaign_store_cannot_be_the_run_store(self):
-        from hwb import effects
+        from harness_workbench import effects
 
         path = self.spec([], name="same-store-effects.json")
         self.assertFalse(os.path.exists(self.runs))
@@ -2559,7 +2559,7 @@ class TestEffects(Base):
                          "setup refusal must not leave campaign or run evidence")
 
     def test_subject_setup_error_is_not_a_scoped_pass(self):
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec(["does-not-exist"], name="bad-effects.json")
         man = effects.campaign(path, self.runs, self.effects_store,
                                ["state"], [])
@@ -2569,7 +2569,7 @@ class TestEffects(Base):
 
     def test_snapshot_failure_is_an_instrument_error(self):
         from unittest import mock
-        from hwb import effects
+        from harness_workbench import effects
         path = self.spec([], name="sensor-error.json")
         with mock.patch.object(effects, "snapshot",
                                side_effect=PermissionError("denied")):
@@ -2580,12 +2580,12 @@ class TestEffects(Base):
         self.assertIsNone(man["run_id"])
 
     def test_special_nodes_make_the_scoped_result_uninterpretable(self):
-        from hwb import effects
+        from harness_workbench import effects
         self.assertEqual(effects.classify([], ["state/socket"]),
                          effects.UNINTERPRETABLE)
 
     def test_cli_distinguishes_within_breach_and_bad_setup(self):
-        from hwb import cli
+        from harness_workbench import cli
         allowed = self.spec([], name="fx-cli-ok.json", steps=[{
             "id": "01", "argv": ["/bin/sh", "-c",
                                     "printf ok > state/allowed.txt"],
@@ -2611,7 +2611,7 @@ class TestInterruptions(Base):
         self.interrupts = os.path.join(self.tmp, "interrupt-campaigns")
 
     def test_state_oracle_distinguishes_all_closed_states_without_repair(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
 
         missing = os.path.join(self.runs, "announced-but-absent")
         self.assertEqual(interrupt.inspect_state(missing)["state"],
@@ -2655,7 +2655,7 @@ class TestInterruptions(Base):
         self.assertIn("escapes", result["error"])
 
     def test_integrity_closure_metadata_is_required_before_clean(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
 
         rec = self.run_spec([], name="integrity-metadata.json")
         d = os.path.join(self.runs, rec["run_id"])
@@ -2681,7 +2681,7 @@ class TestInterruptions(Base):
         self.assertEqual(runner.verify(d)["state"], "clean")
 
     def test_directory_name_must_match_the_embedded_run_id(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
 
         rec = self.run_spec([], name="directory-identity.json")
         original = os.path.join(self.runs, rec["run_id"])
@@ -2697,7 +2697,7 @@ class TestInterruptions(Base):
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX mkfifo")
     def test_non_regular_nodes_prevent_a_clean_exhaustive_inventory(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
 
         rec = self.run_spec([], name="inventory-special.json")
         d = os.path.join(self.runs, rec["run_id"])
@@ -2724,7 +2724,7 @@ class TestInterruptions(Base):
         self.assertFalse(os.path.exists(os.path.join(d, "integrity.json")))
 
     def test_every_named_checkpoint_has_the_exact_expected_state(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
 
         path = self.spec([], name="interrupt.json")
         man = interrupt.campaign(path, self.runs, self.interrupts,
@@ -2756,7 +2756,7 @@ class TestInterruptions(Base):
     def test_list_exposes_husks_and_show_verify_refuse_them(self):
         import io
         from contextlib import redirect_stdout
-        from hwb import cli
+        from harness_workbench import cli
 
         husk = os.path.join(self.runs, "interrupted-husk")
         os.makedirs(husk)
@@ -2777,7 +2777,7 @@ class TestInterruptions(Base):
     def test_show_json_remains_parseable_for_complete_and_incomplete_paths(self):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from hwb import cli
+        from harness_workbench import cli
 
         rec = self.run_spec([], name="show-json.json")
         out = io.StringIO()
@@ -2798,7 +2798,7 @@ class TestInterruptions(Base):
     def test_list_and_show_fall_back_for_readable_malformed_records(self):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from hwb import cli
+        from harness_workbench import cli
 
         malformed = {
             "empty-record": {},
@@ -2847,7 +2847,7 @@ class TestInterruptions(Base):
     def test_list_and_show_fall_back_for_malformed_attempt_streams(self):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from hwb import cli, interrupt
+        from harness_workbench import cli, interrupt
 
         cases = {"invalid-json": "not json\n", "non-object": "[]\n"}
         run_ids = []
@@ -2909,13 +2909,13 @@ class TestInterruptions(Base):
                 self.assertIn("non-passing", err.getvalue())
 
     def test_bad_timeout_is_refused_before_spawning(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
         with self.assertRaisesRegex(interrupt.InterruptError, "greater than zero"):
             interrupt.campaign(self.spec([], name="bad-timeout.json"), self.runs,
                                self.interrupts, timeout_seconds=0)
 
     def test_instrument_store_cannot_overlap_the_run_store(self):
-        from hwb import interrupt
+        from harness_workbench import interrupt
         path = self.spec([], name="overlap.json")
         with self.assertRaisesRegex(interrupt.InterruptError, "must not overlap"):
             interrupt.campaign(path, self.runs,
@@ -2927,7 +2927,7 @@ class TestCampaignStoreBoundaries(Base):
     """Campaign manifests and run evidence never share a directory tree."""
 
     def test_steady_rejects_equal_stores_before_creating_evidence(self):
-        from hwb import steady
+        from harness_workbench import steady
 
         path = self.spec([], name="same-store-steady.json")
         self.assertFalse(os.path.exists(self.runs))
@@ -2937,7 +2937,7 @@ class TestCampaignStoreBoundaries(Base):
                          "setup refusal must not leave campaign or run evidence")
 
     def test_nesting_is_rejected_in_both_directions_without_partial_stores(self):
-        from hwb import steady
+        from harness_workbench import steady
 
         path = self.spec([], name="nested-stores.json")
         cases = (
@@ -2957,7 +2957,7 @@ class TestCampaignStoreBoundaries(Base):
 
     @unittest.skipUnless(hasattr(os, "symlink"), "requires symlink support")
     def test_realpath_check_rejects_a_symlink_alias(self):
-        from hwb import steady
+        from harness_workbench import steady
 
         real_store = os.path.join(self.tmp, "real-store")
         alias = os.path.join(self.tmp, "store-alias")
@@ -2974,7 +2974,7 @@ class TestCampaignStoreBoundaries(Base):
                          "alias refusal must not create campaign or run evidence")
 
     def test_every_manifest_producer_uses_the_shared_boundary(self):
-        from hwb import (blast, catch, efficacy, interrupt, replay,
+        from harness_workbench import (blast, catch, efficacy, interrupt, replay,
                          sensitivity, sweep)
 
         path = self.spec(["freeze"], name="all-campaign-stores.json")
@@ -3202,7 +3202,7 @@ class TestDiffSeesOutput(Base):
         return a["run_id"], b["run_id"]
 
     def test_identical_runs_are_equivalent(self):
-        from hwb import diff as d
+        from harness_workbench import diff as d
         a, b = self.two_runs("d1.json")
         res = d.compare(d.load_run(self.runs, a), d.load_run(self.runs, b))
         self.assertTrue(res["equivalent"], res)
@@ -3210,7 +3210,7 @@ class TestDiffSeesOutput(Base):
 
     def test_changed_output_is_not_equivalent(self):
         """The case that failed: same harness, different bytes."""
-        from hwb import diff as d
+        from harness_workbench import diff as d
         a, b = self.two_runs("d2.json")
         target = None
         for dp, _, fns in os.walk(os.path.join(self.runs, b, "steps")):
@@ -3234,7 +3234,7 @@ class TestDiffSeesOutput(Base):
         was made -- which would put the original defect back one layer down,
         where the fix merely LOOKS present.
         """
-        from hwb import diff as d
+        from harness_workbench import diff as d
         a, _ = self.two_runs("d3.json")
         rd = os.path.join(self.runs, a)
         before = d.output_digests(rd)
@@ -3245,7 +3245,7 @@ class TestDiffSeesOutput(Base):
         self.assertNotEqual(before[target], after[target])
 
     def test_a_run_without_steps_is_unknown_not_matching(self):
-        from hwb import diff as d
+        from harness_workbench import diff as d
         a, b = self.two_runs("d4.json")
         shutil.rmtree(os.path.join(self.runs, b, "steps"))
         res = d.compare(d.load_run(self.runs, a), d.load_run(self.runs, b))
@@ -3263,7 +3263,7 @@ class TestSensitivity(Base):
     """
 
     def campaign(self):
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         rec = self.run_spec(["freeze", "timing"], name="sens.json")
         return sens.campaign(self.runs, rec["run_id"],
                              os.path.join(self.tmp, "sensitivity"))
@@ -3275,7 +3275,7 @@ class TestSensitivity(Base):
         probe harness that mutates nothing reports 'detected' for a checker
         that has stopped looking, and the control is what separates those.
         """
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         man = self.campaign()
         ctl = [r for r in man["probes"] if r["control"]]
         self.assertTrue(ctl, "the campaign must ship a positive control")
@@ -3285,7 +3285,7 @@ class TestSensitivity(Base):
 
     def test_every_probe_reaches_a_verdict(self):
         """`errored` is not a verdict about a checker -- it is a broken probe."""
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         man = self.campaign()
         for r in man["probes"]:
             self.assertIn(r["verdict"], (sens.DETECTED, sens.MISSED),
@@ -3297,7 +3297,7 @@ class TestSensitivity(Base):
         A probe that mutates records must do it to a copy, or the family
         that measures the instrument becomes the thing that breaks it.
         """
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         rec = self.run_spec(["freeze", "timing"], name="sens2.json")
         d = os.path.join(self.runs, rec["run_id"])
         before = {}
@@ -3320,7 +3320,7 @@ class TestSensitivity(Base):
     def test_a_blind_checker_is_named_by_tool_not_by_probe(self):
         """The actionable unit is the tool. Two probes missing on one tool
         is one blind tool, and a summary that says otherwise inflates."""
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         man = self.campaign()
         res = sens.summarise(man)
         for name in res["blind_checkers"]:
@@ -3334,7 +3334,7 @@ class TestSensitivity(Base):
         Adding a checker without a probe must create a red row; otherwise the
         newest checker is exactly the one a hand-maintained probe map omits.
         """
-        from hwb import commands, sensitivity as sens
+        from harness_workbench import commands, sensitivity as sens
         man = self.campaign()
         reported = {r["checker"] for r in man["probes"]}
         universe = set(commands.public_verdict_engines())
@@ -3346,7 +3346,7 @@ class TestSensitivity(Base):
     def test_a_metadata_registered_verdict_command_is_automatically_unprobed(self):
         from unittest import mock
         from types import SimpleNamespace
-        from hwb import cli, commands, sensitivity as sens
+        from harness_workbench import cli, commands, sensitivity as sens
 
         rec = self.run_spec(["freeze", "timing"], name="sens-new.json")
         added = {"new-verdict": {"help": "new public verdict",
@@ -3369,7 +3369,7 @@ class TestSensitivity(Base):
 
     def _boundary_probe(self, probe, patch_target, replacement, tag):
         from unittest import mock
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
 
         rec = self.run_spec(["freeze", "timing"], name="sens-%s.json" % tag)
         work = os.path.join(self.tmp, "boundary-%s" % tag)
@@ -3379,37 +3379,37 @@ class TestSensitivity(Base):
         self.assertEqual(verdict, sens.MISSED, detail)
 
     def test_blast_probe_fails_when_survival_acquisition_is_disabled(self):
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
 
         self._boundary_probe(
             sens._probe_blast_broken_survival,
-            "hwb.blast._survival",
+            "harness_workbench.blast._survival",
             lambda *a, **k: {"completed": True, "conforms": True,
                              "others_intact": True, "steps_retained": True},
             "blast")
 
     def test_catch_probe_fails_when_drift_acquisition_is_disabled(self):
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
 
         self._boundary_probe(
             sens._probe_catch_missed_declared_drift,
-            "hwb.catch._drift_reported", lambda record: None, "catch")
+            "harness_workbench.catch._drift_reported", lambda record: None, "catch")
 
     def test_efficacy_probe_fails_when_difference_classifier_is_disabled(self):
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
 
         self._boundary_probe(
             sens._probe_efficacy_surviving_opposite,
-            "hwb.efficacy._differs",
+            "harness_workbench.efficacy._differs",
             lambda *a, **k: (True, "false kill from disabled classifier"),
             "efficacy")
 
     def test_steady_probe_fails_when_pair_classifier_is_disabled(self):
-        from hwb import sensitivity as sens, steady
+        from harness_workbench import sensitivity as sens, steady
 
         self._boundary_probe(
             sens._probe_steady_moving_baseline,
-            "hwb.steady.compare_pair",
+            "harness_workbench.steady.compare_pair",
             lambda *a, **k: {"verdict": steady.STABLE,
                              "moving_axes": [], "unallowed_axes": []},
             "steady")
@@ -3420,12 +3420,12 @@ class TestSensitivity(Base):
         Wired to the exit code so a blind checker can fail a script rather
         than needing someone to read the table.
         """
-        from hwb import cli
+        from harness_workbench import cli
         rec = self.run_spec(["freeze", "timing"], name="sens3.json")
         code = cli.main(["--root", self.runs,
                          "--sensitivity", os.path.join(self.tmp, "sens3"),
                          "sensitivity", rec["run_id"]])
-        from hwb import sensitivity as sens
+        from harness_workbench import sensitivity as sens
         man = sens.campaign(self.runs, rec["run_id"],
                             os.path.join(self.tmp, "sens3b"))
         expected = 1 if sens.summarise(man)["missed"] else 0
@@ -3498,7 +3498,7 @@ class TestRedact(Base):
         declared channel into the record, so the only way to say what it
         changed is to reach through ctx -- and that is a breach. The honest
         version of this feature is the one that fails the check."""
-        from hwb import confine
+        from harness_workbench import confine
         rec = self.run_leaky(self.cfg(report=True), "r4.json")
         res = confine.assess(os.path.join(self.runs, rec["run_id"]))
         row = [r for r in res["features"] if r["feature"] == "redact"][0]
@@ -3511,7 +3511,7 @@ class TestRedact(Base):
         it does not attribute filesystem writes. Calling this clean is scoped
         to that relation and must not be worded as filesystem confinement.
         """
-        from hwb import confine
+        from harness_workbench import confine
         rec = self.run_leaky(self.cfg(), "r5.json")
         self.assertNotIn(self.SECRET.encode(), self.captured(rec))
         res = confine.assess(os.path.join(self.runs, rec["run_id"]))
@@ -3520,7 +3520,7 @@ class TestRedact(Base):
 
     def test_final_attempt_describes_the_rewritten_artifact(self):
         """Close-time descriptors are over final bytes, not capture-time bytes."""
-        from hwb.canon import digest_file
+        from harness_workbench.canon import digest_file
 
         rec = self.run_leaky(self.cfg(), "r6.json")
         d = os.path.join(self.runs, rec["run_id"])
@@ -3545,8 +3545,8 @@ class TestRedact(Base):
         """
         import io
         from contextlib import redirect_stdout
-        from hwb import cli, interrupt
-        from hwb.canon import canon_bytes
+        from harness_workbench import cli, interrupt
+        from harness_workbench.canon import canon_bytes
 
         rec = self.run_leaky(self.cfg(), "legacy-redaction.json")
         d = os.path.join(self.runs, rec["run_id"])
@@ -3631,7 +3631,7 @@ class TestRedact(Base):
         differences, so a feature whose whole effect is in the captured bytes
         was killed with an empty detail -- a verdict with no reason attached.
         """
-        from hwb import efficacy
+        from harness_workbench import efficacy
         # The same configuration twice, so nothing in the harness fields can
         # differ, and then ONLY the captured bytes are perturbed. Comparing a
         # redacted run against an unredacted one would not test this: those
@@ -3650,8 +3650,25 @@ class TestRedact(Base):
         self.assertIn("output", why)
 
 
+class TestPackageIdentity(unittest.TestCase):
+    """Distribution, import package, and command are deliberately distinct."""
+
+    def test_declared_identity_has_no_legacy_import_namespace(self):
+        project = read_text(os.path.join(ROOT, "pyproject.toml"))
+        self.assertIn('name = "harness-workbench"', project)
+        self.assertIn('hwb = "harness_workbench.cli:main"', project)
+        self.assertIn('harness_workbench = ["builtin/*/*.py", '
+                      '"builtin/*/FEATURE.json"]', project)
+        self.assertTrue(os.path.isfile(
+            os.path.join(ROOT, "src", "harness_workbench", "__init__.py")))
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "src", "hwb")))
+
+    def test_builtin_locator_uses_the_import_namespace(self):
+        self.assertEqual(features.BUILTIN, "harness_workbench:builtin")
+
+
 class TestBuiltinFeatures(Base):
-    """`pip install hwb` ships a feature tree, opted into by name.
+    """The installed distribution ships an opt-in feature tree.
 
     The point of shipping them is that an installed tool can demonstrate
     itself: every measurement command exists to measure features, so a
@@ -3769,7 +3786,8 @@ class TestTheFirstRunDeadEnds(Base):
         self.assertIn(features.BUILTIN, msg)
 
     def test_an_unknown_feature_is_not_pointed_at_the_builtin_tree(self):
-        # Suggesting `hwb:builtin` for a name that is not in it would trade
+        # Suggesting `harness_workbench:builtin` for a name that is not in it
+        # would trade
         # one unwinnable error for a second one. It may LIST what ships;
         # it must not claim this name is there.
         msg = self._resolve_without_root("nosuch", "d2.json")
@@ -3786,7 +3804,7 @@ class TestTheFirstRunDeadEnds(Base):
         self.assertNotIn("__pycache__", features.builtin_names())
 
     def test_a_spec_handed_to_a_run_id_command_says_so(self):
-        from hwb import cli
+        from harness_workbench import cli
         p = os.path.join(self.tmp, "aspec.json")
         write(p, {"schema": "hwbspec/v0.1", "steps": [
             {"id": "01", "argv": ["/bin/echo", "x"]}]})
@@ -3799,13 +3817,13 @@ class TestTheFirstRunDeadEnds(Base):
         self.assertIn("confine", msg)
 
     def test_a_real_run_id_is_not_mistaken_for_a_spec(self):
-        from hwb import cli
+        from harness_workbench import cli
         rec = self.run_spec(["timing"], name="ok.json")
         args = cli.build_parser().parse_args(["confine", rec["run_id"]])
         self.assertIsNone(cli.misplaced_spec(args))
 
     def test_store_ids_are_opaque_components_not_paths(self):
-        from hwb import cli
+        from harness_workbench import cli
         for argv in (("show", "../outside"),
                      ("verify", "/absolute"),
                      ("diff", "good", "nested/run"),
@@ -3815,14 +3833,14 @@ class TestTheFirstRunDeadEnds(Base):
                 self.assertIsNotNone(cli.invalid_store_id(args))
 
     def test_unicode_store_id_remains_valid(self):
-        from hwb import cli
+        from harness_workbench import cli
         args = cli.build_parser().parse_args(["show", "実験-α"])
         self.assertIsNone(cli.invalid_store_id(args))
 
     def test_cli_rejects_traversal_before_dispatch(self):
         import io
         from contextlib import redirect_stderr
-        from hwb import cli
+        from harness_workbench import cli
         outside = os.path.join(self.tmp, "outside")
         os.makedirs(outside)
         write(os.path.join(outside, "record.json"), {})
@@ -3835,7 +3853,7 @@ class TestTheFirstRunDeadEnds(Base):
     def test_the_guard_covers_every_id_taking_command(self):
         # Enumerated from the parser rather than listed by hand, so a command
         # added later cannot quietly escape the check.
-        from hwb import cli
+        from harness_workbench import cli
         spec_takers = {"run", "sweep", "blast", "catch", "efficacy",
                        "steady", "effects", "interrupt"}
         sub = [a for a in cli.build_parser()._actions
@@ -3869,7 +3887,7 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
     """
 
     def test_the_command_split_is_the_one_the_parser_implements(self):
-        from hwb import cli
+        from harness_workbench import cli
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]
         actual_spec = set()
@@ -3898,7 +3916,7 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
 
     def test_the_seam_table_matches_the_dispatcher(self):
         text = doc("docs", "writing-a-feature.md")
-        from hwb import seams
+        from harness_workbench import seams
         for seam, powers in seams.SEAM_POWERS.items():
             self.assertIn("`%s`" % seam, text,
                           "the seam table omits %s" % seam)
@@ -3942,7 +3960,7 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
         cannot ship undocumented.
         """
         import re
-        source = open(os.path.join(DOCS, "src", "hwb", "spec.py"),
+        source = open(os.path.join(DOCS, "src", "harness_workbench", "spec.py"),
                       encoding="utf-8").read()
         read_by_loader = set(re.findall(r'raw\.get\("(\w+)"', source))
         read_by_loader |= set(re.findall(r'raw\["(\w+)"\]', source))
@@ -4011,7 +4029,7 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
 
     def test_documented_powers_are_the_live_ones(self):
         text = doc("docs", "writing-a-feature.md")
-        from hwb import seams
+        from harness_workbench import seams
         for power in seams.POWERS:
             self.assertIn("`%s`" % power, text)
         self.assertIn("dormant", text.lower(),
@@ -4199,7 +4217,7 @@ class TestTheDocumentedTranscriptsAreReal(unittest.TestCase):
     def _invoke(self, work, argv):
         env = dict(os.environ)
         env["PYTHONPATH"] = os.path.join(ROOT, "src")
-        proc = subprocess.run([sys.executable, "-m", "hwb"] + argv,
+        proc = subprocess.run([sys.executable, "-m", "harness_workbench"] + argv,
                               cwd=work, env=env,
                               stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT)

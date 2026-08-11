@@ -94,7 +94,7 @@ after the fact, a reach-through and a declared write are identical bytes.
 
 ### `features_source`
 
-Which of four routes supplied the code — `hwb:builtin`,
+Which of four routes supplied the code — `harness_workbench:builtin`,
 `spec:features_root`, `spec-adjacent`, or `env:HWB_FEATURES`. Recorded
 because "which code ran" is the most experiment-changing fact about a run,
 and the digest tells you *what* it was without telling you *where it came

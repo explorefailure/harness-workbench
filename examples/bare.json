@@ -1,7 +1,7 @@
 {
   "schema": "hwbspec/v0.1",
   "run_class": "discovery",
-  "features_root": "hwb:builtin",
+  "features_root": "harness_workbench:builtin",
   "features": [],
   "env": [
     "HOME"

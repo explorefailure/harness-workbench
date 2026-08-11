@@ -25,7 +25,7 @@ imported, for the same reason. If you want a matrix, write a generator that
 {
   "schema": "hwbspec/v0.1",
   "run_class": "discovery",
-  "features_root": "hwb:builtin",
+  "features_root": "harness_workbench:builtin",
   "features": [
     {"name": "retry", "config": {"max": 3}},
     {"name": "timing"}
@@ -130,7 +130,7 @@ load, naming the culprit.
 | value | resolves to |
 |---|---|
 | absent | `<spec dir>/features` |
-| `"hwb:builtin"` | the six features shipped inside the package |
+| `"harness_workbench:builtin"` | the six features shipped inside the package |
 | any other string | that path, **relative to the spec** |
 
 It resolves relative to the spec, like `inputs`, so it travels with the file

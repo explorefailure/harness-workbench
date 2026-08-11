@@ -330,7 +330,7 @@ before you trust any of it very far.
 ## When you outgrow the local directory
 
 `features_root` is `<spec dir>/features` until you say otherwise. Set it to
-`"hwb:builtin"` to use the shipped features, or to any path — resolved relative
+`"harness_workbench:builtin"` to use the shipped features, or to any path — resolved relative
 to the spec, so it travels with the file. It is digested into the spec's
 identity, because which code runs is the most experiment-changing fact about a
 run.

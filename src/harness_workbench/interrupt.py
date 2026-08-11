@@ -254,7 +254,8 @@ def _terminate(proc: subprocess.Popen) -> Tuple[bytes, bytes, bool]:
 
 
 def _command(spec_path: str, runs_root: str) -> List[str]:
-    return [sys.executable, "-m", "hwb", "--root", os.path.abspath(runs_root),
+    return [sys.executable, "-m", "harness_workbench", "--root",
+            os.path.abspath(runs_root),
             "run", os.path.abspath(spec_path)]
 
 

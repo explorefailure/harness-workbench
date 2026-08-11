@@ -172,7 +172,7 @@ def features_root(spec_dir: str, declared: Optional[str] = None) -> str:
     return os.path.join(spec_dir, "features")
 
 
-BUILTIN = "hwb:builtin"
+BUILTIN = "harness_workbench:builtin"
 
 
 def builtin_root() -> str:
@@ -217,17 +217,20 @@ def unresolved_message(name: str, root: str) -> str:
     route, which travels with the spec and is digested.
 
     Only suggested when the name actually exists in the builtin tree.
-    Pointing someone at `hwb:builtin` for a feature that is not in it trades
+    Pointing someone at `harness_workbench:builtin` for a feature that is not
+    in it trades
     one unwinnable error for a second one.
     """
     msg = "feature %r not found under %s" % (name, root)
     builtins = builtin_names()
     if name in builtins:
         return (msg + "\n       it ships with hwb -- add "
-                '"features_root": "hwb:builtin" to the spec to use it')
+                '"features_root": "harness_workbench:builtin" to the spec '
+                'to use it')
     if builtins:
         return (msg + "\n       features shipped with hwb: %s"
-                '\n       (declare "features_root": "hwb:builtin" to use those)'
+                '\n       (declare "features_root": '
+                '"harness_workbench:builtin" to use those)'
                 % ", ".join(builtins))
     return msg
 

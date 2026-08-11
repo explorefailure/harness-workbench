@@ -42,7 +42,7 @@ PATH — commonly `~/Library/Python/3.9/bin` on macOS, `~/.local/bin` on Linux.
 Either add it, or skip the problem entirely:
 
 ```console
-$ python3 -m hwb --help   # equivalent, always works
+$ python3 -m harness_workbench --help   # equivalent, always works
 ```
 
 A virtualenv avoids it as well, and is the recommended way to try this out.
@@ -91,7 +91,7 @@ them by name and never gets them by accident.
 ```json
 {
   "schema": "hwbspec/v0.1",
-  "features_root": "hwb:builtin",
+  "features_root": "harness_workbench:builtin",
   "features": [
     {"name": "retry", "config": {"max": 3}},
     {"name": "timing"}

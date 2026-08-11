@@ -25,7 +25,7 @@ Point a spec at the directory containing it:
 `features_root` resolves **relative to the spec**, like `steps[].inputs`, so
 it travels with the file rather than with whoever invoked it. It is digested
 into the spec's identity, because which code runs is the most
-experiment-changing thing in the file. `"hwb:builtin"` selects the features
+experiment-changing thing in the file. `"harness_workbench:builtin"` selects the features
 shipped inside the installed package; absent, the default is
 `<spec dir>/features`. Full spec reference: [`the-spec.md`](the-spec.md).
 
