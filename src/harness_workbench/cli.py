@@ -12,7 +12,7 @@ import os
 import sys
 from typing import List, Optional
 
-from . import (blast as blastmod, catch as catchmod, commands,
+from . import (__version__, blast as blastmod, catch as catchmod, commands,
                confine as confmod,
                conform, diff as diffmod, efficacy as effmod,
                effects as effectsmod, features,
@@ -739,6 +739,8 @@ def cmd_confine(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hwb", description="run things, record what happened")
+    p.add_argument("--version", action="version",
+                   version="%(prog)s " + __version__)
     p.add_argument("--root", default=DEFAULT_ROOT, help="run store (default: ./runs)")
     p.add_argument("--sweeps", default=DEFAULT_SWEEPS,
                    help="sweep store (default: ./sweeps; disjoint from run "

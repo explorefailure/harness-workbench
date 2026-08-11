@@ -70,6 +70,15 @@ jobs:
       - name: Inspect artifact contents and version agreement
         run: python tools/verify_release_artifacts.py dist
 
+      - name: Generate and verify artifact checksums
+        run: |
+          python tools/release_checksums.py write dist
+          python tools/release_checksums.py check dist
+
+      - name: Verify release tag agrees with package version
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: python tools/verify_release_tag.py "$GITHUB_REF_NAME"
+
       - name: Install and exercise wheel in a clean environment
         run: python tools/verify_installed_artifact.py dist/*.whl
 

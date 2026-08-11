@@ -55,6 +55,9 @@ def main() -> None:
             "print(p.__version__)"
         )
         run([python, "-c", version_check], cwd=work, env=env)
+        version = run([hwb, "--version"], cwd=work, env=env)
+        if version.stdout.strip() != "hwb " + artifact_version(python, work, env):
+            raise SystemExit("hwb --version disagrees with installed metadata")
         run([hwb, "--help"], cwd=work, env=env)
         run([python, "-m", "harness_workbench", "--help"], cwd=work, env=env)
 
@@ -75,6 +78,16 @@ def main() -> None:
         run([hwb, "show", run_id], cwd=work, env=env)
         run([hwb, "verify", run_id], cwd=work, env=env)
         print(f"verified installed artifact {artifact.name} with run {run_id}")
+
+
+def artifact_version(python: str, cwd: Path, env: dict[str, str]) -> str:
+    completed = run(
+        [python, "-c", "import importlib.metadata as m; "
+         "print(m.version('harness-workbench'))"],
+        cwd=cwd,
+        env=env,
+    )
+    return completed.stdout.strip()
 
 
 if __name__ == "__main__":

@@ -15,7 +15,9 @@ damage was contained, invert a feature's decision and check anything
 downstream noticed, perturb the inputs and check a detector fires, mutate a
 record and check the checkers still reject it.
 
-Status: **v0.1.0.** Zero runtime dependencies, Python 3.11+, 300 tests.
+Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
+candidate has not been published. Zero runtime dependencies, Python 3.11+,
+310 tests.
 
 ---
 
@@ -35,6 +37,8 @@ test suite has no network references at all. Start with
 
 ```console
 $ pip install .           # from a clone
+$ hwb --version
+hwb 0.1.0rc1
 ```
 
 **If `hwb` is not found afterwards**, the script went somewhere not on your
@@ -226,6 +230,11 @@ python3 -m build
 python3 -m twine check --strict dist/*
 python3 tools/verify_release_artifacts.py dist
 ```
+
+Maintainers should use the complete, fail-closed candidate and final-release
+procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,
+tag/version agreement, and checksums. Building an archive is not by itself a
+release.
 
 It includes a deterministic, stdlib-only generated corpus for the JSON,
 spec, feature-manifest, conformance, and partial-close boundaries. The fixed
