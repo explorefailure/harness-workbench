@@ -183,9 +183,12 @@ checked on return — which no handler can fake. See
 ## `replicates`
 
 `"replicates": "<run id>"` asserts this run re-executes an existing one.
-Validated at load, because an unchecked claim reads as provenance and carries
-none:
+Its identifier shape is validated while the spec loads; the relationship is
+validated during run setup, before a run directory is created. An unchecked
+claim reads as provenance and carries none:
 
+- the id must be one opaque, non-empty filesystem component — Unicode is
+  valid; absolute paths, `/`, `\\`, `.` and `..` are not,
 - the target must exist,
 - it must share this spec's digest — otherwise it reproduces something else,
 - it must not itself be a replicate. **No chains**: a claim about a claim

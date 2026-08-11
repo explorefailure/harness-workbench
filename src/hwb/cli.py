@@ -909,6 +909,25 @@ def misplaced_spec(args) -> Optional[str]:
     return None
 
 
+def invalid_store_id(args) -> Optional[str]:
+    """Reject identifiers that could resolve outside their store.
+
+    These are opaque ids produced by hwb, never paths.  Keep this beside the
+    central argument-kind guard so every id-taking command gets the same
+    portable component rule before its implementation joins the value to a
+    store root.
+    """
+    for name in ID_ARGS:
+        val = getattr(args, name, None)
+        if val is None:
+            continue
+        try:
+            specmod._safe_component(val, name.replace("_", " "))
+        except specmod.SpecError as e:
+            return str(e)
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
@@ -918,4 +937,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if bad:
         sys.stderr.write("hwb: %s\n" % bad)
         return 2
+    bad = invalid_store_id(args)
+    if bad:
+        return _fail(bad)
     return args.func(args)

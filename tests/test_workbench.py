@@ -886,6 +886,38 @@ class TestReplicates(Base):
         rec = self.run_path(self.spec_rep("base.json", first["run_id"]))
         self.assertEqual(rec["replicates"], first["run_id"])
 
+    def test_unicode_run_id_is_an_opaque_valid_component(self):
+        first = self.run_path(self.spec_rep("unicode.json", None))
+        unicode_id = "実験-α"
+        os.rename(os.path.join(self.runs, first["run_id"]),
+                  os.path.join(self.runs, unicode_id))
+        rec = self.run_path(self.spec_rep("unicode.json", unicode_id))
+        self.assertEqual(rec["replicates"], unicode_id)
+
+    def test_replicates_rejects_unsafe_components_at_spec_load(self):
+        for i, value in enumerate(("", ".", "..", "../outside", "/absolute",
+                                   "nested/run", "nested\\run", 3, True, [])):
+            with self.subTest(value=value):
+                path = self.spec_rep("unsafe-%d.json" % i, value)
+                with self.assertRaises(specmod.SpecError) as cm:
+                    specmod.load(path)
+                self.assertIn("replicates", str(cm.exception))
+
+    def test_direct_spec_cannot_read_an_outside_sibling_record(self):
+        # validate_replicates is also a use boundary: even a caller that
+        # bypasses load() must not turn a claim into a path traversal.
+        path = self.spec_rep("direct.json", None)
+        raw = json.loads(read_text(path))
+        raw["replicates"] = "../outside"
+        direct = specmod.Spec(path, raw)
+        outside = os.path.join(os.path.dirname(self.runs), "outside")
+        os.makedirs(outside)
+        write(os.path.join(outside, "record.json"),
+              {"spec_digest": direct.digest, "replicates": None})
+        with self.assertRaises(specmod.SpecError) as cm:
+            specmod.validate_replicates(direct, self.runs)
+        self.assertIn("filesystem-safe", str(cm.exception))
+
     def test_replicates_a_missing_run_is_rejected(self):
         with self.assertRaises(runner.HarnessError) as cm:
             self.run_path(self.spec_rep("m.json", "20990101T000000Z-dead-beef"))
@@ -3437,6 +3469,34 @@ class TestTheFirstRunDeadEnds(Base):
         rec = self.run_spec(["timing"], name="ok.json")
         args = cli.build_parser().parse_args(["confine", rec["run_id"]])
         self.assertIsNone(cli.misplaced_spec(args))
+
+    def test_store_ids_are_opaque_components_not_paths(self):
+        from hwb import cli
+        for argv in (("show", "../outside"),
+                     ("verify", "/absolute"),
+                     ("diff", "good", "nested/run"),
+                     ("interfere", "nested\\sweep")):
+            with self.subTest(argv=argv):
+                args = cli.build_parser().parse_args(list(argv))
+                self.assertIsNotNone(cli.invalid_store_id(args))
+
+    def test_unicode_store_id_remains_valid(self):
+        from hwb import cli
+        args = cli.build_parser().parse_args(["show", "実験-α"])
+        self.assertIsNone(cli.invalid_store_id(args))
+
+    def test_cli_rejects_traversal_before_dispatch(self):
+        import io
+        from contextlib import redirect_stderr
+        from hwb import cli
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        write(os.path.join(outside, "record.json"), {})
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = cli.main(["--root", self.runs, "show", "../outside"])
+        self.assertEqual(code, 2)
+        self.assertIn("filesystem-safe", err.getvalue())
 
     def test_the_guard_covers_every_id_taking_command(self):
         # Enumerated from the parser rather than listed by hand, so a command

@@ -197,6 +197,10 @@ def load(path: str) -> Spec:
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v <= 0):
             raise SpecError("%s must be a positive integer, got %r" % (key, v))
 
+    replicates = raw.get("replicates")
+    if replicates is not None:
+        _safe_component(replicates, "replicates")
+
     return Spec(path, raw)
 
 
@@ -216,8 +220,9 @@ def validate_replicates(spec: Spec, root: str) -> None:
     target = spec.replicates
     if target is None:
         return
-    if not isinstance(target, str) or not target:
-        raise SpecError("replicates must be a run id string, got %r" % (target,))
+    # Keep the check at the use boundary as well as in load(): callers can
+    # construct Spec directly, and no unvalidated id may reach a path join.
+    target = _safe_component(target, "replicates")
 
     path = os.path.join(root, target, "record.json")
     if not os.path.isfile(path):
