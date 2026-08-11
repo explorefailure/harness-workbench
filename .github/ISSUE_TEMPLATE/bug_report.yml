@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible, non-sensitive problem with Harness Workbench.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Harness Workbench. Do not include secrets,
+        private data, exploit details, or a security proof of concept here. Report
+        vulnerabilities through the private route in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Harness Workbench version or commit
+      description: Paste `hwb --version` and, for a source checkout, the commit ID.
+      placeholder: hwb 0.1.0rc1 / abc1234
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Paste `python3 --version`.
+      placeholder: Python 3.12.8
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      description: Windows is not a supported platform.
+      options:
+        - Linux
+        - macOS
+        - Other POSIX system
+    validations:
+      required: true
+  - type: input
+    id: installation
+    attributes:
+      label: Installation method
+      placeholder: Wheel, source distribution, editable checkout, or source checkout
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List exact commands and include the smallest safe spec or fixture needed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include safe output or traceback text. Remove secrets and private data.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Public-report checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: This report contains no vulnerability details, secrets, or private data.
+          required: true

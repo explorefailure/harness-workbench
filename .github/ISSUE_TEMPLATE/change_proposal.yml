@@ -1,0 +1,48 @@
+name: Change proposal
+description: Discuss a larger feature or behavioral change before implementation.
+title: "[Proposal]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Larger changes should begin here before substantial implementation work.
+        Review is best effort and opening an issue is not a promise that a proposal
+        will be accepted. Security reports belong in the private route in SECURITY.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user or measurement problem without assuming a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: Explain the behavior, interface, or evidence model you would add or change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include existing commands or narrower changes that might solve the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and maintenance impact
+      description: Note affected Python/OS targets, schemas, records, commands, docs, and tests.
+    validations:
+      required: true
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Implementation intent
+      options:
+        - I can prepare a pull request after scope agreement
+        - I can help test or document it
+        - I am proposing the idea only
+    validations:
+      required: true

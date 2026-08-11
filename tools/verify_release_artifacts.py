@@ -65,8 +65,9 @@ def expected_package_files() -> set[str]:
 
 def expected_sdist_files() -> set[str]:
     expected = {
-        "CHANGELOG.md", "LICENSE", "MANIFEST.in", "NOTICE", "README.md",
-        "RELEASING.md", "SECURITY.md", "pyproject.toml",
+        "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "MANIFEST.in", "NOTICE",
+        "README.md", "RELEASING.md", "SECURITY.md", "SUPPORT.md",
+        "pyproject.toml",
     }
     expected.update(
         path.relative_to(ROOT).as_posix()

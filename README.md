@@ -17,7 +17,14 @@ record and check the checkers still reject it.
 
 Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
 candidate has not been published. Zero runtime dependencies, Python 3.11+,
-315 tests.
+318 tests.
+
+Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
+documentation, and tests are welcome for best-effort review; larger changes
+should start with an issue. There is no response, merge, compatibility, or
+support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
+process, [SUPPORT.md](SUPPORT.md) for public help, and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ---
 
@@ -240,6 +247,11 @@ $ python3 -m unittest discover -s tests
 ```
 
 The test suite is network-free and needs no model installed.
+
+Contributions are reviewed on a best-effort basis. Use GitHub Issues for usage
+questions and non-sensitive bugs, and discuss larger changes there before
+substantial implementation. The complete posture and local checks are in
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
 
 Release tooling is pinned in the `release` extra so local and CI artifact
 checks use the same versions:

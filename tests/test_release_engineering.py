@@ -142,6 +142,59 @@ class TestReleaseSurfaces(unittest.TestCase):
         )
         self.assertIn("not a hostile-code sandbox", policy)
 
+    def test_public_project_posture_and_routes_are_explicit(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        support = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+
+        for link in ("CONTRIBUTING.md", "SUPPORT.md", "SECURITY.md"):
+            with self.subTest(link=link):
+                self.assertIn(f"]({link})", readme)
+        self.assertIn("actively developed, solo maintained", readme)
+        self.assertIn("best-effort\nreview", contributing)
+        self.assertIn("Larger changes should start with a GitHub issue", contributing)
+        self.assertIn("does not promise a response time, merge", contributing)
+        self.assertIn("usage questions and non-sensitive bug reports", support)
+        self.assertIn("no guaranteed\nresponse time", support)
+        self.assertIn("[SECURITY.md](SECURITY.md)", support)
+
+    def test_github_intake_routes_security_and_collects_bug_evidence(self):
+        issue_root = ROOT / ".github" / "ISSUE_TEMPLATE"
+        config = (issue_root / "config.yml").read_text(encoding="utf-8")
+        bug = (issue_root / "bug_report.yml").read_text(encoding="utf-8")
+        proposal = (issue_root / "change_proposal.yml").read_text(encoding="utf-8")
+        question = (issue_root / "usage_question.yml").read_text(encoding="utf-8")
+        pull_request = (ROOT / ".github" / "pull_request_template.md").read_text(
+            encoding="utf-8"
+        )
+
+        private_route = (
+            "https://github.com/explorefailure/harness-workbench/"
+            "security/advisories/new"
+        )
+        self.assertIn(private_route, config)
+        self.assertIn("blank_issues_enabled: false", config)
+        for field_id in ("version", "python", "platform", "installation", "reproduction"):
+            with self.subTest(field_id=field_id):
+                self.assertIn(f"id: {field_id}", bug)
+        self.assertIn("Report\n        vulnerabilities through the private route", bug)
+        self.assertIn("Larger changes should begin here", proposal)
+        self.assertIn("Support is best effort", question)
+        self.assertIn("id: version", question)
+        self.assertIn("id: environment", question)
+        self.assertIn("Link the prior issue for a larger change", pull_request)
+        self.assertIn("security reports follow `SECURITY.md`", pull_request)
+
+    def test_handoff_documents_are_required_in_source_distribution(self):
+        manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+        verifier = (ROOT / "tools" / "verify_release_artifacts.py").read_text(
+            encoding="utf-8"
+        )
+        for name in ("CONTRIBUTING.md", "SUPPORT.md"):
+            with self.subTest(name=name):
+                self.assertIn(f"include {name}", manifest)
+                self.assertIn(f'"{name}"', verifier)
+
     def test_all_workflow_actions_are_official_and_pinned_to_full_shas(self):
         allowed = {
             "actions/checkout",
