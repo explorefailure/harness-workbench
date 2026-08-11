@@ -124,6 +124,82 @@ Try `hwb catch retry.json` to see the honest version of the other failure:
 `caught 0/3`, because that spec attaches no detector. A catch rate with
 nothing watching is not a low score, it is a missing subject.
 
+## Preflight a differential with `steady`
+
+Start from this directory. For a completely fresh walkthrough, remove the
+example's counter, `freeze` baseline, and generated stores:
+
+```sh
+cd examples/flaky
+rm -f .flaky-state stable.freeze.lock
+rm -rf runs steadies interrupts
+```
+
+The workload in `stable.json` is stateless, but its attached `freeze` feature
+deliberately keeps `stable.freeze.lock`. A cold `steady` run therefore exposes
+the one-time transition from "baseline created" to "baseline compared":
+
+```console
+$ hwb steady stable.json
+20260811T195748Z-06cb19  UNSTABLE
+```
+
+That exit status is 1 and the moving axes are under `extras[freeze]`. It does
+not mean `stable.sh` produced changing output; it means the complete unchanged
+configuration, including feature state, moved during the three-run control.
+`steady` does not hide a warm-up.
+
+If the differential you intend to run starts only after `freeze` has a
+baseline, make that precondition explicit, discard the warm-up run evidence,
+and then measure:
+
+```sh
+rm -f stable.freeze.lock
+hwb run stable.json >/dev/null
+rm -rf runs steadies
+hwb steady stable.json
+```
+
+The last command now reports `stable`: all three retained runs saw the same
+feature state and stored output. Its manifest is
+`steadies/<campaign id>/campaign.json`; the three runs themselves are under
+`runs/`. This proves stability only for the observed axes and this declared
+warm state, not determinism of undeclared dependencies.
+
+## Interrupt the close sequence
+
+Use the same small stateless spec because `interrupt` starts nine children:
+eight named lifecycle checkpoints and one uninterrupted control.
+
+```sh
+rm -rf runs interrupts
+```
+
+```console
+$ hwb interrupt stable.json
+20260811T195749Z-f0e101  passed
+checkpoint protocol: atomic-marker-then-direct-child-terminate/0.1
+
+CHECKPOINT                     EXPECTED     OBSERVED     CHILD      SIGNAL
+before_run_directory           absent       absent       signal     SIGTERM
+run_directory_created          incomplete   incomplete   signal     SIGTERM
+inputs_preserved               incomplete   incomplete   signal     SIGTERM
+attempt_artifacts_written      incomplete   incomplete   signal     SIGTERM
+attempts_finalising_written    incomplete   incomplete   signal     SIGTERM
+attempts_finalised             incomplete   incomplete   signal     SIGTERM
+record_written                 recoverable  recoverable  signal     SIGTERM
+integrity_written              complete     complete     signal     SIGTERM
+uninterrupted_control          complete     complete     exited     -
+```
+
+`passed` says no earlier boundary masqueraded as complete and both positive
+controls closed cleanly. It does not cover a power cut or arbitrary crash
+point: the protocol terminates only the direct runner child after a named
+marker. The interrupted directories and the complete controls remain under
+`runs/`; the announced absent path and every retained inventory are recorded
+in `interrupts/<campaign id>/campaign.json`. Nothing is cleaned up or resumed
+automatically.
+
 ## Check the features behaved
 
 ```console

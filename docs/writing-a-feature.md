@@ -199,6 +199,22 @@ A crashing `observe`/`annotate` hook is recorded, the feature is disabled, and
 the run continues — an annotation defect cannot admit anything, so it must not
 be fatal. A crashing `wrap` fails the step, not the run.
 
+### Attempt artifacts are sealed after hooks
+
+`stdout.bin` and `stderr.bin` remain feature-writable through `after_step` and
+`after_run`. Only after every hook finishes does the recorder recompute each
+attempt's final byte counts and sha256 digests, replace the finalised attempt
+stream, and close the run. When `record.attempt_artifact_contract` is
+`attempt-artifacts/0.1`, conformance agreement proves the descriptors match the
+bytes finally stored. It does **not** identify which feature rewrote those
+bytes or prove that the write respected a declared power; use the separate
+confinement/effects evidence for those questions.
+
+Older records may omit `attempt_artifact_contract`. That absence is a legacy
+rule, not automatic corruption: their counts may describe capture-time bytes
+and their digests may be absent. The exact attempt fields and close sequence
+are in [`the-record.md`](the-record.md#attemptsjsonl).
+
 ## `intent`
 
 Say why the feature exists.

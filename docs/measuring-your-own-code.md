@@ -217,6 +217,31 @@ Run this before interpreting sweep, blast, catch, or efficacy. `UNSTABLE`
 means the control moved; `uninterpretable` means a refusal or missing output
 prevented the comparison. Neither is a weak pass.
 
+**Can a killed runner expose premature success?** Run `interrupt` after
+changing recorder close logic, feature hooks that rewrite stored attempt
+output, or readers that decide whether a run is complete. Point it at a small,
+stateless representative spec: it executes that spec nine times, once for each
+of eight lifecycle checkpoints and once as an uninterrupted control.
+
+```sh
+hwb interrupt mine.json
+```
+
+Read the four states literally: `absent` means no run directory exists;
+`incomplete` means some evidence exists without a conforming integrity-closed
+run; `recoverable` means conforming evidence is readable but not integrity
+closed or resumable; and `complete` means a conforming record plus a clean,
+exhaustive regular-file integrity inventory. Every created directory stays in
+the run store, including interrupted evidence; the campaign does not delete,
+repair, quarantine, or resume it.
+
+A pass is bounded evidence, not crash consistency in general. The marker
+selects named closed-file boundaries, and the parent terminates only its direct
+runner child. It does not cover intervals between checkpoints, power or kernel
+failure, storage-cache/`fsync` durability, descendants, or remote and IPC
+cleanup. The runnable nine-child walkthrough is in
+[`../examples/flaky/`](../examples/flaky/).
+
 **Does anything downstream consult it?** A feature can be perfectly well-behaved
 and completely inert.
 
@@ -269,12 +294,33 @@ SWEEP=$(hwb sweep mine.json | awk 'NR==1{print $1}')
 hwb interfere "$SWEEP"
 ```
 
-Six more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares
+**Do the verdict engines still reject a known bad case?** Run `sensitivity`
+after adding or changing a verdict engine, and before treating an all-green
+measurement suite as evidence. Give it a representative completed run with
+stored attempt output; two attached features let its interference and order
+probes reach their intended boundaries.
+
+```sh
+hwb sensitivity "$RUN"
+```
+
+The engine universe comes from the same public command metadata that registers
+the CLI. A new verdict engine without a probe therefore produces `UNPROBED`
+and a nonzero exit instead of disappearing from the coverage count. Record
+probes operate on copies and replay builds a fresh isolated fixture.
+Campaign-oriented probes may enter at the smallest production observation or
+classification boundary named in their `detail`; that proves the boundary
+rejects one known-red case, not that the whole acquisition protocol ran.
+
+At present a nonzero exit is expected even with full engine coverage: the
+preserved replay-output probe is a known `MISSED` result because replay drops
+the separate output-difference axis. Keep that failure visible; do not read
+`checker coverage` as all probes passing.
+
+Four more, each covered in [`measuring.md`](measuring.md): `hwb diff` compares
 two runs and reports what it masked · `hwb verify` asks whether the record was
 edited · `hwb fidelity` asks what can still be answered from the run directory
-alone · `hwb sensitivity` checks the checkers themselves still fire ·
-`hwb interrupt` terminates the runner at named close boundaries · `hwb replay`
-re-executes from the preserved spec.
+alone · `hwb replay` re-executes from the preserved spec.
 
 And read [what the instrument cannot see](measuring.md#what-the-instrument-cannot-see)
 before you trust any of it very far.
@@ -296,5 +342,6 @@ run.
 | [`the-spec.md`](the-spec.md) | every spec field, the bounds, the digest rule |
 | [`writing-a-feature.md`](writing-a-feature.md) | manifest contract, seams, powers, capabilities, `inverts` |
 | [`the-record.md`](the-record.md) | reading a run with nothing but `cat` |
+| [`campaign-manifests.md`](campaign-manifests.md) | exact campaign stores, schemas, fields, verdicts, and limits |
 | [`measuring.md`](measuring.md) | every campaign, what its verdict means, and its limits |
 | [`../examples/flaky/`](../examples/flaky/) | all of the above, worked, with no model |

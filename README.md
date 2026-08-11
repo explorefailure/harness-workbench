@@ -181,6 +181,7 @@ Two kinds, and mixing them up is the most common first mistake:
 | [`examples/flaky/`](examples/flaky/) | a worked example, no model required |
 | [`docs/the-spec.md`](docs/the-spec.md) | every spec field, the bounds, and the digest rule |
 | [`docs/the-record.md`](docs/the-record.md) | what a run directory contains and how to read it without `hwb` |
+| [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
 

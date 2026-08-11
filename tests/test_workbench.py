@@ -3776,6 +3776,7 @@ DOC_FILES = (
     "README.md",
     os.path.join("docs", "measuring.md"),
     os.path.join("docs", "measuring-your-own-code.md"),
+    os.path.join("docs", "campaign-manifests.md"),
     os.path.join("docs", "the-record.md"),
     os.path.join("docs", "the-spec.md"),
     os.path.join("docs", "writing-a-feature.md"),
@@ -3794,6 +3795,8 @@ REGISTERED_TRANSCRIPTS = {
     "hwb run noretry.json": {"cwd": _FLAKY},
     "hwb run retry.json": {"cwd": _FLAKY},
     "hwb catch stable.json": {"cwd": _FLAKY},
+    "hwb steady stable.json": {"cwd": _FLAKY, "exit": 1},
+    "hwb interrupt stable.json": {"cwd": _FLAKY},
     "hwb sweep stable.json": {"cwd": _FLAKY},
     "hwb steady noretry.json": {"cwd": _FLAKY, "exit": 1},
     # measuring-your-own-code.md. `examples/attaching/` holds exactly the files

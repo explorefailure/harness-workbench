@@ -11,6 +11,7 @@ is a relation, which is why none of them needs labels.
 
 Reference for what these read and write:
 [`the-spec.md`](the-spec.md) · [`the-record.md`](the-record.md) ·
+[`campaign-manifests.md`](campaign-manifests.md) ·
 [`writing-a-feature.md`](writing-a-feature.md).
 
 ## The two kinds of command
