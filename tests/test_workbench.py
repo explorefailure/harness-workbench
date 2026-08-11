@@ -3443,6 +3443,69 @@ class TestRedact(Base):
                          runner.ATTEMPT_ARTIFACT_CONTRACT)
         self.assertValidRecord(rec)
 
+    def test_pre_sealing_redaction_remains_complete_and_readable(self):
+        """Legacy counts described capture, before a wrap rewrote the bytes.
+
+        This is the historical failure shape: redaction made the final stdout
+        artifact smaller, the old attempt retained its provisional byte count,
+        no artifact contract or stream digests claimed final sealing, and the
+        integrity inventory was clean. Readers must keep the store witness
+        without upgrading that old count into a final-size assertion.
+        """
+        import io
+        from contextlib import redirect_stdout
+        from hwb import cli, interrupt
+        from hwb.canon import canon_bytes
+
+        rec = self.run_leaky(self.cfg(), "legacy-redaction.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        attempts_path = os.path.join(d, "attempts.jsonl")
+        ats = [json.loads(line) for line in read_text(attempts_path).splitlines()
+               if line.strip()]
+
+        captured = ("token %s\nagain %s\n" %
+                    (self.SECRET, self.SECRET)).encode("utf-8")
+        final = self.captured(rec)
+        self.assertLess(len(final), len(captured))
+        rec.pop("attempt_artifact_contract")
+        ats[0]["stdout_bytes"] = len(captured)
+        for attempt in ats:
+            attempt.pop("stdout_digest")
+            attempt.pop("stderr_digest")
+
+        with open(os.path.join(d, "record.json"), "wb") as fh:
+            fh.write(canon_bytes(rec))
+        with open(attempts_path, "w", encoding="utf-8") as fh:
+            for attempt in ats:
+                fh.write(json.dumps(attempt, sort_keys=True) + "\n")
+        runner._write_integrity(d)
+
+        self.assertEqual(runner.verify(d)["state"], "clean")
+        conform.validate_record(rec, ats, run_dir=d)  # must not raise
+        self.assertEqual(interrupt.inspect_state(d)["state"],
+                         interrupt.COMPLETE)
+
+        shown = io.StringIO()
+        with redirect_stdout(shown):
+            self.assertEqual(cli.main(["--root", self.runs, "show",
+                                       rec["run_id"]]), 0)
+        self.assertIn("lifecycle complete", shown.getvalue())
+
+        verified = io.StringIO()
+        with redirect_stdout(verified):
+            self.assertEqual(cli.main(["--root", self.runs, "verify",
+                                       rec["run_id"]]), 0)
+        self.assertIn("complete", verified.getvalue())
+        self.assertIn("conforms: yes", verified.getvalue())
+
+        with self.assertRaisesRegex(conform.NonConforming, "never collapsed"):
+            conform.validate_record(rec, [], run_dir=d)
+        os.remove(os.path.join(d, "steps", "01", "attempts", "0",
+                               "stderr.bin"))
+        with self.assertRaisesRegex(conform.NonConforming,
+                                    "has no stored stderr.bin"):
+            conform.validate_record(rec, ats, run_dir=d)
+
     def test_store_agreement_rejects_a_post_close_artifact_rewrite(self):
         """The descriptor is an invariant a reader can independently check."""
         rec = self.run_leaky(self.cfg(), "r6b.json")
@@ -3455,6 +3518,21 @@ class TestRedact(Base):
                if l.strip()]
         with self.assertRaisesRegex(conform.NonConforming,
                                     "records stdout_bytes"):
+            conform.validate_record(rec, ats, run_dir=d)
+
+    def test_sealed_attempt_requires_and_checks_its_digest(self):
+        rec = self.run_leaky(self.cfg(), "r6c.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        ats = [json.loads(line) for line
+               in read_text(os.path.join(d, "attempts.jsonl")).splitlines()
+               if line.strip()]
+
+        ats[0]["stdout_digest"] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(conform.NonConforming,
+                                    "records stdout_digest"):
+            conform.validate_record(rec, ats, run_dir=d)
+        ats[0].pop("stdout_digest")
+        with self.assertRaisesRegex(conform.NonConforming, "but lacks"):
             conform.validate_record(rec, ats, run_dir=d)
 
     def test_an_output_only_difference_states_its_reason(self):

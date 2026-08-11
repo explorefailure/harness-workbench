@@ -248,19 +248,26 @@ def _against_the_store(record: Dict[str, Any],
             if not os.path.isfile(path):
                 _bad("1", "%s#%s has no stored %s.bin"
                      % (attempt["step_id"], attempt["n"], stream))
-            if size_key in attempt and attempt[size_key] != os.path.getsize(path):
-                _bad("1", "%s#%s records %s=%s but %s.bin contains %s bytes"
-                     % (attempt["step_id"], attempt["n"], size_key,
-                        attempt[size_key], stream, os.path.getsize(path)))
-            if digest_key in attempt and attempt[digest_key] != digest_file(path):
-                _bad("1", "%s#%s records %s=%s but %s.bin digests to %s"
-                     % (attempt["step_id"], attempt["n"], digest_key,
-                        attempt[digest_key], stream, digest_file(path)))
-            if sealed == ATTEMPT_ARTIFACT_CONTRACT and \
-                    (size_key not in attempt or digest_key not in attempt):
-                _bad("1", "%s#%s is sealed under %s but lacks %s or %s"
-                     % (attempt["step_id"], attempt["n"], sealed,
-                        size_key, digest_key))
+            # Before attempt-artifacts/0.1, byte counts were captured before
+            # outer wrap hooks regained control and could rewrite the files.
+            # Their presence is therefore not a claim about final artifacts.
+            # Legacy runs still need both files and the directory/stream
+            # witness above; only a sealing contract makes descriptors final.
+            if sealed == ATTEMPT_ARTIFACT_CONTRACT:
+                if size_key in attempt and \
+                        attempt[size_key] != os.path.getsize(path):
+                    _bad("1", "%s#%s records %s=%s but %s.bin contains %s bytes"
+                         % (attempt["step_id"], attempt["n"], size_key,
+                            attempt[size_key], stream, os.path.getsize(path)))
+                if digest_key in attempt and \
+                        attempt[digest_key] != digest_file(path):
+                    _bad("1", "%s#%s records %s=%s but %s.bin digests to %s"
+                         % (attempt["step_id"], attempt["n"], digest_key,
+                            attempt[digest_key], stream, digest_file(path)))
+                if size_key not in attempt or digest_key not in attempt:
+                    _bad("1", "%s#%s is sealed under %s but lacks %s or %s"
+                         % (attempt["step_id"], attempt["n"], sealed,
+                            size_key, digest_key))
 
 
 def _self_attestation(r: Dict[str, Any]) -> None:
