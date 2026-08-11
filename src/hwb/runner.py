@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import threading
 import time
@@ -45,6 +46,7 @@ from .seams import Dispatcher
 RECORD_SCHEMA = "hwbrun/v0.1"
 SEAM_CONTRACT = "seams/0.2.0"
 ATTEMPT_ARTIFACT_CONTRACT = "attempt-artifacts/0.1"
+INTEGRITY_SCHEMA = "integrity/v0.1"
 
 # Private coordination used by the bounded interruption campaign.  This is
 # deliberately not a spec field or public run option: checkpoints are an
@@ -323,30 +325,76 @@ class Recorder:
 from . import features as featmod  # noqa: E402
 
 
+def _stored_inventory(run_dir: str) -> tuple[List[str], List[str]]:
+    """Return regular stored files and unsupported non-regular leaves.
+
+    Integrity binds bytes, so directories themselves are structural and are
+    not subjects. Symlinks, FIFOs, sockets, and devices do not have stable
+    stored-file bytes under this contract. They are never followed or opened:
+    their presence is reported separately and prevents a clean inventory.
+    """
+    regular: List[str] = []
+    unsupported: List[str] = []
+    pending = [os.path.abspath(run_dir)]
+    root = pending[0]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as cells:
+            entries = sorted(cells, key=lambda cell: cell.name)
+        for entry in entries:
+            rel = os.path.relpath(entry.path, root)
+            # The close-time manifest describes every other stored subject;
+            # it cannot recursively describe its own final bytes.
+            if rel == "integrity.json":
+                continue
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                pending.append(entry.path)
+            elif stat.S_ISREG(mode):
+                regular.append(rel)
+            else:
+                unsupported.append(rel)
+    return sorted(regular), sorted(unsupported)
+
+
 def _write_integrity(run_dir: str) -> None:
     """Tamper-EVIDENT, not tamper-proof. The owner can regenerate any
     baseline; what this catches is a record edited after the fact."""
-    files = {}
-    for dirpath, dirnames, filenames in os.walk(run_dir):
-        dirnames[:] = sorted(dirnames)
-        for fn in sorted(filenames):
-            if fn == "integrity.json":
-                continue
-            full = os.path.join(dirpath, fn)
-            files[os.path.relpath(full, run_dir)] = digest_file(full)
-    with open(os.path.join(run_dir, "integrity.json"), "wb") as fh:
-        fh.write(canon_bytes({"schema": "integrity/v0.1",
+    integrity_path = os.path.join(run_dir, "integrity.json")
+    if os.path.lexists(integrity_path):
+        mode = os.lstat(integrity_path).st_mode
+        if not stat.S_ISREG(mode):
+            raise HarnessError("integrity.json is not a regular stored file")
+    regular, unsupported = _stored_inventory(run_dir)
+    if unsupported:
+        raise HarnessError(
+            "integrity cannot close over non-regular stored path(s): %s"
+            % ", ".join(unsupported))
+    files = {rel: digest_file(os.path.join(run_dir, rel)) for rel in regular}
+    with open(integrity_path, "wb") as fh:
+        fh.write(canon_bytes({"schema": INTEGRITY_SCHEMA,
                               "written_at": _utc(), "files": files}))
 
 
 def verify(run_dir: str) -> Dict[str, Any]:
     path = os.path.join(run_dir, "integrity.json")
-    if not os.path.isfile(path):
+    empty = {"drifted": [], "missing": [], "untracked": [],
+             "unsupported": []}
+    if not os.path.lexists(path):
         return {"state": "baseline_missing", "drifted": [], "missing": [],
-                "untracked": [], "error": None}
+                "untracked": [], "unsupported": [], "error": None}
     try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise ValueError("integrity.json is not a regular stored file")
         with open(path, "r", encoding="utf-8") as fh:
             base = json.load(fh)
+        if not isinstance(base, dict):
+            raise ValueError("integrity baseline is not an object")
+        if base.get("schema") != INTEGRITY_SCHEMA:
+            raise ValueError("schema is %r, expected %r"
+                             % (base.get("schema"), INTEGRITY_SCHEMA))
+        if not isinstance(base.get("written_at"), str) or not base["written_at"]:
+            raise ValueError("written_at is missing or is not a non-empty string")
         files = base["files"]
         if not isinstance(files, dict):
             raise ValueError("files is not an object")
@@ -358,25 +406,29 @@ def verify(run_dir: str) -> Dict[str, Any]:
                 raise ValueError("integrity path escapes the run directory: %r" % rel)
     except (OSError, ValueError, KeyError, TypeError) as e:
         return {"state": "baseline_invalid", "drifted": [], "missing": [],
-                "untracked": [], "error": str(e)}
+                "untracked": [], "unsupported": [], "error": str(e)}
+    try:
+        regular, unsupported = _stored_inventory(run_dir)
+    except OSError as e:
+        return {"state": "baseline_invalid", **empty,
+                "error": "stored inventory could not be read: %s" % e}
+    actual = set(regular)
+    unsupported_set = set(unsupported)
     drifted, missing = [], []
     for rel, dig in sorted(files.items()):
         full = os.path.join(run_dir, rel)
-        if not os.path.isfile(full):
+        if rel in unsupported_set:
+            continue
+        if rel not in actual:
             missing.append(rel)
         elif digest_file(full) != dig:
             drifted.append(rel)
-    actual = set()
-    for dirpath, dirnames, filenames in os.walk(run_dir):
-        dirnames[:] = sorted(dirnames)
-        for fn in filenames:
-            full = os.path.join(dirpath, fn)
-            if fn != "integrity.json" and os.path.isfile(full):
-                actual.add(os.path.relpath(full, run_dir))
     untracked = sorted(actual - set(files))
-    state = "clean" if not drifted and not missing and not untracked else "drifted"
+    state = ("clean" if not drifted and not missing and not untracked
+             and not unsupported else "drifted")
     return {"state": state, "drifted": drifted, "missing": missing,
-            "untracked": untracked, "error": None}
+            "untracked": untracked, "unsupported": unsupported,
+            "error": None}
 
 
 # ---------------------------------------------------------------- the loop

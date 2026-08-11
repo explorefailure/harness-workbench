@@ -2521,6 +2521,75 @@ class TestInterruptions(Base):
         self.assertEqual(result["state"], "baseline_invalid")
         self.assertIn("escapes", result["error"])
 
+    def test_integrity_closure_metadata_is_required_before_clean(self):
+        from hwb import interrupt
+
+        rec = self.run_spec([], name="integrity-metadata.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        path = os.path.join(d, "integrity.json")
+        original = read(path)
+        mutations = (
+            ("missing schema", lambda value: value.pop("schema")),
+            ("wrong schema", lambda value: value.__setitem__(
+                "schema", "integrity/future")),
+            ("missing written_at", lambda value: value.pop("written_at")),
+        )
+        for label, mutate in mutations:
+            with self.subTest(case=label):
+                changed = json.loads(json.dumps(original))
+                mutate(changed)
+                write(path, changed)
+                verified = runner.verify(d)
+                self.assertEqual(verified["state"], "baseline_invalid")
+                self.assertIn(label.split()[-1], verified["error"])
+                self.assertEqual(interrupt.inspect_state(d)["state"],
+                                 interrupt.INCOMPLETE)
+        write(path, original)
+        self.assertEqual(runner.verify(d)["state"], "clean")
+
+    def test_directory_name_must_match_the_embedded_run_id(self):
+        from hwb import interrupt
+
+        rec = self.run_spec([], name="directory-identity.json")
+        original = os.path.join(self.runs, rec["run_id"])
+        renamed = os.path.join(self.runs, "renamed-valid-bytes")
+        shutil.copytree(original, renamed)
+
+        # Integrity is deliberately location-neutral: the stored bytes did
+        # not move. Store-backed conformance owns the directory identity.
+        self.assertEqual(runner.verify(renamed)["state"], "clean")
+        observed = interrupt.inspect_state(renamed)
+        self.assertEqual(observed["state"], interrupt.INCOMPLETE)
+        self.assertIn("does not match run directory", observed["reasons"][0])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX mkfifo")
+    def test_non_regular_nodes_prevent_a_clean_exhaustive_inventory(self):
+        from hwb import interrupt
+
+        rec = self.run_spec([], name="inventory-special.json")
+        d = os.path.join(self.runs, rec["run_id"])
+        fifo = os.path.join(d, "late.pipe")
+        os.mkfifo(fifo)
+
+        verified = runner.verify(d)
+        self.assertEqual(verified["state"], "drifted")
+        self.assertEqual(verified["unsupported"], ["late.pipe"])
+        self.assertEqual(interrupt.inspect_state(d)["state"],
+                         interrupt.INCOMPLETE)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX mkfifo")
+    def test_integrity_writer_refuses_non_regular_nodes_without_opening_them(self):
+        d = os.path.join(self.tmp, "special-close")
+        os.makedirs(d)
+        with open(os.path.join(d, "ordinary.txt"), "w", encoding="utf-8") as fh:
+            fh.write("ordinary")
+        os.mkfifo(os.path.join(d, "blocking.pipe"))
+
+        with self.assertRaisesRegex(runner.HarnessError,
+                                    "non-regular stored path"):
+            runner._write_integrity(d)
+        self.assertFalse(os.path.exists(os.path.join(d, "integrity.json")))
+
     def test_every_named_checkpoint_has_the_exact_expected_state(self):
         from hwb import interrupt
 

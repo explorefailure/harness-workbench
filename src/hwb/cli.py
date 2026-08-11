@@ -180,6 +180,8 @@ def cmd_verify(args) -> int:
         sys.stdout.write("  missing: %s\n" % f)
     for f in res.get("untracked", []):
         sys.stdout.write("  untracked: %s\n" % f)
+    for f in res.get("unsupported", []):
+        sys.stdout.write("  unsupported path type: %s\n" % f)
     if res.get("error"):
         sys.stdout.write("  integrity: invalid -- %s\n" % res["error"])
 

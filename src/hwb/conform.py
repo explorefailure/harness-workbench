@@ -191,6 +191,11 @@ def _against_the_store(record: Dict[str, Any],
 
     from .canon import digest_file
 
+    directory_id = os.path.basename(os.path.normpath(os.path.abspath(run_dir)))
+    if record["run_id"] != directory_id:
+        _bad("1", "record run_id %r does not match run directory %r"
+             % (record["run_id"], directory_id))
+
     # No early return when `steps/` is absent. It used to skip the whole
     # check, which meant a run where nothing executed was never compared
     # against the store at all -- so a fully fabricated attempt stream passed.

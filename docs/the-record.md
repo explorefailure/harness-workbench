@@ -189,18 +189,26 @@ for.
 
 ## `integrity.json`
 
-A sha256 per file in the run, written last:
+A sha256 per regular stored file in the run, written last:
 
 ```json
-{"files": {"record.json": "sha256:1447...", "spec.json": "sha256:cfec...",
+{"schema": "integrity/v0.1", "written_at": "2026-08-11T12:00:00.000Z",
+ "files": {"record.json": "sha256:1447...", "spec.json": "sha256:cfec...",
            "steps/check/attempts/0/stdout.bin": "sha256:898b..."}}
 ```
 
-`hwb verify` recomputes these and also rejects any file present in the run but
-absent from the inventory. It answers *"has this been edited since it was
-written"* — a different question from *"is what was written valid"*, which is
-conformance. **A record can be untampered and still malformed**, so `verify`
-reports both and neither implies the other.
+`hwb verify` first requires that exact schema, a non-empty string
+`written_at`, and an object-valued `files` inventory. It recomputes the
+digests and rejects any regular stored file absent from the inventory.
+Directories are structure, not digest subjects. Symlinks, FIFOs, sockets,
+devices, and other non-regular leaves are not followed or opened: they are
+reported as unsupported and prevent a clean result. The writer likewise
+refuses to close an integrity baseline while one is present.
+
+Integrity answers *"have the stored bytes changed since close"* — a different
+question from *"is what was written valid"*, which is conformance. **A record
+can be untampered and still malformed**, so `verify` reports both and neither
+implies the other.
 
 This is a tamper-evidence mechanism, not a tamper-proofing one. There is no
 key, so anyone who can edit the run can recompute the digests. It catches
@@ -218,8 +226,9 @@ run. The reader-side lifecycle oracle uses four states:
   `integrity.json` is absent. The evidence is readable; execution is not
   resumable and regenerating the baseline would not restore its original
   authority.
-- `complete`: the record conforms and `integrity.json` verifies every file in
-  the directory with no missing, edited, or untracked subjects.
+- `complete`: the record conforms, its embedded `run_id` matches its directory
+  name, and `integrity.json` verifies every regular stored file with no
+  missing, edited, untracked, or unsupported subjects.
 
 `hwb ls` lists every directory in the run store, including incomplete ones.
 `hwb show` prints retained inventory and exits 1 for incomplete state; it may

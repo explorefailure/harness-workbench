@@ -227,7 +227,9 @@ def _probe_conform_fabricated_attempt(runs_root: str, run_id: str,
     """
     from . import conform, diff as diffmod
 
-    d = _copy_run(runs_root, run_id, os.path.join(work, "F"))
+    # Store-backed conformance includes directory identity. Preserve it so
+    # this probe reaches the fabricated-attempt relation it claims to test.
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
     ap = os.path.join(d, "attempts.jsonl")
     if not os.path.isfile(ap):
         return ERRORED, "run has no attempts.jsonl"
@@ -241,7 +243,7 @@ def _probe_conform_fabricated_attempt(runs_root: str, run_id: str,
     with open(ap, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(ghost, sort_keys=True) + "\n")
 
-    record, attempts, _ = diffmod.load_run(work, "F")
+    record, attempts, _ = diffmod.load_run(work, run_id)
     try:
         conform.validate_record(record, attempts, run_dir=d)
     except conform.NonConforming as e:
@@ -262,7 +264,8 @@ def _probe_conform_swapped_digest(runs_root: str, run_id: str,
     """
     from . import conform, diff as diffmod
 
-    d = _copy_run(runs_root, run_id, os.path.join(work, "S"))
+    # Preserve store identity; the intended mutation is the digest claim.
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
     rp = os.path.join(d, "record.json")
     rec = _read_json(rp)
     if not rec.get("spec_digest"):
@@ -270,7 +273,7 @@ def _probe_conform_swapped_digest(runs_root: str, run_id: str,
     rec["spec_digest"] = "sha256:" + "0" * 64
     _write_json(rp, rec)
 
-    record, attempts, _ = diffmod.load_run(work, "S")
+    record, attempts, _ = diffmod.load_run(work, run_id)
     try:
         conform.validate_record(record, attempts, run_dir=d)
     except conform.NonConforming as e:
@@ -285,13 +288,14 @@ def _probe_conform_artifact_mismatch(runs_root: str, run_id: str,
     """An attempt descriptor whose stored stdout no longer satisfies it."""
     from . import conform, diff as diffmod
 
-    d = _copy_run(runs_root, run_id, os.path.join(work, "M"))
+    # Preserve store identity; the intended mutation is the artifact bytes.
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
     target = _first_stdout(d)
     if not target:
         return ERRORED, "run has no stored stdout to mutate"
     with open(target, "ab") as fh:
         fh.write(b"\nARTIFACT MOVED AFTER ITS DESCRIPTOR\n")
-    record, attempts, _ = diffmod.load_run(work, "M")
+    record, attempts, _ = diffmod.load_run(work, run_id)
     try:
         conform.validate_record(record, attempts, run_dir=d)
     except conform.NonConforming as e:
@@ -542,7 +546,9 @@ def _probe_interrupt_premature_complete(runs_root: str, run_id: str,
     """A conforming record whose integrity close never happened."""
     from . import interrupt
 
-    d = _copy_run(runs_root, run_id, os.path.join(work, "I"))
+    # The missing integrity close is the only intended mutation. Keeping the
+    # original basename prevents directory identity from masking that state.
+    d = _copy_run(runs_root, run_id, os.path.join(work, run_id))
     integrity = os.path.join(d, "integrity.json")
     if not os.path.isfile(integrity):
         return ERRORED, "subject run has no integrity.json to remove"

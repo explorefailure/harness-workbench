@@ -205,13 +205,17 @@ The state oracle is deliberately stricter than the record's own `status`:
 | `absent` | the announced run directory was not created | not listed; the campaign still records the announced path |
 | `incomplete` | evidence exists without a readable conforming record, or integrity disagrees | listed; `show` displays retained evidence and exits 1; `verify` exits 1 |
 | `recoverable` | a conforming completed record is readable but integrity has not closed | listed and readable, but `show`/`verify` exit 1; this does **not** mean resumable |
-| `complete` | conforming record plus clean exhaustive integrity inventory | listed; `show`/`verify` exit 0 |
+| `complete` | conforming record whose `run_id` matches its directory, plus a clean exhaustive regular-file integrity inventory | listed; `show`/`verify` exit 0 |
 
 The positive control at `integrity_written` proves a child can be terminated
 after all invariants exist and still classify complete. Every earlier row is a
 negative control against premature completion. A file added after integrity
 close is now `untracked` and prevents a clean result; integrity checks both the
-claimed entries and the complete stored file inventory.
+claimed entries and the complete regular stored-file inventory. The baseline
+must identify itself as `integrity/v0.1` and carry `written_at`. Non-regular
+nodes such as FIFOs and symlinks are never opened or followed; they are
+reported as unsupported and prevent `complete` rather than being silently
+excluded from an overbroad claim.
 
 **Bounded means bounded.** This is direct-child process termination, not power
 loss. It does not cover intervals between checkpoints, kernel or storage-cache

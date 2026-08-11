@@ -24,7 +24,9 @@ The state vocabulary is intentionally separate from ``record.status``:
     it does NOT mean execution can resume or the baseline can be regenerated
     with its original authority.
 ``complete``
-    The record conforms and an exhaustive integrity inventory verifies clean.
+    The record conforms to its named store directory and an exhaustive
+    regular-file integrity inventory verifies clean. Unsupported non-regular
+    nodes prevent this state.
 
 Nothing here deletes, repairs, quarantines, or resumes an interrupted run.
 """
@@ -389,7 +391,7 @@ def campaign(spec_path: str, runs_root: str, interrupt_root: str,
             ABSENT: "announced run directory does not exist",
             INCOMPLETE: "evidence exists without a conforming, integrity-closed run",
             RECOVERABLE: "conforming evidence is readable but integrity is not closed; not resumable",
-            COMPLETE: "conforming record plus clean exhaustive integrity inventory",
+            COMPLETE: "conforming record plus clean exhaustive regular-file integrity inventory",
         },
         "checkpoints": rows,
         "violations": violations,
