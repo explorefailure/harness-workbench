@@ -69,6 +69,7 @@ PUBLIC_VERDICT_ENGINES = (
     "interfere",
     "order",
     "replay",
+    "steady",
     "verify",
 )
 
@@ -445,6 +446,23 @@ def _probe_efficacy_surviving_opposite(runs_root: str, run_id: str,
     return DETECTED, "surviving opposite classified inert"
 
 
+def _probe_steady_moving_baseline(runs_root: str, run_id: str,
+                                  work: str) -> Tuple[str, str]:
+    """An unchanged-control series with an unallowed moving output axis."""
+    from . import steady
+
+    man = {"verdict": steady.UNSTABLE,
+           "run_ids": ["A", "B", "C"],
+           "comparisons": [{"verdict": steady.UNSTABLE}],
+           "moving_axes": ["output:steps/01/attempts/0/stdout.bin"],
+           "unallowed_axes": ["output:steps/01/attempts/0/stdout.bin"],
+           "setup_error": None}
+    res = steady.summarise(man)
+    if res["verdict"] != steady.UNSTABLE or not res["unallowed_axes"]:
+        return MISSED, "reduced a moving unallowed baseline without instability"
+    return DETECTED, "unallowed output axis classified unstable"
+
+
 def _probe_replay_changed_executable(runs_root: str, run_id: str,
                                      work: str) -> Tuple[str, str]:
     """Replay from unchanged declared inputs but a changed step executable.
@@ -535,6 +553,9 @@ PROBES: Dict[str, Tuple[str, Callable, bool, str]] = {
     "efficacy_surviving_opposite": (
         "efficacy", _probe_efficacy_surviving_opposite, False,
         "a well-formed opposite that changes nothing is an inert feature"),
+    "steady_moving_baseline": (
+        "steady", _probe_steady_moving_baseline, False,
+        "an unchanged control with an unallowed moving axis is unstable"),
     "replay_changed_executable": (
         "replay", _probe_replay_changed_executable, False,
         "a replay whose execution produces different output must not match"),

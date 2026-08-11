@@ -137,6 +137,7 @@ nothing but `cat`.
 ```console
 $ hwb confine <run id>        # did each feature use only its declared record channel
 $ hwb blast <spec>            # break a feature; was the damage contained
+$ hwb steady <spec>           # is the unchanged baseline stable enough to compare
 $ hwb efficacy <spec>         # invert a feature's decision; did anything notice
 $ hwb catch <spec>            # perturb declared inputs; did a detector fire
 $ hwb sensitivity <run id>    # does every verdict engine reject a known violation
@@ -158,7 +159,7 @@ what the instrument **cannot** see.
 
 Two kinds, and mixing them up is the most common first mistake:
 
-- **take a spec** — `run` `sweep` `blast` `catch` `efficacy`
+- **take a spec** — `run` `sweep` `blast` `catch` `steady` `efficacy`
 - **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
   `replay` `interfere` `order`
 

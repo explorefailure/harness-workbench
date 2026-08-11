@@ -17,7 +17,7 @@ Reference for what these read and write:
 
 | takes a spec | takes an id |
 |---|---|
-| `run` `sweep` `blast` `catch` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
+| `run` `sweep` `blast` `catch` `steady` `efficacy` | `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order` |
 
 The first group produces runs; the second interrogates them.
 
@@ -248,6 +248,49 @@ injected at anything watching" looks like.
 
 ---
 
+## Is the baseline stable enough to compare?
+
+### `hwb steady <spec>`
+
+Every differential attributes a changed run to its manipulation. That claim
+is uninterpretable if the unchanged control moves on its own. `steady` runs
+the exact same spec and resolved feature tree three times by default, keeps
+all three ordinary run directories, and compares the first against every
+later run on both axes `diff` exposes: harness structure and stored output.
+
+```console
+$ rm -f .flaky-state
+$ hwb steady noretry.json
+20260811T023500Z-a1b2c3  UNSTABLE
+runs: 20260811T023500Z-111111-aaaa, 20260811T023500Z-111111-bbbb, 20260811T023500Z-111111-cccc
+allowance: (none)
+...
+  MOVED   output:steps/check/attempts/0/stdout.bin
+...
+  MOVED   harness:steps[check].exits
+  MOVED   output:steps/check/attempts/0/stderr.bin
+  MOVED   output:steps/check/attempts/0/stdout.bin
+```
+
+There is no rate and no majority vote. One unallowed moving axis makes the
+campaign `UNSTABLE`; a comparison refusal or unavailable output makes it
+`uninterpretable`; invalid setup exits separately without a stability
+verdict. Run IDs and exact moving axes are recorded in `campaign.json`.
+The manifest also pins the starting spec digest and resolved feature root;
+each run separately preserves the exact spec and feature source it executed.
+
+The variance allowance is empty by default. `--allow <exact-axis>` is
+repeatable and explicit; allowed motion is still recorded, never erased. A
+stable verdict with allowances therefore means *stable under those named
+allowances*, not deterministic in general.
+
+Unlike efficacy's internal control, standalone `steady` does not hide a
+warm-up run. Its first execution is evidence too, so a one-time state
+initialisation is reported as motion. Stabilise the workload deliberately if
+the downstream differential is meant to start after that transition.
+
+---
+
 ## Does a feature do anything at all?
 
 ### `hwb efficacy <spec>`
@@ -319,8 +362,8 @@ verify_tamper                verify    detected   drifted (drifted: record.json)
 
 * = positive control
 
-detected 12/13
-checker coverage: 11/11
+detected 13/14
+checker coverage: 12/12
 ```
 
 Record probes run on copies, verdict reducers receive deliberately red

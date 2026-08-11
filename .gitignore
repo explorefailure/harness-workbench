@@ -25,6 +25,7 @@ catches/
 efficacy/
 sensitivity/
 replays/
+steadies/
 
 # Measurement campaigns: real runs, reproducible, not source.
 /measure/

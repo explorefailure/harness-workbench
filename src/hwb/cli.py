@@ -15,7 +15,8 @@ from typing import List, Optional
 from . import (blast as blastmod, catch as catchmod, confine as confmod,
                conform, diff as diffmod, efficacy as effmod, features,
                fidelity as fidmod, replay as replaymod, runner,
-               sensitivity as sensmod, spec as specmod, sweep as sweepmod)
+               sensitivity as sensmod, spec as specmod, steady as steadymod,
+               sweep as sweepmod)
 
 DEFAULT_ROOT = os.environ.get("HWB_RUNS", "runs")
 DEFAULT_SWEEPS = os.environ.get("HWB_SWEEPS", "sweeps")
@@ -24,6 +25,7 @@ DEFAULT_CATCHES = os.environ.get("HWB_CATCHES", "catches")
 DEFAULT_SENS = os.environ.get("HWB_SENSITIVITY", "sensitivity")
 DEFAULT_EFFICACY = os.environ.get("HWB_EFFICACY", "efficacy")
 DEFAULT_REPLAYS = os.environ.get("HWB_REPLAYS", "replays")
+DEFAULT_STEADIES = os.environ.get("HWB_STEADIES", "steadies")
 
 
 def _fail(msg: str) -> int:
@@ -488,6 +490,35 @@ def cmd_efficacy(args) -> int:
     return 1 if (res["inert"] or res["malformed"]) else 0
 
 
+def cmd_steady(args) -> int:
+    try:
+        man = steadymod.campaign(args.spec, args.root, args.steadies,
+                                 repeats=args.repeats,
+                                 allowance=args.allow or [])
+    except steadymod.SteadyError as e:
+        return _fail(str(e))
+
+    res = steadymod.summarise(man)
+    sys.stdout.write("%s  %s\n" % (man["campaign_id"], res["verdict"]))
+    sys.stdout.write("runs: %s\n" % ", ".join(man["run_ids"]))
+    sys.stdout.write("allowance: %s\n" % (", ".join(man["allowance"]) or "(none)"))
+    for row in man["comparisons"]:
+        sys.stdout.write("\n%s vs %s  %s\n"
+                         % (row["run_a"], row["run_b"], row["verdict"]))
+        for axis in row["moving_axes"]:
+            tag = "allowed" if axis not in row["unallowed_axes"] else "MOVED"
+            sys.stdout.write("  %-7s %s\n" % (tag, axis))
+        if row["verdict"] == steadymod.UNINTERPRETABLE:
+            sys.stdout.write("  %s\n" % row["detail"])
+    if man["setup_error"]:
+        sys.stdout.write("\nSETUP ERROR: %s\n" % man["setup_error"])
+    if res["verdict"] == steadymod.STABLE:
+        return 0
+    if res["verdict"] == steadymod.UNSTABLE:
+        return 1
+    return 2
+
+
 def cmd_replay(args) -> int:
     try:
         man = replaymod.replay(args.root, args.run_id, args.replays,
@@ -618,6 +649,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="efficacy-campaign store (default: ./efficacy)")
     p.add_argument("--replays", default=DEFAULT_REPLAYS,
                    help="replay store (default: ./replays)")
+    p.add_argument("--steadies", default=DEFAULT_STEADIES,
+                   help="steady-campaign store (default: ./steadies)")
     sub = p.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="execute a spec")
@@ -682,6 +715,15 @@ def build_parser() -> argparse.ArgumentParser:
     ef.add_argument("--seam-timeout-ms", type=int, default=400)
     ef.set_defaults(func=cmd_efficacy)
 
+    st = sub.add_parser("steady",
+                        help="repeat an unchanged spec and reject a moving baseline")
+    st.add_argument("spec", help="path to a spec JSON file")
+    st.add_argument("--repeats", type=int, default=steadymod.DEFAULT_REPEATS,
+                    help="unchanged runs to compare (default: 3; minimum: 2)")
+    st.add_argument("--allow", action="append", default=[], metavar="AXIS",
+                    help="permit one exact moving axis (repeatable; default: none)")
+    st.set_defaults(func=cmd_steady)
+
     od = sub.add_parser("order",
                         help="check a permutations sweep for order sensitivity")
     od.add_argument("sweep_id", help="sweep id (printed by `hwb sweep`)")
@@ -710,7 +752,8 @@ ID_ARGS = ("run_id", "sweep_id", "a", "b")
 def misplaced_spec(args) -> Optional[str]:
     """Was a spec handed to a command that wanted an id?
 
-    The commands split -- `run`, `sweep`, `blast`, `catch`, `efficacy` take a
+    The commands split -- `run`, `sweep`, `blast`, `catch`, `steady`,
+    `efficacy` take a
     SPEC; the rest take an ID produced by one of those -- and nothing said so
     at the point of confusion. Handing a spec to `confine` reported "no
     record at runs/bare.json", which is true and tells you nothing: the path
@@ -727,7 +770,7 @@ def misplaced_spec(args) -> Optional[str]:
         if isinstance(val, str) and os.path.isfile(val):
             return ("%s takes a run id, not a spec file (got %s)\n"
                     "       specs are taken by: run, sweep, blast, catch, "
-                    "efficacy\n"
+                    "steady, efficacy\n"
                     "       run one first, then pass the id it prints "
                     "(`hwb ls`)" % (args.cmd, val))
     return None

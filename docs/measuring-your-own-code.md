@@ -189,6 +189,19 @@ You have a recorded run and a feature that stays in its lane. Each of these
 answers a different question about **your** code. Try the one whose question
 you actually have.
 
+**Is the unchanged baseline stable enough for any differential?** Three runs
+are preserved and compared on both harness structure and stored output. No
+variance is excused unless you name its exact axis.
+
+```console
+$ hwb steady mine.json
+...
+```
+
+Run this before interpreting sweep, blast, catch, or efficacy. `UNSTABLE`
+means the control moved; `uninterpretable` means a refusal or missing output
+prevented the comparison. Neither is a weak pass.
+
 **Does anything downstream consult it?** A feature can be perfectly well-behaved
 and completely inert.
 

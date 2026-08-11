@@ -77,6 +77,14 @@ spec's directory, never the directory you invoked `hwb` from. That is
 deliberate: a cwd-relative run means invoking the same spec from a different
 folder silently changes the experiment.
 
+`hwb steady` reloads this same spec and resolves the same declared feature
+route for every repeat. It adds no hidden spec fields and performs no hidden
+warm-up. Each execution preserves its own `spec.json` and feature source; a
+spec digest or feature digest that moves is a moving harness axis, not noise.
+The optional stability allowance belongs to the CLI/campaign manifest rather
+than this spec, so the experiment description is not rewritten to excuse its
+own variance.
+
 ### `inputs` is a declaration, and things read it
 
 It does not affect execution. It declares what the step depends on, and three

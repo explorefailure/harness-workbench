@@ -2229,6 +2229,111 @@ class TestEfficacy(Base):
         self.assertIn(row["killed_by"], ("diff", "conform"))
 
 
+class TestSteady(Base):
+    """Family 12: is the unchanged control stable enough to compare?"""
+
+    def campaign(self, steps=None, repeats=3, allowance=None, name="steady.json"):
+        from hwb import steady
+        root = os.path.join(self.tmp, "steadies")
+        return steady.campaign(self.spec([], name=name, steps=steps), self.runs,
+                               root, repeats=repeats, allowance=allowance)
+
+    def moving_steps(self):
+        p = os.path.join(self.tmp, "moving.sh")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\n"
+                     "n=0\n"
+                     "test ! -f .steady-counter || n=$(cat .steady-counter)\n"
+                     "n=$((n + 1))\n"
+                     "echo $n > .steady-counter\n"
+                     "echo $n\n")
+        os.chmod(p, 0o755)
+        return [{"id": "01", "argv": ["./moving.sh"], "inputs": []}]
+
+    def test_default_is_three_preserved_runs_with_empty_allowance(self):
+        from hwb import steady
+        man = self.campaign(steps=[{"id": "01", "argv": ["/bin/echo", "same"],
+                                    "inputs": []}])
+        self.assertEqual(man["verdict"], steady.STABLE)
+        self.assertEqual(man["repeats_requested"], 3)
+        self.assertEqual(len(man["run_ids"]), 3)
+        self.assertEqual(len(man["comparisons"]), 2)
+        self.assertEqual(man["allowance"], [])
+        self.assertTrue(man["base_spec_digest"].startswith("sha256:"))
+        for run_id in man["run_ids"]:
+            self.assertTrue(os.path.isfile(os.path.join(
+                self.runs, run_id, "record.json")))
+
+    def test_positive_control_rejects_a_deterministically_moving_output(self):
+        from hwb import steady
+        man = self.campaign(steps=self.moving_steps(), name="moving.json")
+        axis = "output:steps/01/attempts/0/stdout.bin"
+        self.assertEqual(man["verdict"], steady.UNSTABLE)
+        self.assertIn(axis, man["moving_axes"])
+        self.assertIn(axis, man["unallowed_axes"])
+        self.assertTrue(all(r["run_a"] == man["run_ids"][0]
+                            for r in man["comparisons"]))
+
+    def test_an_explicit_exact_axis_allowance_is_not_implicit_noise(self):
+        from hwb import steady
+        axis = "output:steps/01/attempts/0/stdout.bin"
+        man = self.campaign(steps=self.moving_steps(), allowance=[axis],
+                            name="allowed.json")
+        self.assertEqual(man["verdict"], steady.STABLE)
+        self.assertIn(axis, man["moving_axes"])
+        self.assertEqual(man["unallowed_axes"], [])
+
+    def test_a_comparison_refusal_is_uninterpretable_not_unstable(self):
+        from hwb import steady
+        a = self.run_spec(["freeze"], name="refuse.json")
+        with open(os.path.join(self.tmp, "in.txt"), "w", encoding="utf-8") as fh:
+            fh.write("changed\n")
+        b = self.run_spec(["freeze"], name="refuse.json")
+        row = steady.compare_pair(self.runs, a["run_id"], b["run_id"])
+        self.assertEqual(row["verdict"], steady.UNINTERPRETABLE)
+        self.assertIn("drift", row["detail"])
+
+    def test_feature_tree_drift_is_a_harness_axis(self):
+        from hwb import steady
+        a = self.run_spec(["timing"], name="feature-drift.json")
+        with open(os.path.join(self.feat_dir, "timing", "feature.py"), "a",
+                  encoding="utf-8") as fh:
+            fh.write("\n# changed between unchanged controls\n")
+        b = self.run_spec(["timing"], name="feature-drift.json")
+        row = steady.compare_pair(self.runs, a["run_id"], b["run_id"])
+        self.assertEqual(row["verdict"], steady.UNSTABLE)
+        self.assertIn("harness:features[timing].digest", row["moving_axes"])
+
+    def test_setup_error_is_not_a_stability_verdict(self):
+        from hwb import steady
+        with self.assertRaisesRegex(steady.SteadyError, "at least 2"):
+            self.campaign(repeats=1)
+
+        man = steady.campaign(self.spec(["does-not-exist"], name="bad-feature.json"),
+                              self.runs, os.path.join(self.tmp, "bad-steadies"))
+        self.assertEqual(man["verdict"], steady.SETUP_ERROR)
+        self.assertIn("could not execute", man["setup_error"])
+        self.assertEqual(man["run_ids"], [])
+
+    def test_pair_verdicts_are_fail_closed_not_averaged(self):
+        from hwb import steady
+        rows = [{"verdict": steady.STABLE}, {"verdict": steady.UNSTABLE},
+                {"verdict": steady.UNINTERPRETABLE}]
+        self.assertEqual(steady.classify(rows), steady.UNINTERPRETABLE)
+        self.assertEqual(steady.classify(rows[:2]), steady.UNSTABLE)
+
+    def test_cli_exit_distinguishes_stable_unstable_and_setup(self):
+        from hwb import cli
+        stable = self.spec([], name="cli-stable.json", steps=[
+            {"id": "01", "argv": ["/bin/echo", "same"], "inputs": []}])
+        moving = self.spec([], name="cli-moving.json", steps=self.moving_steps())
+        args = ["--root", self.runs, "--steadies",
+                os.path.join(self.tmp, "cli-steadies"), "steady"]
+        self.assertEqual(cli.main(args + [stable]), 0)
+        self.assertEqual(cli.main(args + [moving]), 1)
+        self.assertEqual(cli.main(args + ["--repeats", "1", stable]), 2)
+
+
 class TestInvertsDeclaration(Base):
     """The manifest field must fail closed at load, not at campaign time.
 
@@ -2900,7 +3005,7 @@ class TestTheFirstRunDeadEnds(Base):
         # Enumerated from the parser rather than listed by hand, so a command
         # added later cannot quietly escape the check.
         from hwb import cli
-        spec_takers = {"run", "sweep", "blast", "catch", "efficacy"}
+        spec_takers = {"run", "sweep", "blast", "catch", "efficacy", "steady"}
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]
         for name, parser in sub.choices.items():
@@ -3137,9 +3242,11 @@ REGISTERED_TRANSCRIPTS = {
     "hwb run retry.json": {"cwd": _FLAKY},
     "hwb catch stable.json": {"cwd": _FLAKY},
     "hwb sweep stable.json": {"cwd": _FLAKY},
+    "hwb steady noretry.json": {"cwd": _FLAKY, "exit": 1},
     # measuring-your-own-code.md. `examples/attaching/` holds exactly the files
     # that guide shows, which is what makes its transcripts checkable at all.
     "hwb run workload.json": {"cwd": _ATTACH},
+    "hwb steady mine.json": {"cwd": _ATTACH},
     "hwb efficacy mine.json": {"cwd": _ATTACH},
     "hwb blast mine.json": {"cwd": _ATTACH},
     # Exits 1 on purpose: nothing in that spec detects anything, so `caught 0/3`
@@ -3190,7 +3297,7 @@ def _commands_in(block):
 
 
 STORE_DIRS = ("runs", "sweeps", "blasts", "catches",
-              "efficacy", "sensitivity", "replays")
+              "efficacy", "sensitivity", "replays", "steadies")
 
 
 class TestRunStoresDoNotShip(unittest.TestCase):

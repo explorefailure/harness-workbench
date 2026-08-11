@@ -25,4 +25,6 @@ prune examples/flaky/runs
 prune examples/flaky/sweeps
 prune examples/flaky/catches
 prune examples/flaky/efficacy
+prune examples/flaky/steadies
 prune examples/attaching/runs
+prune examples/attaching/steadies

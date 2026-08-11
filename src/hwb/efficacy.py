@@ -102,21 +102,26 @@ def _run(spath: str, feat_root: str, runs_root: str) -> Dict[str, Any]:
             os.environ["HWB_FEATURES"] = prev
 
 
-def _differs(runs_root: str, a_id: str, b_id: str) -> Tuple[bool, str]:
+def _differs(runs_root: str, a_id: str, b_id: str,
+             include_feature_digests: bool = False) -> Tuple[bool, str]:
     """Did the run come out different? A refusal counts as a difference.
 
     `Incomparable` is the strongest available signal that the verdict moved:
     inverting a drift detector makes the pair refuse to compare at all, which
     is a bigger observable change than any field-level delta.
     """
-    from . import diff as diffmod
+    from . import steady
 
-    try:
-        res = diffmod.compare(diffmod.load_run(runs_root, a_id),
-                              diffmod.load_run(runs_root, b_id))
-    except diffmod.Incomparable as e:
-        return True, "comparison refused: %s" % e
-    if res["equivalent"]:
+    # The A/A control enables feature digests and therefore shares steady's
+    # exact baseline relation. Mutant comparisons leave them disabled because
+    # efficacy deliberately changes one feature's source tree -- that digest
+    # is the manipulation itself, not a kill.
+    pair = steady.compare_pair(
+        runs_root, a_id, b_id,
+        include_feature_digests=include_feature_digests)
+    if pair["verdict"] == steady.UNINTERPRETABLE:
+        return True, "comparison refused: %s" % pair["detail"]
+    if pair["verdict"] == steady.STABLE:
         return False, "equivalent under the mask"
     # BOTH halves of the comparison, and the second was missing. `differences`
     # holds harness fields only; step output content is reported separately as
@@ -124,11 +129,11 @@ def _differs(runs_root: str, a_id: str, b_id: str) -> Tuple[bool, str]:
     # captured bytes -- which is the entire point of an output-mutating
     # feature -- was therefore killed with an empty reason, and a kill nobody
     # can read is one step from a kill nobody believes.
-    why = list(res["differences"])
-    if res["output_differences"]:
+    why = list(pair["harness_differences"])
+    if pair["output_differences"]:
         why.append("%d step output(s) differ: %s"
-                   % (len(res["output_differences"]),
-                      res["output_differences"][0]))
+                   % (len(pair["output_differences"]),
+                      pair["output_differences"][0]))
     return True, "; ".join(why)[:160]
 
 
@@ -206,7 +211,8 @@ def campaign(spec_path: str, runs_root: str, eff_root: str,
         base_a = _run(spath, feat_root, runs_root)
         base_b = _run(spath, feat_root, runs_root)
 
-        moved, why = _differs(runs_root, base_a["run_id"], base_b["run_id"])
+        moved, why = _differs(runs_root, base_a["run_id"], base_b["run_id"],
+                              include_feature_digests=True)
         stability = {"run_a": base_a["run_id"], "run_b": base_b["run_id"],
                      "stable": not moved, "detail": why}
         if moved:
