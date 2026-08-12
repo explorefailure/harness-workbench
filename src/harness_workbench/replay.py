@@ -1,19 +1,16 @@
 """Re-execute a recorded run from its own preserved artifacts.
 
-Family 10. Every run already stores the spec it ran and the source of every
-feature that was attached, and `fidelity` reports the reproducibility
-question as ANSWERED on that basis. But answerability is not reproduction --
-fidelity says so itself, in its own closing line -- and until something
-actually re-executes a run, "the spec is preserved beside the record" is a
-claim with no consumer.
+Family 10. Every current run stores the spec, the attached feature source, and
+the original `spec_path`. `fidelity` can therefore report the reproducibility
+question as ANSWERED, but answerability is not reproduction. Replay consumes
+those preserved artifacts by executing the spec again.
 
-WHAT THIS FOUND ON ITS FIRST RUN. The record does NOT name the directory it
-executed in. Steps resolve `argv` and `inputs` against the spec's directory,
-so a preserved spec whose step reads `prompts/q1.txt` cannot be replayed
-without knowing where that path was rooted. The spec is preserved; the frame
-it resolved against is not. So `--in` must be supplied by a human, and this
-module records that it was supplied rather than recovered -- a replay that
-needed outside information is not evidence the record is sufficient.
+Steps resolve `argv` and `inputs` against the spec's directory. Replay recovers
+that directory from the recorded `spec_path` when its parent still exists.
+`--in` supplies an override for a moved checkout or record; if neither source
+is available, replay uses the current working directory. The campaign manifest
+records whether the original frame was recoverable and whether an override was
+supplied.
 
 THE COPIED WORKLOAD. Replaying in the original directory would overwrite the
 state the original run left, and a family that damages what it measures is the

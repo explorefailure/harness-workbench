@@ -1,23 +1,18 @@
 # Harness Workbench
 
-**Run things. Record what happened. Then ask whether the thing that recorded
-it can be trusted.**
+`hwb` executes commands from a JSON spec and records every attempt, exit code,
+raw output, attached feature, and feature result. **Features** are declared
+units of behavior that hook into a run at fixed seams.
 
-`hwb` executes a list of commands from a JSON spec and writes a record of
-what occurred — every attempt, every exit code, raw output, which code was
-attached and what it did. Behaviour is added through **features**: small
-declared units that hook into the run at fixed seams.
-
-The part that is unusual is the second half. Once you have features, you have
-a harness whose own defects are invisible to it — so `hwb` ships a set of
-campaigns that measure the harness itself: break a feature and check the
-damage was contained, invert a feature's decision and check anything
-downstream noticed, perturb the inputs and check a detector fires, mutate a
-record and check the checkers still reject it.
+The same harness cannot observe all of its own defects. `hwb` therefore ships
+campaigns that evaluate specific relations: whether a feature failure was
+contained, whether an inverted decision changed downstream behavior, whether
+a detector observed an input mutation, and whether verdict engines reject a
+known record violation.
 
 Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
 candidate has not been published. Zero runtime dependencies, Python 3.11+,
-318 tests.
+320 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -117,8 +112,8 @@ RUN                            CLASS         STATE       STEPS  FEATURES
 $ hwb show 20260807T170423Z-6beee9-4472
 ```
 
-That works with no configuration, nothing installed, and no features. The
-run store is `./runs` by default.
+This run needs no configuration or features. The run store is `./runs` by
+default.
 
 Campaign manifests use their own stores (`./sweeps`, `./steadies`, and so
 on). A campaign store must be disjoint from the run store: equality or
@@ -126,14 +121,14 @@ nesting in either direction is rejected after resolving symlinks, before
 either kind of evidence is created. The separate defaults already satisfy
 this contract.
 
-**`completed` describes the harness, not your command.** `hwb run` exits 0
-whenever the harness itself worked. A non-zero exit from your workload is
-data — the run recorded exactly what happened, which is the run succeeding.
+**`completed` describes the harness, not the command.** `hwb run` exits 0 when
+the harness completes successfully. A non-zero workload exit is recorded data,
+not a harness error.
 
 ## Adding features
 
-Six features ship inside the package. They are **opt-in**: a spec asks for
-them by name and never gets them by accident.
+Six features ship inside the package. They are **opt-in**: a spec must select
+them by name.
 
 ```json
 {
@@ -156,9 +151,9 @@ them by name and never gets them by accident.
 | `receipt` | annotate | binds the run to the identity of what it ran on |
 | `timing` | observe | reports seam dispatch cost (an instrument, not a capability) |
 
-Omitting `features_root` looks in `<spec dir>/features`, which is where your
-own features go. **Shipped features are never a fallback** — a mistyped root
-fails loudly rather than quietly succeeding with code you did not choose.
+Omitting `features_root` looks in `<spec dir>/features`, which is where local
+features go. **Shipped features are never a fallback**: an invalid root or
+feature name fails during feature loading instead of selecting a builtin.
 
 Write your own: [`docs/writing-a-feature.md`](docs/writing-a-feature.md).
 
@@ -202,10 +197,10 @@ $ hwb fidelity <run id>       # what can be answered from the record alone
 $ hwb replay <run id> --in .  # re-execute from the preserved spec
 ```
 
-**There is no scorer.** Judging whether your workload produced a good answer
-needs an oracle this project does not have. What is checkable without one is
-a *relation* — between two runs, or between a run and a deliberate violation
-of it — which is why none of this needs labels.
+`hwb` does not score workload quality; that judgment needs an oracle the
+project does not have. The campaigns instead check a *relation* between two
+runs, or between a run and a deliberate violation. These verdicts do not need
+quality labels.
 
 Full guide: [`docs/measuring.md`](docs/measuring.md), including a section on
 what the instrument **cannot** see.
@@ -218,7 +213,8 @@ Two kinds, and mixing them up is the most common first mistake:
 - **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
   `replay` `interfere` `order`
 
-`hwb --help` and `hwb <command> --help` are accurate and worth reading.
+Use `hwb --help` or `hwb <command> --help` for the registered command and
+option reference.
 
 ## Documentation
 

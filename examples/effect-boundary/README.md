@@ -1,6 +1,7 @@
 # Filesystem-effects example
 
-The watched root is explicit and narrow; there is deliberately no default:
+Supply an explicit, narrow watched root. The command has no default watch
+root:
 
 ```console
 $ hwb effects clean.json --watch state --allow state/allowed.txt

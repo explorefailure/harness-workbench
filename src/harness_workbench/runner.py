@@ -234,10 +234,10 @@ class Recorder:
             "replicates": self.spec.raw.get("replicates"),
             "spec_digest": self.spec.digest,
             # WHERE the run happened. Steps execute with `cwd=spec.dir` and
-            # `steps[].inputs` resolve against it, so the preserved spec on
-            # its own does NOT describe a reproducible run -- `replay` found
-            # that by needing a `--in` argument the record could not supply,
-            # while `fidelity` was reporting reproducibility as answered.
+            # `steps[].inputs` resolve against it, so replay needs this path as
+            # well as the preserved spec. Replay recovers the path when its
+            # parent still exists and accepts `--in` after the checkout or
+            # record has moved.
             #
             # Recorded, and MASKED at comparison time: a path is where the
             # experiment sat, not what it was. Two runs of one spec from two

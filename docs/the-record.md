@@ -1,8 +1,8 @@
 # The record
 
-The project's load-bearing claim is that **a run is readable without this
-tool.** `hwb fidelity` checks that claim mechanically; this document is the
-other half of it, for a human with `cat` and `python3 -m json.tool`.
+A run is readable without `hwb`. `hwb fidelity` checks that property
+mechanically; this page describes the same record for a reader using `cat` and
+`python3 -m json.tool`.
 
 Everything here is sealed at close and never revised afterwards. Attempt
 lines are appended while execution is live, then their artifact descriptors
@@ -169,8 +169,8 @@ legitimate no-execution from a fabricated line — the two look identical.
 
 ### Absent fields mean different things — the rule is per field
 
-This is the one genuine hazard in reading a record, because records arrive
-from different eras and unknown keys are always ignored:
+Missing fields require field-specific interpretation because records can come
+from different versions and unknown keys are always ignored:
 
 | field | absent means |
 |---|---|
@@ -241,13 +241,14 @@ The spec is preserved verbatim; every attached feature's source is copied in
 whole. Together these are what make `hwb replay` possible at all, and what
 `hwb fidelity` reads to answer *"which feature code actually executed?"*
 
-**One thing is preserved and one is not.** The spec travels with the run; the
-directory it *resolved against* does not. Steps resolve `argv` and `inputs`
-relative to the spec's directory, so a preserved spec whose step reads
-`config.txt` cannot be replayed without knowing where that was rooted — which
-is why `hwb replay` requires `--in` from a human, and records that the frame
-was **supplied rather than recovered.** A replay that needed outside
-information is not evidence the record is sufficient.
+The spec and its original `spec_path` travel with the run. `hwb replay` uses
+the recorded path's parent as the workload directory when that directory still
+exists. Use `--in` to supply a different root after moving the checkout or the
+record. If the recorded parent is unavailable and `--in` is omitted, replay
+uses the current working directory.
+Before execution, replay checks recorded input digests against the copied
+files. Its manifest records whether the workload directory was recovered from
+the record or supplied by hand.
 
 Preservation is not containment. Replaying imports the preserved feature
 source and executes the preserved command description as trusted code with the

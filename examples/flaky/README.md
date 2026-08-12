@@ -1,9 +1,8 @@
 # A flaky check, no model involved
 
-Every other example here calls a local model, which makes the workbench look
-like a model tool. It is not. A step is `argv` — the runner executes it and
-records what came back, and it has no notion of a model, a provider, or a
-prompt. This example is a shell script that fails twice and then succeeds.
+This example runs a shell script that fails twice and then succeeds. A step is
+`argv`: the runner executes it and records the result without assuming a model,
+provider, prompt, language, or build system.
 
 `flaky.sh` fails its first two invocations and passes afterwards, counting in
 `.flaky-state` beside itself. It is deterministic on purpose: a demo that
@@ -22,9 +21,8 @@ $ hwb run noretry.json
 ```
 
 **`completed` describes the harness, not the step.** The step exited 1. `hwb
-run` exits 0 whenever the harness itself worked, because a non-zero exit from
-your workload is data, not an error — the run recorded exactly what happened
-and that is the run succeeding at its job.
+run` exits 0 because the harness completed successfully; the non-zero workload
+exit is recorded data, not a harness error.
 
 ## Attach `retry` and it passes
 
@@ -120,9 +118,9 @@ thing being tested. This is a real confound and not a quirk of this example
 — it is why `hwb efficacy` warms its baseline and then runs it twice before
 believing any result.
 
-Try `hwb catch retry.json` to see the honest version of the other failure:
-`caught 0/3`, because that spec attaches no detector. A catch rate with
-nothing watching is not a low score, it is a missing subject.
+Run `hwb catch retry.json` to see the no-detector case: `caught 0/3`. That spec
+attaches no detector, so no feature observes the injected faults. The result is
+non-passing rather than a low detector score.
 
 ## Preflight a differential with `steady`
 
@@ -136,7 +134,7 @@ rm -rf runs steadies interrupts
 ```
 
 The workload in `stable.json` is stateless, but its attached `freeze` feature
-deliberately keeps `stable.freeze.lock`. A cold `steady` run therefore exposes
+keeps `stable.freeze.lock`. A cold `steady` run therefore exposes
 the one-time transition from "baseline created" to "baseline compared":
 
 ```console

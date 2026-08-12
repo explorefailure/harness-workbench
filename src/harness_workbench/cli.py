@@ -870,8 +870,8 @@ def build_parser() -> argparse.ArgumentParser:
     rp = command("replay")
     rp.add_argument("run_id", help="run id (see `hwb ls`)")
     rp.add_argument("--in", dest="in_dir", default=None,
-                    help="directory the workload's declared inputs live in "
-                         "(the record cannot supply this; defaults to cwd)")
+                    help="workload directory override (without it, use the "
+                         "recorded spec_path parent when available, otherwise cwd)")
     rp.set_defaults(func=cmd_replay)
     expected = set(commands.cli_commands())
     if set(registered) != expected:

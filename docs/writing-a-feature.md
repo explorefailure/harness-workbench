@@ -160,8 +160,8 @@ def around_step(step, run_step, ctx):
     return obs
 ```
 
-**The last-declared wrap ends up outermost.** With two wraps this is
-load-bearing and changes the experiment:
+**The last-declared wrap ends up outermost.** With two wraps, declaration order
+changes the composition and can change the experiment:
 
 ```
 [sample, retry]  ->  retry(sample(step))   retries a whole draw set
@@ -202,9 +202,9 @@ pass`. Elapsed time is **also** checked on return, which no handler can fake.
 mostly the step's time, so a seam budget there would fire on a slow workload
 rather than a slow feature. Bound the workload with `step_timeout_ms` instead.
 
-The bound is honest about its limits: main thread only, cannot interrupt a
-blocking C call, and a hook catching `BaseException` can still absorb the
-escalation. Full isolation needs a subprocess.
+The bound applies only on the main thread. It cannot interrupt a blocking C
+call, and a hook catching `BaseException` can still absorb the escalation.
+Full isolation needs a subprocess.
 
 A crashing `observe`/`annotate` hook is recorded, the feature is disabled, and
 the run continues — an annotation defect cannot admit anything, so it must not
@@ -255,20 +255,19 @@ feature nothing downstream consults.
 never the observation — flipping what the feature *sees* is a fault, which is
 what `hwb blast` injects; this family injects a well-formed *opposite*.
 
-**Declared, never inferred.** The core cannot know what "the opposite" of an
-arbitrary feature means, and guessing would make the family measure the guess.
-Omit it and efficacy skips the feature rather than inventing a decision for
-it — an untestable feature is honest; a fabricated inversion is not.
+The opposite is declared because the core cannot derive it from arbitrary
+feature code. If `inverts` is absent, efficacy reports the feature as
+`skipped`; it does not construct a decision to test.
 
-Writing your own inversion *is* the discipline: a feature whose author cannot
-state its opposite has not decided what it does.
+Defining the inversion requires the feature author to state the decision and a
+well-formed opposite. Without both, efficacy has no valid mutation to apply.
 
 ## Checking your work
 
 Attaching a feature and then measuring it is a task rather than a contract, so
 it has its own guide: [`measuring-your-own-code.md`](measuring-your-own-code.md).
 
-The short version is that `hwb confine` is the one to run first — it checks
-that the manifest describes how the feature used the record channels, and
-every other family trusts that declaration. It does not prove the feature had
-no filesystem, process, or network effects.
+Run `hwb confine` first. It checks that the manifest describes how the feature
+used the record channels, and the other campaigns rely on that declaration.
+It does not prove that the feature had no filesystem, process, or network
+effects.

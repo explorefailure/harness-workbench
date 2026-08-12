@@ -1,8 +1,7 @@
 # Measuring your own code
 
-You have something you want to run and record, or a piece of harness behaviour
-you want to know the truth about. This shows you how to attach it and what you
-can then ask.
+Use this guide to attach a runnable workload or feature, record a run, and
+select the measurement command that answers your question.
 
 It assumes you have read nothing else. It stops where your work begins — the
 last section hands you off to the reference pages rather than restating them.
@@ -43,8 +42,8 @@ notion of a model, a language, or a build system.
 }
 ```
 
-Three things to get right here, because each one is silent when you get it
-wrong:
+Check these three fields before running the spec. Each can produce a valid run
+that measures something other than what you intended:
 
 - **There is no shell.** No pipes, globs, `&&`, or `$VAR`. If you want them,
   say so: `["/bin/sh", "-c", "a | b"]`.
@@ -100,8 +99,8 @@ def after_step(step, obs, ctx):
 ```
 
 **`step` is an object with `.id`, `.argv` and `.inputs`. `obs` is a dict.** The
-access is mixed, and `step["id"]` is the first thing most people write — it
-raises, your feature is disabled, and the run continues without it.
+access is mixed. `step["id"]` raises, disables the feature, and lets the run
+continue without it.
 
 Choose the power by what the code needs to do, not by what sounds safest:
 
@@ -128,9 +127,9 @@ RUN=$(hwb run mine.json | awk 'NR==1{print $1}')
 Use `NR==1`. A run that reports a failed feature prints a second line, and a
 bare `awk '{print $1}'` will glue a word onto the end of your id.
 
-A mistyped feature name or directory **fails loudly at load**. Shipped features
-are never a silent fallback — you cannot accidentally run code you did not
-choose.
+A mistyped feature name or directory fails during feature loading. Shipped
+features are not used as a fallback, so the runner does not substitute code
+that the spec did not select.
 
 ```console
 $ hwb show "$RUN"
@@ -150,19 +149,18 @@ If it says `features failed: myfeature`, the traceback is in the record at
 the run finish, because it cannot admit anything.
 
 The six shipped features are working examples of each power. `retry`'s hook is
-eight lines; the rest of that file is the reasoning behind them, which is worth
-more than the code. Contract details — seams, capabilities, bounds:
+eight lines; the rest of that file explains the decisions around it. Contract
+details — seams, capabilities, bounds:
 [`writing-a-feature.md`](writing-a-feature.md).
 
 ---
 
 ## 3. Ask whether it did what it claims
 
-**First, one thing that will otherwise waste your afternoon.** Everything below
-runs your spec *many times* and compares the records. If your workload
-remembers anything between runs — a counter, a cache, a file it appends to —
-every comparison is measuring the leftovers. Point the campaigns at a stateless
-version of your workload.
+The commands below run the spec *many times* and compare the records. If the
+workload retains state between runs — a counter, cache, or appended file — the
+comparisons measure that retained state. Point the campaigns at a stateless
+version of the workload.
 
 Now the first question, and the one to ask before any other: did the feature
 use only the record channel its manifest declared?
@@ -183,8 +181,8 @@ myfeature    annotate   clean        wrote only through its declared channel
 This result is scoped to record channels. `confine` does not observe files,
 processes, or network activity performed by feature code.
 
-Every other campaign trusts that declaration, so a breach here invalidates
-what the rest tell you.
+The other campaigns rely on that declaration, so a breach here invalidates
+their results.
 
 If the feature or workload is expected to write files, declare a separate
 bounded endpoint envelope. There is no default watch root:
@@ -205,9 +203,9 @@ observed by the portable snapshot sensor. See the known-red/control pair in
 
 ## Now ask the others
 
-You have a recorded run and a feature that stays in its lane. Each of these
-answers a different question about **your** code. Try the one whose question
-you actually have.
+You now have a recorded run and a feature that stayed within its declared
+record channel. Each command below evaluates a different relation; choose the
+one that matches the decision you need to make.
 
 **Is the unchanged baseline stable enough for any differential?** Three runs
 are preserved and compared on both harness structure and stored output. No
@@ -261,10 +259,10 @@ killed 0/0 tested
   UNMEASURED: myfeature declares no decision and is not an instrument
 ```
 
-That is the honest answer, not a pass. To be measured, a feature declares
-`inverts` — a well-formed *opposite* of its decision — and the run must come
-out different. Writing your own inversion is the discipline: a feature whose
-author cannot state its opposite has not decided what it does.
+This result is `UNMEASURED`, not a pass. Efficacy requires the feature to
+declare `inverts` — a well-formed *opposite* of its decision — and the mutated
+run must differ. Without a declared decision and opposite, the campaign has no
+valid mutation to apply.
 
 **Is a bug in it contained?** Breaks your feature five ways and checks the
 damage stopped there.
@@ -278,8 +276,8 @@ myfeature after_step      hang        annotate run record others steps   [failed
 per-power failure semantics held for every injection
 ```
 
-**Does your detector actually fire?** Perturbs your declared inputs and looks
-for a feature that notices.
+**Does your detector fire?** Perturbs your declared inputs and looks for a
+feature that notices.
 
 ```console
 $ hwb catch mine.json
@@ -287,8 +285,9 @@ $ hwb catch mine.json
 caught 0/3   false alarms 0   correctly ignored 2
 ```
 
-`0/3` is not a bad score — `myfeature` is not a detector, so nothing was
-watching. Attach `freeze` and the same command becomes a real measurement.
+`0/3` is non-passing because `myfeature` is not a detector and no attached
+feature observed the mutations. Attach `freeze` to measure whether that
+detector notices the same mutations.
 
 **Does it disturb anything else?** Needs a second feature to be meaningful —
 with only one attached, `hwb interfere` will tell you there was nothing to
@@ -329,18 +328,18 @@ two runs and reports what it masked · `hwb verify` asks whether the record was
 edited · `hwb fidelity` asks what can still be answered from the run directory
 alone · `hwb replay` re-executes from the preserved spec.
 
-And read [what the instrument cannot see](measuring.md#what-the-instrument-cannot-see)
-before you trust any of it very far.
+Read [what the instrument cannot see](measuring.md#what-the-instrument-cannot-see)
+before interpreting a campaign result.
 
 ---
 
 ## When you outgrow the local directory
 
 `features_root` is `<spec dir>/features` until you say otherwise. Set it to
-`"harness_workbench:builtin"` to use the shipped features, or to any path — resolved relative
-to the spec, so it travels with the file. It is digested into the spec's
-identity, because which code runs is the most experiment-changing fact about a
-run.
+`"harness_workbench:builtin"` to use the shipped features, or set another
+path. Relative paths resolve against the spec so they travel with the file.
+The resolved feature root is digested into the spec identity because changing
+which code runs changes the experiment.
 
 ## Where to look next
 

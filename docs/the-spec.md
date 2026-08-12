@@ -82,8 +82,8 @@ Harness Workbench does not contain or isolate hostile code.
 Steps run **in declared order**, and every step runs — a failing step does
 not stop the ones after it. Each runs with its working directory set to the
 spec's directory, never the directory you invoked `hwb` from. That is
-deliberate: a cwd-relative run means invoking the same spec from a different
-folder silently changes the experiment.
+intentional: resolving against the caller's working directory would make the
+same spec describe a different experiment when invoked from another folder.
 
 `hwb steady` reloads this same spec and resolves the same declared feature
 route for every repeat. It adds no hidden spec fields and performs no hidden
@@ -104,10 +104,9 @@ things consume that:
   workload directory. That copy prevents ordinary state collisions; it is not
   an OS security boundary.
 
-**Anything you do not declare is outside all three checks.** An undeclared
-file can change under you while declared-input drift remains clean, which is
-the bounded observation `hwb catch` states out loud rather than leaving you
-to overread.
+**Anything not declared is outside all three checks.** An undeclared file can
+change while declared-input drift remains clean. `hwb catch` therefore limits
+its verdict to declared inputs.
 
 ## `features[]`
 
@@ -120,10 +119,10 @@ to overread.
 name. `config` must be an object; it is handed to that feature's hooks as
 `ctx.config` and is otherwise opaque to the core.
 
-**Order is load-bearing.** For wrap features the last declared ends up
+Feature order changes wrap composition. The last declared wrap ends up
 outermost, so `[sample, retry]` is `retry(sample(step))` — a different
-experiment from `[retry, sample]`. `hwb order` exists to measure whether that
-choice matters for a given spec.
+experiment from `[retry, sample]`. `hwb order` measures whether that choice
+changes a given spec's run.
 
 Features are resolved and validated as a **set** before anything is imported:
 an unmet `requires`, a capability edge pointing backwards, an out-of-range
@@ -152,8 +151,9 @@ harness and recorded in each campaign manifest. **It is not the way to
 configure an ordinary run** — an undeclared variable deciding the feature set
 is precisely the failure this design exists to prevent.
 
-Shipped features are **opt-in and never a fallback**. A mistyped root fails
-loudly rather than quietly succeeding with code you did not choose.
+Shipped features are **opt-in and never a fallback**. If the resolved root or
+feature name is wrong, feature loading fails; the runner does not substitute a
+shipped feature.
 
 ## `env`
 
@@ -181,11 +181,11 @@ a slow model call by surprise would be worse than one that hangs visibly.
   `wrap`** — a wrap's elapsed time is mostly the step's time, so a budget
   there would fire on a slow workload rather than a slow feature.
 
-The seam bound is honest about its reach: main thread only, cannot interrupt
-a blocking C call, and a hook catching `BaseException` can absorb the
-escalation. A hook that swallows the timeout and keeps running is escalated
-with `SeamAbort`, which is not an `Exception`, and elapsed time is *also*
-checked on return — which no handler can fake. See
+The seam bound applies only on the main thread. It cannot interrupt a blocking
+C call, and a hook catching `BaseException` can absorb the escalation. A hook
+that swallows the timeout and keeps running is escalated with `SeamAbort`,
+which is not an `Exception`; elapsed time is also checked when the hook
+returns. See
 [`writing-a-feature.md`](writing-a-feature.md#bounds-and-failure).
 
 ## `replicates`

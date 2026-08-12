@@ -3,11 +3,10 @@
 `hwb run` records what happened. The rest of the commands ask questions about
 those records. This is what each one asks, and what its answer means.
 
-**There is no scorer anywhere in here, and that is deliberate.** Judging
-whether your workload produced a *good* answer needs an oracle this project
-does not have. What is checkable without one is a **relation** — between two
-runs, or between a run and a deliberate violation of it. Every verdict below
-is a relation, which is why none of them needs labels.
+`hwb` does not score workload quality. That judgment needs an oracle the
+project does not have. The measurement commands instead check a **relation**
+between two runs, or between a run and a deliberate violation. These verdicts
+do not require quality labels.
 
 Reference for what these read and write:
 [`the-spec.md`](the-spec.md) · [`the-record.md`](the-record.md) ·
@@ -68,13 +67,13 @@ part What environment did it run in?        nothing declared, so 49 variable nam
 answerability only -- whether an answer is USEFUL is the human half of this check
 ```
 
-Two things it will not do. It does not judge whether an answer is *useful*.
-And a missing field is not a failure of the run — records written before a
-field existed answer fewer questions, which is a fact about the record's age.
+`fidelity` does not judge whether an answer is *useful*. A missing field is
+also not a failure of the run: records written before a field existed answer
+fewer questions.
 
-The value is that fidelity otherwise degrades **in silence**: nothing fails
-when a record stops being sufficient, and you find out at the moment you need
-the answer and it is not there.
+Nothing fails when an older or incomplete record cannot answer a question.
+`fidelity` makes that missing evidence visible before another analysis depends
+on it.
 
 ---
 
@@ -140,9 +139,9 @@ no interference: every feature's namespace was invariant under attaching another
 ### `hwb order <sweep id>`
 
 With the feature **set** held constant, does permuting the declared **order**
-change the run? Order is load-bearing for wraps — `[sample, retry]` composes
-as `retry(sample(step))` — so it is a distinct experimental variable, not
-noise. Needs a sweep run in permutations mode.
+change the run? Order changes wrap composition: `[sample, retry]` composes as
+`retry(sample(step))`. It is therefore a distinct experimental variable, not
+noise. This command needs a sweep run in permutations mode.
 
 ---
 
@@ -174,11 +173,10 @@ receipt   after_run       meddle      annotate run !record !others steps [ok]
 `[ok]`/`[failed]` is whether the *injected feature* survived; the four bits
 are whether the *harness* contained it. A `!` marks a bit that broke.
 
-**The fault library goes beyond `raise` on purpose.** A hook that returns
-`None` never raises, so there is nothing to catch — a library that only
-raises reports excellent containment and is wrong. Faults are shaped like
-plausible bugs rather than like sabotage, because injected faults are known
-to be unrepresentative of real residual defects.
+The fault library includes more than `raise`. A hook that incorrectly returns
+`None` does not raise, so a raise-only library would not test that containment
+path. The injected faults approximate plausible implementation defects rather
+than sabotage; they are not assumed to represent real residual defects.
 
 Blast-radius *minimisation* from that literature deliberately does not
 transfer: this has no production and no users, so the goal is maximum
@@ -228,11 +226,12 @@ nodes such as FIFOs and symlinks are never opened or followed; they are
 reported as unsupported and prevent `complete` rather than being silently
 excluded from an overbroad claim.
 
-**Bounded means bounded.** This is direct-child process termination, not power
-loss. It does not cover intervals between checkpoints, kernel or storage-cache
-failure, `fsync` guarantees, descendant-process cleanup, network/IPC/lock
-cleanup, or durable suspend/resume. Those unobserved classes are carried in
-every campaign manifest and printed on the passing path.
+The interrupt result covers direct-child process termination at the named
+checkpoints. It does not cover power loss, intervals between checkpoints,
+kernel or storage-cache failure, `fsync` guarantees, descendant-process
+cleanup, network/IPC/lock cleanup, or durable suspend/resume. Those unobserved
+classes are carried in every campaign manifest and printed on the passing
+path.
 
 ### `hwb confine <run id>`
 
@@ -329,8 +328,8 @@ Three inclusions each answer a pitfall the mutation-testing literature names:
 
 - **Equivalent mutants.** `trailing_newline` changes the bytes and not the
   meaning. `freeze` catches it, correctly by its own definition — and at the
-  level you care about it is a false alarm. That gap is the interesting
-  measurement, not the catch rate.
+  semantic level it may be a false alarm. The byte-level catch rate does not
+  resolve that difference.
 - **Circularity.** `append_byte` is the fault `freeze` was designed for.
   Catching it proves the implementation runs, not that the design earns
   itself. Marked so it cannot be read as a result.
@@ -339,9 +338,9 @@ Three inclusions each answer a pitfall the mutation-testing literature names:
   the interpreter, the environment and the clock. A run can be entirely
   incomparable to its baseline with `drifted: false`.
 
-Run `catch` against a spec with no detector attached and it will honestly
-report `caught 0/3`. That is not a defect; it is what "no fault was ever
-injected at anything watching" looks like.
+Run `catch` against a spec with no detector attached and it reports `caught
+0/3`. No attached feature observed the injected faults, so the result is
+non-passing rather than a low detector score.
 
 ---
 
@@ -414,8 +413,9 @@ timing     instrument  observe   -                skipped    instrument -- inert
 killed 2/2 tested
 ```
 
-The opposite is **declared, never inferred** — see [`inverts`](writing-a-feature.md#inverts).
-A feature that declares none is skipped rather than guessed at.
+The feature declares its opposite through
+[`inverts`](writing-a-feature.md#inverts). The core does not derive an opposite
+from arbitrary feature code; a feature without `inverts` is `skipped`.
 
 `intent` matters here: an `instrument` feature is often *supposed* to be
 inert, and without the declaration "inert as designed" and "inert and nobody
@@ -426,8 +426,8 @@ state has two code paths — the one that initialises the state and the one
 that decides against it — and a fresh scratch spec per run takes the
 initialising path every time, so the campaign measures a bootstrap. The two
 baseline runs must agree before any mutant is interpreted; when they do not,
-the campaign **refuses to report kills at all.** A refusal is worth more than
-a table of numbers nobody should act on.
+the campaign **refuses to report kills at all.** Do not interpret mutant
+results when the two baseline runs disagree.
 
 ---
 
@@ -447,8 +447,8 @@ and records whether it noticed.
 
 The checker universe is derived from the same public command/engine metadata
 the CLI uses to register commands. Adding a verdict engine there without a
-probe produces an `UNPROBED` row and a non-zero exit instead of requiring a
-second hand-maintained checker list that can quietly omit the newest engine.
+probe produces an `UNPROBED` row and a non-zero exit. There is no separate
+hand-maintained checker list that can omit a registered engine.
 
 ```console
 PROBE                        CHECKER   VERDICT    DETAIL
@@ -491,24 +491,24 @@ differences but drops `diff`'s separate output-difference axis, so changed
 replay output can still be labelled `matched`. Sensitivity reports that blind
 checker and exits non-zero; it does not turn a missing observation into green.
 
-This is a family rather than a habit because a practice applied from memory
-covers the tools you are already thinking about, which are never the ones you
-have trusted for months. `diff` was blind to step output for its entire
-existence.
+The probe list makes sensitivity coverage explicit rather than dependent on a
+remembered checklist. That distinction matters for established tools: `diff`
+was blind to step output until a probe exposed the gap.
 
-### `hwb replay <run id> --in <dir>`
+### `hwb replay <run id> [--in <dir>]`
 
 Re-execute a recorded run from its own preserved spec and features.
 Answerability is not reproduction: `fidelity` reports reproducibility as
 answered because the spec is preserved beside the record, and until something
-actually re-executes it, that is a claim with no consumer.
+re-executes it, that is a claim with no consumer.
 
-**What this found on its first run:** the record does not name the directory
-it executed in. Steps resolve paths against the spec's directory, so a
-preserved spec reading `config.txt` cannot be replayed without knowing where
-that was rooted. So `--in` must be supplied by a human, and the manifest
-records that it was **supplied rather than recovered** — a replay that needed
-outside information is not evidence the record is sufficient.
+Current records include `spec_path`. Replay uses that path's parent as the
+workload directory when it still exists; `--in` overrides it for a moved
+checkout or record. If the recorded parent is unavailable and `--in` is
+omitted, replay uses the current working directory. Before execution, it
+checks recorded input digests against the copied files. The manifest records
+whether the workload directory was recovered from the record or supplied by
+hand.
 
 Replays run in a separate copied workload directory: declared inputs are
 copied with their modes, under the spec's original basename, because a feature
@@ -521,19 +521,15 @@ feature modules are trusted code and run with the current user's permissions.
 
 ## Are the transcripts in these docs real?
 
-Checked, not promised — which is the same standard every other page here
-asks you to hold the tool to.
-
-A ` ```console ` block is an **abridgement of real output**. Registered
+A ` ```console ` block claims an **abridgement of real output**. Registered
 blocks are re-run by the test suite, and each line shown must appear in what
 the tool prints today, **in order**, with any output dropped between two
 shown lines marked `...`. A transcript may start late and stop early; what
 it may not do is leave an unmarked hole in the middle.
 
-**The fence carries the claim.** ` ```console ` means *this is output the tool
-produced* and invites the check. A command shown with no output is not a
-transcript and is fenced ` ```sh ` instead — nothing to verify, so nothing
-claimed.
+The fence type defines the claim. ` ```console ` means the tool produced the
+displayed output. A command shown without output is not a transcript and uses
+` ```sh ` instead.
 
 That rule exists because the alternative already happened here. Two `catch`
 transcripts showed four rows of a ten-row table above a summary reading
@@ -541,19 +537,16 @@ transcripts showed four rows of a ten-row table above a summary reading
 itself on its own face, in the file the README sends every newcomer to
 first, and nothing failed.
 
-**What is not covered, stated so the check is not read as broader than it
-is.** Only the registered blocks are re-run; the rest are prose until
-someone registers them, and the suite holds the unregistered count as a
-ceiling so it can only fall. Blocks using `<run id>` placeholders cannot be
-run as written. And no test judges the *prose*: it can tell you a table went
-stale, never that an explanation stopped being a good one.
+Only registered blocks are re-run. The remaining blocks are unverified prose,
+and the suite holds their count to a ceiling so it can only fall. Blocks using
+`<run id>` placeholders cannot run as written. No test judges the *prose*: it
+can detect a stale table, but not an inaccurate explanation.
 
 ---
 
 ## What the instrument cannot see
 
-Stated because a measurement whose limits are undocumented gets trusted
-further than it holds.
+Each limit below narrows the verdicts described above.
 
 - **`confine` watches record-power channels, not the filesystem.** A feature
   that rewrites captured output on disk is outside that relation, while the
