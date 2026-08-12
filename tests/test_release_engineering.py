@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -80,6 +81,49 @@ class TestReleaseChecksums(unittest.TestCase):
 
 
 class TestReleaseSurfaces(unittest.TestCase):
+    def test_public_identity_and_minimal_verification_provenance_are_explicit(self):
+        with (ROOT / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+            encoding="utf-8"
+        )
+
+        copyright_name = re.search(
+            r"^Copyright \d{4} (.+)$", notice, re.MULTILINE
+        )
+        self.assertIsNotNone(copyright_name)
+        expected_identity = [{"name": copyright_name.group(1)}]
+        self.assertEqual(expected_identity, project["authors"])
+        self.assertEqual(expected_identity, project["maintainers"])
+        self.assertIn(
+            "Approved 2026-08-12: Garrett Davis is intentionally public as "
+            "copyright holder, "
+            "package author, maintainer, and Git identity associated with "
+            "Explore Failure",
+            record,
+        )
+        self.assertIn(
+            "existing GitHub account association in the reviewed history is "
+            "intentional",
+            record,
+        )
+        self.assertIn(
+            "maintainer-side author-context verification on 2026-08-11",
+            record,
+        )
+        self.assertIn("macOS/arm64 with CPython 3.11", record)
+
+        for private_machine_detail in (
+            r"\bmacOS\s+\d+\.\d+",
+            r"\bDarwin\s+`?\d+\.\d+\.\d+",
+            r"\bCPython\s+3\.(?:11|12|13|14)\.\d+",
+        ):
+            with self.subTest(pattern=private_machine_detail):
+                self.assertNotRegex(record, private_machine_detail)
+        self.assertNotIn("Codex", record)
+        self.assertNotIn("release-preparation agent", record)
+
     def test_candidate_is_not_described_as_published(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")

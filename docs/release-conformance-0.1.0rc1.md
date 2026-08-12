@@ -18,6 +18,7 @@
 | Intended readable tag | `v0.1.0-rc.1` |
 | Lifecycle state | `unreleased` |
 | Declared reach | **R2 — public**, declared 2026-08-11 for the intended release |
+| Public attribution | Approved 2026-08-12: Garrett Davis is intentionally public as copyright holder, package author, maintainer, and Git identity associated with Explore Failure. The existing GitHub account association in the reviewed history is intentional. |
 | Preparation baseline | Git commit `017cabcede344fd01a004d67ae008c14a5127460` |
 | Record-preparation revision | The commit containing this file; resolve with `git rev-parse HEAD` in the reviewed checkout |
 | Release commit | **PENDING — BLOCKING PUBLICATION.** No release commit has been frozen or pushed. |
@@ -85,18 +86,17 @@ for the actual release even though their repository preparation is in place.
 ### Assurance label and verifier
 
 - Label: **Self-run verification (preparation only)**.
-- Verifier: Codex release-preparation agent acting in the project owner's
-  repository on 2026-08-11.
-- Relationship and prior access: author-side agent with full source-tree and
+- Verifier: maintainer-side author-context verification on 2026-08-11.
+- Relationship and prior access: performed with full source-tree and
   implementation context; not an outsider and not independent.
-- Owner help/intervention: the agent prepared this record and its checks before
-  running them. No outside operator was involved.
+- Owner help/intervention: the maintainer side prepared this record and its
+  checks before running them. No outside operator was involved.
 - Credentials/network: no application credentials; the unit suite and first
   run are network-free. Package build isolation may obtain declared build
   tooling if it is not already cached.
-- Starting environment: macOS 26.5 (`25F71`), Darwin `25.5.0`, arm64; CPython
-  3.11.15 for the package gate. Locally available 3.12.13, 3.13.15, and 3.14.7
-  are not substitutes for the required hosted Linux/macOS matrix.
+- Starting environment: macOS/arm64 with CPython 3.11 for the package gate.
+  This local environment is not a substitute for the required hosted
+  Linux/macOS CPython 3.11--3.14 matrix.
 - Source identity: the clean commit containing this record. It is preparation
   evidence, not the still-pending release commit.
 
