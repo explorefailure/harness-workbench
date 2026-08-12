@@ -3446,14 +3446,14 @@ class TestRedact(Base):
     describe the bytes that actually remain on disk.
     """
 
-    SECRET = "notakey-live-4f9a2b7c1e8d"
-    PATTERN = "notakey-live-[0-9a-f]{12}"
+    SENTINEL = "redaction-fixture-ALPHABETSOUP"
+    PATTERN = "redaction-fixture-[A-Z]{12}"
 
     def leaky(self):
         p = os.path.join(self.tmp, "leak.sh")
         with open(p, "w") as fh:
-            fh.write("#!/bin/sh\necho 'token %s'\necho 'again %s'\n"
-                     % (self.SECRET, self.SECRET))
+            fh.write("#!/bin/sh\necho 'fixture %s'\necho 'again %s'\n"
+                     % (self.SENTINEL, self.SENTINEL))
         os.chmod(p, 0o755)
         return [{"id": "01", "argv": ["./leak.sh"], "inputs": []}]
 
@@ -3475,14 +3475,14 @@ class TestRedact(Base):
         rec = self.run_leaky(self.cfg(), "r1.json")
         self.assertValidRecord(rec)
         out = self.captured(rec)
-        self.assertNotIn(self.SECRET.encode(), out)
+        self.assertNotIn(self.SENTINEL.encode(), out)
         self.assertIn(b"[REDACTED]", out)
 
-    def test_detached_the_secret_stays(self):
-        """THE REJECTION TEST. Without it, 'no secret in the output' and 'no
-        secret in this workload' are the same result."""
+    def test_detached_the_sentinel_stays(self):
+        """THE REJECTION TEST. Without it, 'no sentinel in the output' and
+        'no sentinel in this workload' are the same result."""
         rec = self.run_leaky([], "r2.json")
-        self.assertIn(self.SECRET.encode(), self.captured(rec))
+        self.assertIn(self.SENTINEL.encode(), self.captured(rec))
 
     def test_every_attempt_is_scrubbed_not_only_the_first(self):
         """Nested under `sample`, so three draws exist by the time redact
@@ -3491,7 +3491,7 @@ class TestRedact(Base):
         rec = self.run_leaky(feats, "r3.json")
         for n in range(3):
             with self.subTest(attempt=n):
-                self.assertNotIn(self.SECRET.encode(), self.captured(rec, n))
+                self.assertNotIn(self.SENTINEL.encode(), self.captured(rec, n))
 
     def test_reporting_what_it_did_is_a_breach(self):
         """The finding this feature was built to produce. A wrap has no
@@ -3513,7 +3513,7 @@ class TestRedact(Base):
         """
         from harness_workbench import confine
         rec = self.run_leaky(self.cfg(), "r5.json")
-        self.assertNotIn(self.SECRET.encode(), self.captured(rec))
+        self.assertNotIn(self.SENTINEL.encode(), self.captured(rec))
         res = confine.assess(os.path.join(self.runs, rec["run_id"]))
         row = [r for r in res["features"] if r["feature"] == "redact"][0]
         self.assertEqual(row["verdict"], confine.CLEAN)
@@ -3555,7 +3555,7 @@ class TestRedact(Base):
                if line.strip()]
 
         captured = ("token %s\nagain %s\n" %
-                    (self.SECRET, self.SECRET)).encode("utf-8")
+                    (self.SENTINEL, self.SENTINEL)).encode("utf-8")
         final = self.captured(rec)
         self.assertLess(len(final), len(captured))
         rec.pop("attempt_artifact_contract")

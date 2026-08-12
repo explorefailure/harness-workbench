@@ -19,15 +19,9 @@ echo "$n" > "$STATE"
 
 echo "checking $1 (invocation $n)"
 
-# A token-shaped string, so `redact` has something real to scrub out of the
-# captured output. It is not a credential; it is what one looks like.
-#
-# The prefix is deliberately not a real vendor's. A convincing imitation of
-# a live-key format trips GitHub secret scanning and trufflehog on a public
-# push, and a fake that pages someone is a worse demo than a fake that reads
-# as fake. Keep it implausible to a scanner and obvious to a human -- and
-# note that naming the real prefixes here would defeat the point too.
-echo "auth: using key notakey-live-4f9a2b7c1e00"
+# An unmistakably synthetic sentinel gives `redact` real bytes to scrub from
+# captured output without imitating any credential format.
+echo "fixture: redaction-fixture-FIXTUREBYTES"
 
 if [ "$n" -le "$LIMIT" ]; then
   echo "connection reset by peer" >&2

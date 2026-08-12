@@ -71,13 +71,14 @@ does not state its noise floor cannot be audited.
 
 ## Scrub the output before it reaches disk
 
-`flaky.sh` prints a token-shaped string. `redact.json` attaches a pattern:
+`flaky.sh` prints an unmistakably synthetic sentinel. `redact.json` attaches
+a pattern:
 
 ```console
 $ rm -f .flaky-state && hwb run redact.json
 $ cat <run dir>/steps/check/attempts/2/stdout.bin
 checking api (invocation 3)
-auth: using key [REDACTED]
+fixture: [REDACTED]
 ok: api healthy
 ```
 

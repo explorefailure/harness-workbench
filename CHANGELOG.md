@@ -28,6 +28,10 @@ authoritative publication evidence.
   reporting policy, and add pinned CodeQL and Dependabot configuration.
 - Normalize release source distributions to remove local ownership metadata,
   use the release commit timestamp, and reject unsafe archive paths or links.
+- Use unmistakably synthetic redaction sentinels in current source, preserving
+  the redaction rejection test without credential-shaped fixture data. Narrow
+  the history scanner's sole exception to the exact removed fixture, path, and
+  introducing commit.
 
 ## Published releases
 

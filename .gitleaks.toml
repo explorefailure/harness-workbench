@@ -2,7 +2,14 @@
 useDefault = true
 
 [[allowlists]]
-description = "Documented fake token used by redaction tests and examples"
+description = "Removed synthetic fixture in the initial public-history commit"
+condition = "AND"
+commits = [
+  "fc5846dc3b3f19591ee1de1d40d48ab6e1679703",
+]
+paths = [
+  '''^tests/test_workbench\.py$''',
+]
 regexTarget = "match"
 regexes = [
   '''notakey-live-[0-9a-f]{12}''',

@@ -451,12 +451,14 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertEqual(1, dependabot.count("package-ecosystem: pip"))
         self.assertEqual(1, dependabot.count("package-ecosystem: github-actions"))
 
-    def test_secret_scan_allowlist_is_limited_to_the_documented_fake_token(self):
+    def test_secret_scan_exception_is_bound_to_removed_historical_fixture(self):
         config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
         self.assertIn("useDefault = true", config)
         self.assertEqual(1, config.count("[[allowlists]]"))
+        self.assertIn('condition = "AND"', config)
+        self.assertIn("fc5846dc3b3f19591ee1de1d40d48ab6e1679703", config)
+        self.assertIn(r"^tests/test_workbench\.py$", config)
         self.assertIn("notakey-live-[0-9a-f]{12}", config)
-        self.assertNotIn("paths =", config)
         releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("GITLEAKS_VERSION=8.30.1", releasing)
         self.assertIn("--log-opts='--all'", releasing)

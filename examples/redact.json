@@ -3,7 +3,7 @@
   "run_class": "discovery",
   "features_root": "harness_workbench:builtin",
   "features": [
-    {"name": "redact", "config": {"patterns": ["notakey-live-[0-9a-f]{12}"]}}
+    {"name": "redact", "config": {"patterns": ["redaction-fixture-[A-Z]{12}"]}}
   ],
   "steps": [
     {"id": "01", "argv": ["./leak.sh", "p1.txt"], "inputs": ["p1.txt", "leak.sh"]}

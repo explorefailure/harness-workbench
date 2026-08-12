@@ -78,10 +78,11 @@ Stop if the commit is not the reviewed commit, the checkout is dirty, dependency
 installation fails, the release-tool versions differ from `pyproject.toml`, or
 the history-wide secret scan reports a finding. Obtain Gitleaks from its
 official release, verify the published archive checksum, and install it outside
-the repository. `.gitleaks.toml` allowlists only the explicit `notakey-live-…`
-fixture used by redaction tests and examples. Do not broaden that allowlist to
-make a candidate pass. Do not clean an uncertain directory to make this check
-pass; start another fresh clone.
+the repository. `.gitleaks.toml` extends the default rules. Its sole exception
+is joined with `AND` across the exact initial-history commit, one test path, and
+the synthetic fixture pattern that has been removed from current source. Do not
+broaden that exception or add another to make a candidate pass. Do not clean an
+uncertain directory to make this check pass; start another fresh clone.
 
 ## 2. Run the source and artifact gate
 
