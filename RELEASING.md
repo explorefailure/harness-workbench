@@ -62,6 +62,9 @@ test "${#RELEASE_COMMIT}" -eq 40
 git checkout --detach "$RELEASE_COMMIT"
 test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_COMMIT")"
+test "$SOURCE_DATE_EPOCH" -gt 0
+export SOURCE_DATE_EPOCH
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
@@ -92,7 +95,13 @@ python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
 test ! -e build
 test ! -e dist
-python -m build --sdist --wheel
+RAW_SDIST_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$RAW_SDIST_DIR"' EXIT HUP INT TERM
+python -m build --wheel --outdir dist
+python -m build --sdist --outdir "$RAW_SDIST_DIR"
+python tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
+rm -rf -- "$RAW_SDIST_DIR"
+trap - EXIT HUP INT TERM
 python -m twine check --strict dist/*.whl dist/*.tar.gz
 python tools/verify_release_artifacts.py dist
 gitleaks dir --no-banner --redact=100 --config .gitleaks.toml \
@@ -104,15 +113,27 @@ python tools/release_checksums.py check dist
 test -z "$(git status --porcelain --untracked-files=all)"
 ```
 
-The two installed-artifact commands are intentionally separate. Each creates a
-clean virtual environment, installs only that artifact, checks installed
-metadata and both command forms, and executes the documented first run. The
-artifact verifier requires exactly one wheel and one sdist, verifies their
-contents and metadata, and rejects generated run evidence.
+The backend-built sdist exists only under the private `mktemp` directory and is
+deleted after normalization. Only the normalized archive enters `dist/`, the
+checksum manifest, or an upload command. `normalize_sdist.py` preserves the
+backend-selected files, file modes, and safe file/directory/link types while
+sorting members, setting every member to `0:0` / `root:root`, setting every tar
+and gzip timestamp to the release commit's `SOURCE_DATE_EPOCH`, removing
+machine-specific PAX fields, and writing a filename-free gzip header. The
+artifact verifier rejects a raw or malformed sdist, including non-neutral
+ownership, timestamp drift, absolute/traversal paths, unsafe links, special
+nodes, duplicate members, and platform-bearing gzip headers.
 
-Stop on any non-zero exit. Do not upload a subset of the files and do not edit
-an archive or `SHA256SUMS` by hand. If `build/` or `dist/` already exists, stop
-and use another clean clone instead of mixing artifacts from different commits.
+The two installed-artifact commands are intentionally separate. Each creates
+a clean virtual environment, installs only that artifact, checks installed
+metadata and both command forms, and executes the documented first run. The
+artifact verifier requires exactly one wheel and one normalized sdist,
+verifies their contents and metadata, and rejects generated run evidence.
+
+Stop on any non-zero exit. Never copy the raw backend sdist out of its temporary
+directory or upload it. Do not upload a subset of the files and do not edit an
+archive or `SHA256SUMS` by hand. If `build/` or `dist/` already exists, stop and
+use another clean clone instead of mixing artifacts from different commits.
 
 ## 3. Require GitHub evidence before tagging
 

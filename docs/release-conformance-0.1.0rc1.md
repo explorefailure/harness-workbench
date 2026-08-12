@@ -107,7 +107,13 @@ built from a clean archive of the record-preparation commit:
 
 ```sh
 python3.11 -m unittest discover -s tests -v
-python3.11 -m build --sdist --wheel
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+export SOURCE_DATE_EPOCH
+RAW_SDIST_DIR="$(mktemp -d)"
+python3.11 -m build --wheel --outdir dist
+python3.11 -m build --sdist --outdir "$RAW_SDIST_DIR"
+python3.11 tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
+rm -rf -- "$RAW_SDIST_DIR"
 python3.11 -m twine check --strict dist/*.whl dist/*.tar.gz
 python3.11 tools/verify_release_artifacts.py dist
 python3.11 tools/verify_installed_artifact.py dist/*.whl
@@ -141,9 +147,12 @@ hwb verify "$RUN_ID"
 Expected and observed preparation outcome: installation succeeds; `pip check`
 reports no broken requirements; package, metadata, `hwb --version`, and source
 versions agree at `0.1.0rc1`; the run reports `completed`; `hwb ls` contains its
-run ID; `show` and `verify` accept the complete record. Both disposable local
-artefact forms passed on 2026-08-11. This supplies no outside assurance and
-does not verify a future tagged or downloaded byte sequence.
+run ID; `show` and `verify` accept the complete record. The disposable local
+wheel and ownership-neutral normalized sdist passed on 2026-08-12. Every member
+of that normalized sdist had `0:0` / `root:root` ownership and the
+release-source commit timestamp; a second normalization was byte-identical.
+This supplies no outside assurance and does not verify a future tagged or
+downloaded byte sequence.
 
 Release-final evidence must add the frozen commit, asset filenames and SHA-256
 values, hosted run URLs, downloaded-asset commands/results, verifier identity,
@@ -203,7 +212,7 @@ uncertainty, or assurance meaning requires a new ID or revision.
 | `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Local macOS interpreters exist; hosted Linux/macOS matrix is **pending** | Target disclosed with Linux evidence pending; not release-final evidence |
 | `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
 | `C-HWB-11` — the candidate is in preparation and has not been tagged or published | README, `CHANGELOG.md`, local tag absence, this record | Source surfaces consistently say unreleased | Local state only; remote/public state must be verified at freeze |
-| `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately | `MANIFEST.in`, `pyproject.toml`, release tools/tests | Strict Twine, archive inspection, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
+| `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership and a commit-derived timestamp | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
 
 ## Complete claim-bearing surface inventory
 
@@ -344,7 +353,7 @@ An unresolved MUST remains unmet; recording it does not waive it.
 | Spec/record/seam/feature/command table drift checks | `C-HWB-03` through `C-HWB-06` | `tests/test_workbench.py` | Passing locally |
 | Registered transcript replay and unverified-transcript ceiling | evidence behind example/CLI output claims | `tests/test_workbench.py` | Passing locally |
 | Build plus strict Twine | package metadata/README rendering | local gate and package CI job | Passed locally; hosted job pending |
-| Archive content/licence/generated-store verifier | `C-HWB-01`, `C-HWB-12`, EF-SRS-02 | `tools/verify_release_artifacts.py` | Passed on disposable local artefacts; final assets pending |
+| Sdist normalization plus archive content/licence/generated-store/privacy verifier | `C-HWB-01`, `C-HWB-12`, EF-SRS-02 | `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py` | Neutral ownership, commit-derived tar/gzip timestamps, safe paths/links, and byte-identical repeated normalization passed locally; final assets pending |
 | Separate clean wheel and sdist install/first run | EF-SRS-03, `C-HWB-02`, `C-HWB-12` | `tools/verify_installed_artifact.py` | Passed locally as self-run; downloaded assets pending |
 | Checksums and tag/version verifier | content/version identity | release tools and CI | Local archive checks pass; final tag/assets pending |
 | Gitleaks history and archive scan | disclosure review | maintainer release gate | **Not run in this preparation environment; blocking** |

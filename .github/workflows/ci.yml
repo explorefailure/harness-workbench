@@ -61,11 +61,24 @@ jobs:
       - name: Install release tooling
         run: python -m pip install --disable-pip-version-check '.[release]'
 
-      - name: Build wheel and source distribution
-        run: python -m build
+      - name: Derive deterministic archive timestamp from the candidate commit
+        run: |
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          test "$SOURCE_DATE_EPOCH" -gt 0
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
+
+      - name: Build wheel and ownership-neutral source distribution
+        run: |
+          RAW_SDIST_DIR="$RUNNER_TEMP/hwb-raw-sdist"
+          test ! -e "$RAW_SDIST_DIR"
+          mkdir "$RAW_SDIST_DIR"
+          python -m build --wheel --outdir dist
+          python -m build --sdist --outdir "$RAW_SDIST_DIR"
+          python tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
+          rm -rf -- "$RAW_SDIST_DIR"
 
       - name: Validate package metadata
-        run: python -m twine check --strict dist/*
+        run: python -m twine check --strict dist/*.whl dist/*.tar.gz
 
       - name: Inspect artifact contents and version agreement
         run: python tools/verify_release_artifacts.py dist

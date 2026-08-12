@@ -12,7 +12,7 @@ known record violation.
 
 Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
 candidate has not been published. Zero runtime dependencies, Python 3.11+,
-320 tests.
+326 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -255,15 +255,15 @@ checks use the same versions:
 
 ```sh
 python3 -m pip install '.[release]'
-python3 -m build
-python3 -m twine check --strict dist/*
-python3 tools/verify_release_artifacts.py dist
+python3 -m build --wheel
+python3 -m twine check --strict dist/*.whl
 ```
 
 Maintainers should use the complete, fail-closed candidate and final-release
 procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,
-tag/version agreement, and checksums. Building an archive is not by itself a
-release.
+commit-derived timestamps, ownership-neutral source-distribution repacking,
+tag/version agreement, and checksums. A raw backend-built sdist must not be
+uploaded; building an archive is not by itself a release.
 
 It includes a deterministic, stdlib-only generated corpus for the JSON,
 spec, feature-manifest, conformance, and partial-close boundaries. The fixed

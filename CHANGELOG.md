@@ -28,6 +28,8 @@ authoritative publication evidence.
 - Support CPython 3.11–3.14 on Linux and macOS; Windows is unsupported.
 - State the trusted-code execution boundary, publish a private vulnerability
   reporting policy, and add pinned CodeQL and Dependabot configuration.
+- Normalize release source distributions to remove local ownership metadata,
+  use the release commit timestamp, and reject unsafe archive paths or links.
 
 ## Published releases
 

@@ -1,11 +1,14 @@
 """Mechanical checks for release policy that must not depend on GitHub."""
 from __future__ import annotations
 
+import gzip
+import io
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -16,7 +19,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 import harness_workbench  # noqa: E402
+import normalize_sdist  # noqa: E402
 import release_checksums  # noqa: E402
+import verify_release_artifacts  # noqa: E402
 import verify_release_tag  # noqa: E402
 
 
@@ -78,6 +83,148 @@ class TestReleaseChecksums(unittest.TestCase):
         (self.dist / "duplicate.whl").write_bytes(b"other")
         with self.assertRaises(release_checksums.ChecksumError):
             release_checksums.write(self.dist)
+
+
+class TestSourceDistributionPrivacy(unittest.TestCase):
+    EPOCH = 1_755_000_000
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="hwb-sdist-privacy-")
+        self.root = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write_archive(self, name: str, members: list[tarfile.TarInfo]) -> Path:
+        path = self.root / name
+        with path.open("wb") as destination:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                fileobj=destination,
+                mtime=self.EPOCH,
+            ) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w") as archive:
+                    for member in members:
+                        body = b"payload\n" if member.isfile() else None
+                        if body is not None:
+                            member.size = len(body)
+                        archive.addfile(
+                            member,
+                            io.BytesIO(body) if body is not None else None,
+                        )
+        return path
+
+    def member(
+        self,
+        name: str,
+        *,
+        uid: int = 0,
+        gid: int = 0,
+        uname: str = "root",
+        gname: str = "root",
+        mtime: int | None = None,
+    ) -> tarfile.TarInfo:
+        member = tarfile.TarInfo(name)
+        member.mode = 0o644
+        member.uid = uid
+        member.gid = gid
+        member.uname = uname
+        member.gname = gname
+        member.mtime = self.EPOCH if mtime is None else mtime
+        return member
+
+    def test_verifier_rejects_local_identity_metadata(self):
+        leaking = self.write_archive(
+            "leaking.tar.gz",
+            [
+                self.member(
+                    "harness-workbench/file.txt",
+                    uid=501,
+                    gid=20,
+                    uname="local-user",
+                    gname="local-group",
+                )
+            ],
+        )
+        with self.assertRaisesRegex(SystemExit, "non-neutral numeric ownership"):
+            verify_release_artifacts.check_sdist_archive_safety(
+                leaking, self.EPOCH
+            )
+
+    def test_normalization_removes_identity_and_is_byte_reproducible(self):
+        directory = self.member("harness-workbench/subdir")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        executable = self.member(
+            "harness-workbench/file.txt",
+            uid=501,
+            gid=20,
+            uname="local-user",
+            gname="local-group",
+            mtime=123,
+        )
+        executable.mode = 0o751
+        symlink = self.member("harness-workbench/link")
+        symlink.type = tarfile.SYMTYPE
+        symlink.linkname = "file.txt"
+        hardlink = self.member("harness-workbench/hardlink")
+        hardlink.type = tarfile.LNKTYPE
+        hardlink.linkname = "harness-workbench/file.txt"
+        raw = self.write_archive(
+            "raw.tar.gz",
+            [directory, executable, symlink, hardlink],
+        )
+        first = self.root / "first.tar.gz"
+        second = self.root / "second.tar.gz"
+        normalize_sdist.normalize(raw, first, self.EPOCH)
+        normalize_sdist.normalize(raw, second, self.EPOCH)
+
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        verify_release_artifacts.check_sdist_archive_safety(first, self.EPOCH)
+        with tarfile.open(first, "r:gz") as archive:
+            for member in archive.getmembers():
+                self.assertEqual((0, 0), (member.uid, member.gid))
+                self.assertEqual(("root", "root"), (member.uname, member.gname))
+                self.assertEqual(self.EPOCH, member.mtime)
+            members = {member.name: member for member in archive.getmembers()}
+            self.assertEqual(0o751, members["harness-workbench/file.txt"].mode)
+            self.assertTrue(members["harness-workbench/subdir"].isdir())
+            self.assertEqual("file.txt", members["harness-workbench/link"].linkname)
+            self.assertTrue(members["harness-workbench/link"].issym())
+            self.assertEqual(
+                "harness-workbench/file.txt",
+                members["harness-workbench/hardlink"].linkname,
+            )
+            self.assertTrue(members["harness-workbench/hardlink"].islnk())
+
+    def test_unsafe_member_paths_and_links_are_rejected(self):
+        traversal = self.write_archive(
+            "traversal.tar.gz",
+            [self.member("harness-workbench/../private.txt")],
+        )
+        link = self.member("harness-workbench/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../private.txt"
+        unsafe_link = self.write_archive("unsafe-link.tar.gz", [link])
+
+        for archive in (traversal, unsafe_link):
+            with self.subTest(archive=archive.name), self.assertRaises(SystemExit):
+                verify_release_artifacts.check_sdist_archive_safety(
+                    archive, self.EPOCH
+                )
+
+    def test_normalizing_sdist_does_not_modify_wheel(self):
+        raw = self.write_archive(
+            "raw.tar.gz",
+            [self.member("harness-workbench/file.txt", uid=501, uname="local-user")],
+        )
+        wheel = self.root / "harness_workbench-0.1.0rc1-py3-none-any.whl"
+        wheel.write_bytes(b"unchanged wheel bytes")
+
+        normalize_sdist.normalize(raw, self.root / "normalized.tar.gz", self.EPOCH)
+
+        self.assertEqual(b"unchanged wheel bytes", wheel.read_bytes())
 
 
 class TestReleaseSurfaces(unittest.TestCase):
@@ -238,6 +385,22 @@ class TestReleaseSurfaces(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(f"include {name}", manifest)
                 self.assertIn(f'"{name}"', verifier)
+
+    def test_release_sdist_is_normalized_before_verification_or_upload(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        for surface in (workflow, releasing):
+            with self.subTest(surface=surface[:20]):
+                self.assertIn("SOURCE_DATE_EPOCH", surface)
+                self.assertIn("tools/normalize_sdist.py", surface)
+                self.assertIn('--sdist --outdir "$RAW_SDIST_DIR"', surface)
+                self.assertIn("--output-dir dist", surface)
+        self.assertNotIn("python -m build --sdist --wheel", releasing)
+        self.assertIn("A raw backend-built sdist must not be\nuploaded", readme)
 
     def test_all_workflow_actions_are_official_and_pinned_to_full_shas(self):
         allowed = {

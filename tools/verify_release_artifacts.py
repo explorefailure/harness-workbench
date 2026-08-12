@@ -10,11 +10,15 @@ import argparse
 import ast
 from email.parser import BytesParser
 from email.policy import default
+import os
 from pathlib import Path, PurePosixPath
 import re
+import struct
 import tarfile
 import tomllib
 import zipfile
+
+import normalize_sdist
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +28,7 @@ SDIST_STORE_NAMES = {
     "runs", "sweeps", "blasts", "catches", "sensitivity", "efficacy",
     "replays", "steadies", "effects", "interrupts",
 }
+ALLOWED_PAX_HEADERS = {"path", "linkpath"}
 
 
 def fail(message: str) -> None:
@@ -221,7 +226,64 @@ def check_wheel(path: Path, project: dict, version: str) -> None:
         fail("wheel is missing license files: " + ", ".join(missing_licenses))
 
 
-def check_sdist(path: Path, project: dict, version: str) -> None:
+def check_sdist_archive_safety(path: Path, epoch: int) -> None:
+    with path.open("rb") as stream:
+        header = stream.read(10)
+    if len(header) != 10 or header[:3] != b"\x1f\x8b\x08":
+        fail("sdist is not a gzip-compressed archive")
+    flags = header[3]
+    gzip_mtime = struct.unpack("<I", header[4:8])[0]
+    if flags != 0:
+        fail(f"sdist gzip header contains non-neutral optional fields: flags={flags:#x}")
+    if gzip_mtime != epoch:
+        fail(f"sdist gzip timestamp {gzip_mtime} != SOURCE_DATE_EPOCH {epoch}")
+    if header[8] != 2:
+        fail(f"sdist gzip header does not declare maximum compression: XFL={header[8]}")
+    if header[9] != 255:
+        fail(f"sdist gzip header exposes a platform identifier: OS={header[9]}")
+
+    with tarfile.open(path, "r:gz") as archive:
+        members = archive.getmembers()
+        try:
+            normalize_sdist.validate_members(members)
+        except normalize_sdist.NormalizationError as error:
+            fail(str(error))
+        if [member.name for member in members] != sorted(
+            member.name for member in members
+        ):
+            fail("sdist members are not in canonical path order")
+        for member in members:
+            if (member.uid, member.gid) != (
+                normalize_sdist.NEUTRAL_UID,
+                normalize_sdist.NEUTRAL_GID,
+            ):
+                fail(
+                    f"sdist member {member.name!r} has non-neutral numeric ownership "
+                    f"{member.uid}:{member.gid}"
+                )
+            if (member.uname, member.gname) != (
+                normalize_sdist.NEUTRAL_UNAME,
+                normalize_sdist.NEUTRAL_GNAME,
+            ):
+                fail(
+                    f"sdist member {member.name!r} has non-neutral named ownership "
+                    f"{member.uname!r}:{member.gname!r}"
+                )
+            if member.mtime != epoch:
+                fail(
+                    f"sdist member {member.name!r} timestamp {member.mtime} "
+                    f"!= SOURCE_DATE_EPOCH {epoch}"
+                )
+            unexpected_pax = set(member.pax_headers) - ALLOWED_PAX_HEADERS
+            if unexpected_pax:
+                fail(
+                    f"sdist member {member.name!r} has non-deterministic PAX fields: "
+                    + ", ".join(sorted(unexpected_pax))
+                )
+
+
+def check_sdist(path: Path, project: dict, version: str, epoch: int) -> None:
+    check_sdist_archive_safety(path, epoch)
     with tarfile.open(path, "r:gz") as archive:
         files = [member for member in archive.getmembers() if member.isfile()]
         roots = {PurePosixPath(member.name).parts[0] for member in files}
@@ -271,7 +333,19 @@ def check_sdist(path: Path, project: dict, version: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("dist", type=Path, help="directory containing one wheel and one sdist")
+    parser.add_argument(
+        "--source-date-epoch",
+        type=normalize_sdist.parse_epoch,
+        default=None,
+        help="release commit timestamp (defaults to required SOURCE_DATE_EPOCH)",
+    )
     args = parser.parse_args()
+    epoch = args.source_date_epoch
+    if epoch is None:
+        raw_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+        if raw_epoch is None:
+            parser.error("set SOURCE_DATE_EPOCH or pass --source-date-epoch")
+        epoch = normalize_sdist.parse_epoch(raw_epoch)
     dist = args.dist.resolve()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
@@ -285,7 +359,7 @@ def main() -> None:
     wheel = one(dist, "*.whl")
     sdist = one(dist, "*.tar.gz")
     check_wheel(wheel, project, version)
-    check_sdist(sdist, project, version)
+    check_sdist(sdist, project, version, epoch)
     print(f"verified {wheel.name} and {sdist.name} (version {version})")
 
 
