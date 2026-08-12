@@ -3718,8 +3718,9 @@ class TestCompatibilityContract(unittest.TestCase):
         self.assertIn("CPython 3.11, 3.12, 3.13, and 3.14", readme)
         self.assertIn("on Linux and macOS", readme)
         self.assertIn("Windows is unsupported", readme)
-        self.assertIn("Linux evidence remains", readme)
-        self.assertIn("pending until release CI supplies it", readme)
+        self.assertIn("Private preparation CI", readme)
+        self.assertIn("release-final evidence for the frozen", readme)
+        self.assertIn("commit remains pending", readme)
 
 
 class TestBuiltinFeatures(Base):

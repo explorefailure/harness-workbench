@@ -274,11 +274,24 @@ class TestReleaseSurfaces(unittest.TestCase):
     def test_candidate_is_not_described_as_published(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assertIn("preparing v0.1.0-rc.1", readme)
-        self.assertIn("has not been published", readme)
-        self.assertIn("Unreleased — targeting 0.1.0rc1", changelog)
-        self.assertIn("not been published or tagged", changelog)
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("frozen for the v0.1.0-rc.1 prerelease", readme)
+        self.assertIn("has not been tagged, released, or made public", readme)
+        self.assertIn("0.1.0rc1 — 2026-08-12", changelog)
+        self.assertIn("not been\npublished or tagged", changelog)
         self.assertIn("Published releases\n\nNone yet", changelog)
+        self.assertIn("Frozen candidate record — NOT RELEASED", record)
+        self.assertIn(
+            "https://github.com/explorefailure/harness-workbench/actions/runs/31625746283",
+            record,
+        )
+        self.assertIn(
+            "https://github.com/explorefailure/harness-workbench/actions/runs/31625748519",
+            record,
+        )
+        self.assertIn("No CodeQL pass or uploaded result is claimed", record)
 
     def test_ci_tag_check_is_read_only_and_tag_only(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(

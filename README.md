@@ -10,9 +10,9 @@ contained, whether an inverted decision changed downstream behavior, whether
 a detector observed an input mutation, and whether verdict engines reject a
 known record violation.
 
-Status: **preparing v0.1.0-rc.1** (package version `0.1.0rc1`); this release
-candidate has not been published. Zero runtime dependencies, Python 3.11+,
-326 tests.
+Status: **frozen for the v0.1.0-rc.1 prerelease** (package version
+`0.1.0rc1`); this candidate has not been tagged, released, or made public.
+Zero runtime dependencies, Python 3.11+, 326 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -58,8 +58,9 @@ A virtualenv avoids it as well, and is the recommended way to try this out.
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. Local release checks exercise macOS; Linux evidence remains
-pending until release CI supplies it.
+that test set. Local release checks exercise macOS. Private preparation CI
+exercised the full Linux/macOS matrix; release-final evidence for the frozen
+commit remains pending until that commit's CI completes.
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns

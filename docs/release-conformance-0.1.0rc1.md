@@ -1,11 +1,11 @@
 # Harness Workbench 0.1.0rc1 release conformance record
 
-> **Prepared record — NOT RELEASED.** This is the repository-owned
-> pre-release record for an intended R2 public release. It is not evidence
-> that a tag, GitHub release, hosted CI run, public security setting, or
-> downloadable release asset exists. Rows marked **BLOCKING PUBLICATION** must
-> be closed with release-final evidence before this record can describe a
-> released artefact.
+> **Frozen candidate record — NOT RELEASED.** This is the repository-owned
+> pre-release record for an intended R2 public release. It records private
+> preparation CI separately from release-final evidence and is not evidence
+> that a tag, GitHub release, public security setting, or downloadable release
+> asset exists. Rows marked **BLOCKING PUBLICATION** must be closed with
+> release-final evidence before this record can describe a released artefact.
 
 ## Artefact identity and declared reach
 
@@ -16,12 +16,14 @@
 | Import package / command | `harness_workbench` / `hwb` |
 | Intended version | `0.1.0rc1` |
 | Intended readable tag | `v0.1.0-rc.1` |
-| Lifecycle state | `unreleased` |
+| Lifecycle state | `frozen release candidate; unreleased` |
 | Declared reach | **R2 — public**, declared 2026-08-11 for the intended release |
 | Public attribution | Approved 2026-08-12: Garrett Davis is intentionally public as copyright holder, package author, maintainer, and Git identity associated with Explore Failure. The existing GitHub account association in the reviewed history is intentional. |
-| Preparation baseline | Git commit `017cabcede344fd01a004d67ae008c14a5127460` |
-| Record-preparation revision | The commit containing this file; resolve with `git rev-parse HEAD` in the reviewed checkout |
-| Release commit | **PENDING — BLOCKING PUBLICATION.** No release commit has been frozen or pushed. |
+| Preparation baseline | Git commit `db8b426366b7a5a0775449369b24971b04f1bb1f` |
+| Preparation hosted CI | All eight Linux/macOS CPython 3.11–3.14 jobs plus the package job passed for the preparation baseline in [private CI run 31625746283](https://github.com/explorefailure/harness-workbench/actions/runs/31625746283). This is not release-final evidence for the containing freeze commit. |
+| Preparation CodeQL | [Private run 31625748519](https://github.com/explorefailure/harness-workbench/actions/runs/31625748519) extracted 45/45 Python files, ran its queries, and exported SARIF, but the Analyze step failed when GitHub returned `Resource not accessible by integration` during upload/status access. No CodeQL pass or uploaded result is claimed. |
+| Record-preparation revision | The signed freeze commit containing this file; resolve with `git rev-parse HEAD` in the reviewed checkout |
+| Release commit | **PENDING — BLOCKING PUBLICATION.** The containing source-freeze commit cannot name its own hash; exact remote identity and release-final evidence must be recorded after creation and before publication. |
 | Release tag / GitHub release | **PENDING — BLOCKING PUBLICATION.** Neither exists. |
 | Release wheel, sdist, and checksums | **PENDING — BLOCKING PUBLICATION.** Locally built preparation artefacts are disposable self-run evidence, not released assets. |
 
@@ -97,8 +99,9 @@ for the actual release even though their repository preparation is in place.
 - Starting environment: macOS/arm64 with CPython 3.11 for the package gate.
   This local environment is not a substitute for the required hosted
   Linux/macOS CPython 3.11--3.14 matrix.
-- Source identity: the clean commit containing this record. It is preparation
-  evidence, not the still-pending release commit.
+- Source identity: the signed source-freeze commit containing this record. Its
+  own hash cannot be embedded here; exact remote identity remains required as
+  release-final evidence before publication.
 
 ### Exact artefact forms and commands
 
@@ -168,8 +171,8 @@ an outside artifact check only if the EF-RS-REL separation predicate is met.
 - **Question:** can the stated package execute a JSON workload, retain the
   documented evidence, and exercise the documented harness-measurement paths
   within their named boundaries?
-- **Exact system and conditions:** the content-addressed release commit is
-  pending; intended package version `0.1.0rc1`, CPython 3.11–3.14 target,
+- **Exact system and conditions:** the content-addressed public release
+  identity is pending; package version `0.1.0rc1`, CPython 3.11–3.14 target,
   Linux/macOS target, POSIX command environment, no runtime dependencies.
 - **Preparation observation:** source tests and separate clean installs from a
   locally built wheel and sdist pass on the macOS environment recorded above.
@@ -188,7 +191,7 @@ an outside artifact check only if the EF-RS-REL separation predicate is met.
 - **Withholding:** no claim-sufficient run evidence is intentionally withheld,
   but the governing standards source is not shipped and external GitHub state
   is not yet available. See `D-08` and the pending release rows.
-- **Current version / correction route:** this is an unreleased preparation
+- **Current version / correction route:** this is an unreleased frozen-candidate
   record. For a public release, GitHub Issues is the planned correction route
   and GitHub private vulnerability reporting is the planned confidential route;
   neither route is claimed tested here.
@@ -209,9 +212,9 @@ uncertainty, or assurance meaning requires a new ID or revision.
 | `C-HWB-06` — selected documentation surfaces are mechanically checked, not guaranteed as prose | docs drift/transcript tests and `tests/test_release_engineering.py` | Field/table/command inventories and registered transcripts pass; unregistered transcript ceiling does not rise | Self-run; exact checked surfaces are named in README |
 | `C-HWB-07` — the tool executes trusted commands/modules and replay is not OS isolation | README, `SECURITY.md`, all core docs, command/module execution tests | Required trust-boundary wording is present; misleading sandbox wording is rejected | Inspectable source plus self-run tests; not a security audit |
 | `C-HWB-08` — examples demonstrate model-free, model-adjacent, feature-attachment, retry/redaction, and bounded-effects use without making a provider a requirement | exact example inventory below, example transcripts, package-content verifier | Shipped examples are included in sdist; selected transcripts re-run; no runtime dependency or network reference in the unit suite | Partly machine checked; unregistered examples remain inspectable demonstrations |
-| `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Local macOS interpreters exist; hosted Linux/macOS matrix is **pending** | Target disclosed with Linux evidence pending; not release-final evidence |
+| `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Private preparation CI passed all eight Linux/macOS CPython 3.11–3.14 jobs at `db8b426366b7a5a0775449369b24971b04f1bb1f`; the exact freeze-commit matrix is **pending** | Preparation evidence only; not release-final evidence |
 | `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
-| `C-HWB-11` — the candidate is in preparation and has not been tagged or published | README, `CHANGELOG.md`, local tag absence, this record | Source surfaces consistently say unreleased | Local state only; remote/public state must be verified at freeze |
+| `C-HWB-11` — the candidate source is frozen and has not been tagged, released, or made public | README, `CHANGELOG.md`, tag absence, this record | Source surfaces consistently distinguish freeze from publication | Private state only; tag/release/public state must be verified before publication |
 | `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership and a commit-derived timestamp | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
 
 ## Complete claim-bearing surface inventory
@@ -334,11 +337,11 @@ An unresolved MUST remains unmet; recording it does not waive it.
 |---|---|---|---|
 | `D-01` | `EF-SRS-03`, `EF-RS-REL-05`: no frozen/tagged/downloaded release asset exists | A recipient cannot rely on the local first run as evidence for the bytes they will download | Exact release commit, asset SHA-256, downloaded wheel and sdist clean-install logs |
 | `D-02` | `EF-SRS-08`, `EF-RS-REL-07`: release identity and public derivative do not exist | A recipient cannot resolve a canonical immutable release or tell whether release notes match source | Signed immutable tag, GitHub prerelease URL, exact target commit, release notes and assets reviewed against claim IDs |
-| `D-03` | Hosted Linux/macOS CPython 3.11–3.14 CI has not been observed for the release commit | A recipient has no release-final evidence for the full compatibility target | Required CI run URLs and conclusions for the exact commit |
+| `D-03` | Private preparation CI passed the Linux/macOS CPython 3.11–3.14 matrix at `db8b426366b7a5a0775449369b24971b04f1bb1f`, but hosted CI has not been observed for the exact freeze commit | A recipient has no release-final evidence for the full compatibility target | Required CI run URL and nine successful job conclusions for the exact freeze commit |
 | `D-04` | No outside artifact check or independent run has occurred | A recipient receives author-side functionality evidence only and cannot infer independent assurance | Eligible outside checker record with relationship, prior access, environment, help, raw result, and digest |
 | `D-05` | Private vulnerability reporting and public issue/correction intake are not verified | A public recipient may lack a confidential reporting path or a tested correction path | Enable settings, exercise both routes safely, retain dated evidence and named owner |
 | `D-06` | History/archive secret scan and final disclosure review are pending | A recipient cannot rely on this preparation record as evidence that publication material is secret/private/PII clean | Pinned Gitleaks history and archive results plus manual licence/privacy/security disposition |
-| `D-07` | Branch/tag rulesets, token settings, code scanning results, Dependabot settings, and public visibility are external and unverified | Checked-in YAML does not prove GitHub enforces the intended controls | Dated repository-settings evidence and successful CodeQL/CI runs for exact commit |
+| `D-07` | Branch/tag rulesets, token settings, code scanning results, Dependabot settings, and public visibility are external and unverified. Preparation CodeQL run `31625748519` did not upload a result because GitHub denied integration access while private. | Checked-in YAML and completed local query execution do not prove GitHub accepted or enforces code-scanning results | Dated repository-settings evidence and successful CodeQL/CI runs for exact commit after the public-security gate |
 | `D-08` | The exact governing-standard source bytes are pinned but not shipped or asserted publicly reachable | A recipient without the standards repository can detect a supplied file's equality but cannot independently inspect the complete governing text from this artefact alone | Publish or ship the exact pinned standards, or record a stable public content-addressed location |
 | `D-09` | No final release approver/date/disposition exists | A recipient cannot treat preparation as an authorization to release | Named approver, date, decision, and residual limitations after all blockers close |
 
@@ -346,18 +349,18 @@ An unresolved MUST remains unmet; recording it does not waive it.
 
 | Check | Requirement/claim guarded | Where it runs | Preparation state |
 |---|---|---|---|
-| Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; hosted matrix pending |
+| Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; private preparation matrix passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; exact freeze-commit matrix pending |
 | Conformance surface inventory test | `EF-SRS-08`, `EF-SRS-09`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Prepared and passing locally |
 | Standards-pin assertions | exact EF-SRS/EF-RS-REL version, commit, blob, and SHA-256 | `tests/test_release_engineering.py` | Prepared and passing locally |
 | Relative Markdown link/anchor check | navigable front door and docs | `tests/test_workbench.py` | Passing locally |
 | Spec/record/seam/feature/command table drift checks | `C-HWB-03` through `C-HWB-06` | `tests/test_workbench.py` | Passing locally |
 | Registered transcript replay and unverified-transcript ceiling | evidence behind example/CLI output claims | `tests/test_workbench.py` | Passing locally |
-| Build plus strict Twine | package metadata/README rendering | local gate and package CI job | Passed locally; hosted job pending |
+| Build plus strict Twine | package metadata/README rendering | local gate and package CI job | Passed locally; private preparation package job passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; exact freeze-commit job pending |
 | Sdist normalization plus archive content/licence/generated-store/privacy verifier | `C-HWB-01`, `C-HWB-12`, EF-SRS-02 | `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py` | Neutral ownership, commit-derived tar/gzip timestamps, safe paths/links, and byte-identical repeated normalization passed locally; final assets pending |
 | Separate clean wheel and sdist install/first run | EF-SRS-03, `C-HWB-02`, `C-HWB-12` | `tools/verify_installed_artifact.py` | Passed locally as self-run; downloaded assets pending |
 | Checksums and tag/version verifier | content/version identity | release tools and CI | Local archive checks pass; final tag/assets pending |
 | Gitleaks history and archive scan | disclosure review | maintainer release gate | **Not run in this preparation environment; blocking** |
-| Hosted matrix, CodeQL, repository settings, routes, tag and release | external release predicates | GitHub | **Not run/not enabled/not created here; blocking** |
+| Hosted matrix, CodeQL, repository settings, routes, tag and release | external release predicates | GitHub | Preparation matrix/package run passed; preparation CodeQL upload/status access failed; exact freeze-commit evidence and all public settings/tag/release remain **blocking** |
 
 ## Release-final completion block
 
