@@ -1,0 +1,30 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "confirmation",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {"name": "freeze"},
+    {"name": "receipt"}
+  ],
+  "step_timeout_ms": 60000,
+  "steps": [
+    {
+      "id": "pi-guard-control",
+      "argv": ["./run_adapter.sh", "--variant", "block"],
+      "inputs": [
+        "run_adapter.sh",
+        "adapter_config.json",
+        "adapter.py",
+        "control_runner.py",
+        "control_oracle.py",
+        "normalizer.py",
+        "scripted_provider.ts",
+        "guard_extension.ts",
+        "pin.json",
+        "task.md",
+        "verify_pair.py",
+        "fixture/seed.txt"
+      ]
+    }
+  ]
+}

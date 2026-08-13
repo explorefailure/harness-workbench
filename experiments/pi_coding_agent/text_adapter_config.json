@@ -1,0 +1,36 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "text_fixture",
+  "task": "text_task.md",
+  "inputs": [
+    "text_adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "text_provider.ts",
+    "pin.json",
+    "text_task.md",
+    "text_fixture/marker.txt"
+  ],
+  "extensions": ["text_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--no-tools",
+    "--provider", "hwb-text-scripted",
+    "--model", "text-only",
+    "--system-prompt", "Return the deterministic text fixture response."
+  ],
+  "capture_limits": {
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 1048576,
+    "evidence_bytes": 1048576
+  },
+  "network_mode": "Pi offline; independent text provider performs no requests"
+}

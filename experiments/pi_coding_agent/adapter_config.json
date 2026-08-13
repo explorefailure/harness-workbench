@@ -1,0 +1,36 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "fixture",
+  "task": "task.md",
+  "inputs": [
+    "adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "scripted_provider.ts",
+    "pin.json",
+    "task.md",
+    "fixture/seed.txt"
+  ],
+  "extensions": ["scripted_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--tools", "write",
+    "--provider", "hwb-scripted",
+    "--model", "tool-write",
+    "--system-prompt", "Harness Workbench deterministic fixture."
+  ],
+  "capture_limits": {
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 1048576,
+    "evidence_bytes": 1048576
+  },
+  "network_mode": "Pi offline; configured scripted provider performs no requests"
+}
