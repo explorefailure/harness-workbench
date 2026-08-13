@@ -271,17 +271,25 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertNotIn("Codex", record)
         self.assertNotIn("release-preparation agent", record)
 
-    def test_candidate_is_not_described_as_published(self):
+    def test_candidate_publication_status_is_current(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("frozen for the v0.1.0-rc.1 prerelease", readme)
-        self.assertIn("has not been tagged, released, or made public", readme)
+        self.assertIn("public GitHub prerelease", readme)
+        self.assertIn(
+            "releases/tag/v0.1.0-rc.1",
+            readme,
+        )
+        self.assertIn("not published to PyPI", readme)
+        self.assertNotIn("has not been tagged, released, or made public", readme)
         self.assertIn("0.1.0rc1 — 2026-08-12", changelog)
-        self.assertIn("not been\npublished or tagged", changelog)
-        self.assertIn("Published releases\n\nNone yet", changelog)
+        self.assertIn("published as the public GitHub prerelease", changelog)
+        self.assertIn("not published to PyPI", changelog)
+        self.assertNotIn("Published releases\n\nNone yet", changelog)
+        # The repository-owned record is intentionally the pre-publication
+        # source record; the release-final record is a GitHub release asset.
         self.assertIn("Frozen candidate record — NOT RELEASED", record)
         self.assertIn(
             "https://github.com/explorefailure/harness-workbench/actions/runs/31625746283",

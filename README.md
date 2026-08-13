@@ -10,9 +10,10 @@ contained, whether an inverted decision changed downstream behavior, whether
 a detector observed an input mutation, and whether verdict engines reject a
 known record violation.
 
-Status: **frozen for the v0.1.0-rc.1 prerelease** (package version
-`0.1.0rc1`); this candidate has not been tagged, released, or made public.
-Zero runtime dependencies, Python 3.11+, 326 tests.
+Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
+public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
+with wheel and source-distribution assets. It is not published to PyPI. Zero
+runtime dependencies, Python 3.11+, 326 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -58,9 +59,9 @@ A virtualenv avoids it as well, and is the recommended way to try this out.
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. Local release checks exercise macOS. Private preparation CI
-exercised the full Linux/macOS matrix; release-final evidence for the frozen
-commit remains pending until that commit's CI completes.
+that test set. Local release checks exercised macOS. Immutable-tag CI exercised
+the full Linux/macOS matrix; the release-final conformance record is attached
+to the [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
@@ -228,7 +229,7 @@ option reference.
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
-| [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the prepared R2 conformance record, claim routes, release blockers, and final-evidence fields |
+| [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the source-bundled pre-release conformance record; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) is attached to the GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,
