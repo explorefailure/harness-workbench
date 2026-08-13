@@ -7,9 +7,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## 0.1.0rc1 — 2026-08-12
 
-This dated section describes the frozen candidate source. It has **not been
-published or tagged**; the signed tag and GitHub prerelease are the
-authoritative publication evidence.
+This source was published as the public GitHub prerelease
+[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
+The release carries the signed tag, wheel, source distribution, checksums, and
+release-final conformance record. It is not published to PyPI.
 
 - Run JSON specs as ordinary subprocess workloads with append-only attempt
   evidence and zero runtime dependencies.
@@ -35,6 +36,7 @@ authoritative publication evidence.
 
 ## Published releases
 
-None yet.
+- [`0.1.0rc1` — 2026-08-12](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
+  — first public GitHub prerelease; not published to PyPI.
 
 [Semantic Versioning]: https://semver.org/
