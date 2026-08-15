@@ -1,0 +1,22 @@
+{
+  "schema": "cross-harness-pins/v0.1",
+  "claude_code": {
+    "version": "2.1.228",
+    "model": "claude-haiku-4-5-20251001",
+    "executable_sha256": "43484b1352cef03a08346f36ef0437755b1aad646ab9313ce187857b794b7247"
+  },
+  "codex_cli": {
+    "version": "0.144.1",
+    "model": "gpt-5.6-luna",
+    "executable_sha256": "29915529b97697def1a957b0505e770aa6a45744435d62fc263e98d7619e167a"
+  },
+  "hermes_agent": {
+    "version": "0.16.0",
+    "source_commit": "33b1d144590a211100f42aa911fd7f91ba031507",
+    "launcher_sha256": "0057be9722fce11f8a9af62f2042ec543bad1f520c5426efdb4cecb2e9b125be"
+  },
+  "ollama": {
+    "model": "qwen3.5:9b",
+    "model_digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7"
+  }
+}

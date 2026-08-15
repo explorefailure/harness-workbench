@@ -1,0 +1,16 @@
+model:
+  default: qwen3.5:9b
+  provider: custom
+  base_url: http://127.0.0.1:11434/v1
+toolsets:
+  - file
+hooks_auto_accept: true
+hooks:
+  pre_tool_call:
+    - matcher: write_file
+      command: python3.11 hook.py
+      timeout: 5
+  post_tool_call:
+    - matcher: write_file
+      command: python3.11 hook.py
+      timeout: 5
