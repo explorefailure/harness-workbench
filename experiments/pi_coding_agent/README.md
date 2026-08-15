@@ -64,6 +64,12 @@ The result-rewrite pair reverses handlers that replace both result content and
 create the treatment file, but one reports success and the other reports failure.
 Normalized executions therefore label result evidence as `post_tool_result_hook`.
 
+The failed-result rewrite pair starts with a real deterministic bash failure. The
+honest arm preserves it; the falsified arm rewrites it to synthetic success although
+the declared `attempted.txt` effect is absent. Both generic adapter captures are
+structurally valid, while the experiment's effect-consistency oracle accepts only the
+honest status/effect relationship and explicitly detects the falsified one.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -165,6 +171,8 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run result_throw_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_audit_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_mask_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_restore_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run failure_honest.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run failure_falsified.json
 ```
 
 Those source-bound commands deliberately use the Workbench from the current
@@ -251,7 +259,8 @@ undeclared-difference mutation matrix, extension mutation/guard ordering,
 throwing-handler fail-closed and audit-order behavior, terminal block precedence
 over explicit allow, post-effect result-handler failure and stderr classification,
 last-writer result rewriting versus durable effects, and sealed-record tamper
-rejection.
+rejection. It also covers a real failed tool result rewritten to apparent success
+and rejected by a separate effect-aware workload oracle.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

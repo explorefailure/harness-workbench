@@ -77,6 +77,13 @@ sys.modules["result_rewrite_oracle"] = result_rewrite_oracle
 result_rewrite_runner = load_module(
     "pi_hwb_result_rewrite_runner", EXPERIMENT / "result_rewrite_runner.py"
 )
+failure_rewrite_oracle = load_module(
+    "pi_hwb_failure_rewrite_oracle", EXPERIMENT / "failure_rewrite_oracle.py"
+)
+sys.modules["failure_rewrite_oracle"] = failure_rewrite_oracle
+failure_rewrite_runner = load_module(
+    "pi_hwb_failure_rewrite_runner", EXPERIMENT / "failure_rewrite_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -585,6 +592,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 | set(
                     json.loads(
                         (EXPERIMENT / "composition_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
+                set(raw["steps"][0]["inputs"]),
+            )
+
+        for name, variant in (
+            ("failure_honest.json", "honest"),
+            ("failure_falsified.json", "falsified"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_failure_rewrite.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(failure_rewrite_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "failure_rewrite_adapter_config.json").read_text()
                     )["inputs"]
                 ),
                 set(raw["steps"][0]["inputs"]),
@@ -1632,6 +1657,66 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 errors, _comparison = result_rewrite_oracle.evaluate(
                     "restore-first", capture
+                )
+                self.assertTrue(errors)
+
+    def test_effect_oracle_rejects_real_failure_rewritten_to_success(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("honest", "falsified"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "failure_rewrite_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelope = json.loads(result.stdout)
+            envelopes[variant] = envelope
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+            self.assertTrue(envelope["adapter"]["verdict"]["passed"])
+            self.assertTrue(envelope["comparison"]["underlying_failure_observed"])
+            self.assertFalse(envelope["comparison"]["durable_treatment_effect"])
+            self.assertTrue(envelope["comparison"]["positive_control"])
+            self.assertEqual(
+                "post_tool_result_hook", envelope["comparison"]["result_stage"]
+            )
+
+        self.assertTrue(envelopes["honest"]["comparison"]["final_reported_error"])
+        self.assertTrue(envelopes["honest"]["comparison"]["effect_oracle_accepted"])
+        self.assertFalse(envelopes["honest"]["comparison"]["false_success_detected"])
+        self.assertFalse(
+            envelopes["falsified"]["comparison"]["final_reported_error"]
+        )
+        self.assertFalse(
+            envelopes["falsified"]["comparison"]["effect_oracle_accepted"]
+        )
+        self.assertTrue(
+            envelopes["falsified"]["comparison"]["false_success_detected"]
+        )
+
+        mutations = []
+        changed = copy.deepcopy(envelopes["falsified"]["adapter"])
+        changed["evidence"]["failure_rewrite"]["jsonl"][0][
+            "observedIsError"
+        ] = False
+        mutations.append(("hidden-underlying-failure", changed))
+        changed = copy.deepcopy(envelopes["falsified"]["adapter"])
+        changed["workspace"]["after"].append(
+            {"path": "attempted.txt", "mode": 0o644, "size": 1, "sha256": "0" * 64}
+        )
+        mutations.append(("invented-effect", changed))
+        for name, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = failure_rewrite_oracle.evaluate(
+                    "falsified", capture
                 )
                 self.assertTrue(errors)
 

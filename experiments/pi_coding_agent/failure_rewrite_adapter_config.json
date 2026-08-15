@@ -1,0 +1,20 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "composition_fixture",
+  "task": "failure_rewrite_task.md",
+  "inputs": [
+    "failure_rewrite_adapter_config.json", "adapter.py", "normalizer.py",
+    "failure_rewrite_provider.ts", "pin.json", "failure_rewrite_task.md",
+    "composition_fixture/seed.txt"
+  ],
+  "extensions": ["failure_rewrite_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
+    "--no-prompt-templates", "--no-context-files", "--no-approve", "--offline",
+    "--tools", "bash,write", "--provider", "hwb-failure-rewrite", "--model", "failure-rewrite",
+    "--system-prompt", "Run the deterministic failed-write result-rewrite fixture."
+  ],
+  "capture_limits": {"stdout_bytes": 8388608, "stderr_bytes": 1048576, "evidence_bytes": 1048576},
+  "network_mode": "Pi offline; failure-rewrite provider and fixture perform no requests"
+}

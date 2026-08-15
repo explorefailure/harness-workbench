@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 57 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 58 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -427,6 +427,63 @@ receiving misleading result content.
 **Next.** Start with a real tool failure, rewrite it to apparent success, and
 prove that an effect-aware oracle rejects the false success. Then test result
 rewrites across parallel tool completion order.
+
+## E10 — Real tool failure rewritten to false success
+
+**Question.** Can a Pi `tool_result` handler turn a genuine failed tool into an
+apparently successful result, and will an effect-aware workload oracle reject
+that claim even when the generic adapter and lifecycle remain valid?
+
+**Expectation.** The same underlying bash command must fail in both arms and
+must not create `attempted.txt`. The honest arm should preserve `isError: true`.
+The falsified arm should rewrite the result to `isError: false` plus synthetic
+success content. The next positive-control write must succeed in both arms.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, mode-aware result
+extension, and 11 declared inputs. The treatment command deterministically
+short-circuits before its write because `seed.txt` is a file, not a directory.
+The extension records the original failed result before optionally rewriting it.
+`failure_rewrite_oracle.py` independently checks the claimed status against the
+declared durable effect.
+
+**Evidence.** Honest run `20260815T220249Z-06fcee-f4fb` and falsified run
+`20260815T220250Z-f08ad6-66c7` both completed and conformed with matching maps
+of 11 frozen/receipted inputs. The 58-test Pi suite passed, including mutations
+that hide the underlying error or invent a treatment effect.
+
+**Result.** Both extensions observed the same real `Command exited with code 1`
+result and neither arm created `attempted.txt`. The honest final result remained
+errored. The falsified final result became synthetic success. Pi then completed
+the same exact positive-control write in both arms. The generic adapter passed
+both captures; the effect-consistency oracle rejected only the falsified claim.
+
+**Learned.** A structurally valid harness run can contain a deliberately false
+task success. Post-processing can erase the subject's real failure status, so
+even phase-labelled result evidence cannot replace an external outcome check.
+The useful invariant is directional: a reported success must imply its declared
+durable effect. A reported failure does not imply rollback.
+
+The fixture iteration exposed two additional boundaries. Pi validation failures
+occur before `tool_result` handlers and therefore cannot be rewritten there.
+Filesystem failures can embed volatile absolute workspace paths in result text,
+so deterministic confirmation fixtures should avoid binding raw path-bearing
+errors when a stable failure mechanism is available.
+
+**Code consequence.** **Change now, completed locally.** The new runner/oracle
+separates `underlying_failure_observed`, `final_reported_error`, durable effect,
+and `effect_oracle_accepted`. The outer experiment passes only when it proves
+that the falsified inner claim was detected. **Candidate for reuse:** every
+external-harness task oracle should encode success-to-effect implications above
+the generic adapter. Do not promote this Pi-specific fixture or result schema to
+Workbench core.
+
+**Limits.** This covers one deterministic sequential bash failure and one
+deliberately dishonest extension. It does not test model behavior after receiving
+the false success, partial effects, parallel results, retries, or a live provider.
+
+**Next.** Make the deterministic provider branch on the falsified result to test
+whether result rewriting changes the agent's next action, then test concurrent
+result rewrites in parallel tool completion order.
 
 ## Cross-harness footing established by Pi
 
