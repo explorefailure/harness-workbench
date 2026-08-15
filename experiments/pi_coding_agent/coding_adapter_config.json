@@ -1,0 +1,37 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "coding_fixture",
+  "task": "coding_task.md",
+  "inputs": [
+    "coding_adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "coding_provider.ts",
+    "pin.json",
+    "coding_task.md",
+    "coding_fixture/slugger.py",
+    "coding_fixture/test_slugger.py"
+  ],
+  "extensions": ["coding_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--tools", "read,edit,bash",
+    "--provider", "hwb-coding-scripted",
+    "--model", "bug-fix",
+    "--system-prompt", "Run the deterministic coding repair fixture."
+  ],
+  "capture_limits": {
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 1048576,
+    "evidence_bytes": 1048576
+  },
+  "network_mode": "Pi offline; coding provider and fixture perform no requests"
+}

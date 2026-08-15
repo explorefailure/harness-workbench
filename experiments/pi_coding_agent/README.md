@@ -22,6 +22,12 @@ verify the exact edited bytes, the unchanged surrounding file, and the correlate
 Pi tool evidence. This covers a nested path containing spaces and non-ASCII text
 without granting `bash` or `write`.
 
+`coding_adapter_config.json` is a fourth, more realistic consumer. Pi reads a buggy
+Python slug utility and its tests, runs the suite to reproduce the failure, edits the
+implementation, and reruns the suite successfully. The fixture is synthetic and
+offline, but the `read`, `edit`, and `bash` operations are Pi's real tools rather
+than adapter simulations.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -85,6 +91,24 @@ Run the independent read/edit workload with:
 ```sh
 python3.11 adapter.py read_edit_adapter_config.json
 ```
+
+Run the contained coding repair with:
+
+```sh
+python3.11 adapter.py coding_adapter_config.json
+```
+
+Run that repair as a sealed Workbench workload with frozen inputs and receipts:
+
+```sh
+PYTHONPATH=../../src python3.11 -m harness_workbench run coding.json
+PYTHONPATH=../../src python3.11 -m harness_workbench verify <coding-run-id>
+```
+
+Those source-bound commands deliberately use the Workbench from the current
+checkout. If you use the shorter installed `hwb` command instead, run `hwb
+--version` first and confirm that it is the intended Harness Workbench release;
+an older unrelated installation can otherwise be selected from `PATH`.
 
 Every adapter configuration declares positive `capture_limits` for stdout, stderr,
 and named evidence. The adapter watches stdout and stderr while Pi runs and terminates
@@ -150,16 +174,17 @@ projection across all successful runs while deliberately excluding volatile raw
 session IDs, paths, and timestamps. It also requires a unique retained root and no
 surviving owned process group for every run.
 
-The 47 ordinary tests cover malformed and out-of-order streams, pinned session
+The 48 ordinary tests cover malformed and out-of-order streams, pinned session
 protocol drift, duplicate terminals, retry and compaction cycles, lifecycle deletion
 and duplication matrices, tool correlation, closed config validation, path traversal
 and symlink rejection, exact pin and installed-tree mutation rejection, input binding,
 raw evidence boundaries and malformed encodings, process nonzero exit, timeout,
 detachment, SIGTERM, unwritable workspace, and output pressure, credential/host-state
 filtering, ambient project-resource suppression and explicit loading, adapter/oracle
-separation, independent text-only and read/edit workloads, eight concurrent isolated
-Pi runs, deterministic provider and extension failure captures, both real Pi controls,
-an undeclared-difference mutation matrix, and sealed-record tamper rejection.
+separation, independent text-only, read/edit, and coding-repair workloads, eight
+concurrent isolated Pi runs, deterministic provider and extension failure captures,
+both real Pi controls, an undeclared-difference mutation matrix, and sealed-record
+tamper rejection.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

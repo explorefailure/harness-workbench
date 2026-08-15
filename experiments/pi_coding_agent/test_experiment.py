@@ -307,6 +307,28 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             self.assertEqual(["freeze", "receipt"], [item["name"] for item in raw["features"]])
             self.assertEqual(expected, set(raw["steps"][0]["inputs"]))
 
+        coding = json.loads((EXPERIMENT / "coding.json").read_text(encoding="utf-8"))
+        self.assertEqual("confirmation", coding["run_class"])
+        self.assertEqual("harness_workbench:builtin", coding["features_root"])
+        self.assertEqual(
+            ["freeze", "receipt"],
+            [item["name"] for item in coding["features"]],
+        )
+        self.assertEqual(
+            {
+                "run_coding_adapter.sh",
+                "coding_adapter_config.json",
+                "adapter.py",
+                "normalizer.py",
+                "coding_provider.ts",
+                "pin.json",
+                "coding_task.md",
+                "coding_fixture/slugger.py",
+                "coding_fixture/test_slugger.py",
+            },
+            set(coding["steps"][0]["inputs"]),
+        )
+
     def test_pin_is_exact(self):
         pin = json.loads((EXPERIMENT / "pin.json").read_text(encoding="utf-8"))
         self.assertEqual("0.84.1", pin["version"])
@@ -912,6 +934,84 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(expected).hexdigest(),
             after["nested dir/naïve file.txt"]["sha256"],
+        )
+
+    def test_generic_adapter_repairs_code_and_runs_tests_when_pi_is_installed(self):
+        pi = shutil.which("pi")
+        if pi is None:
+            self.skipTest("Pi is not installed")
+        version = subprocess.run(
+            [pi, "--version"], check=True, stdout=subprocess.PIPE, text=True
+        ).stdout.strip()
+        if version != "0.84.1":
+            self.skipTest(f"Pi 0.84.1 is required, found {version}")
+
+        with tempfile.TemporaryDirectory() as parent:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "adapter.py"),
+                    str(EXPERIMENT / "coding_adapter_config.json"),
+                    "--workspace-parent",
+                    parent,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+        envelope = json.loads(result.stdout)
+        projection = envelope["pi"]["summary"]["projection"]
+        self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"]["errors"])
+        self.assertEqual(
+            {
+                "coding_adapter_config.json",
+                "adapter.py",
+                "normalizer.py",
+                "coding_provider.ts",
+                "pin.json",
+                "coding_task.md",
+                "coding_fixture/slugger.py",
+                "coding_fixture/test_slugger.py",
+            },
+            set(envelope["configuration"]["input_digests"]),
+        )
+        self.assertEqual(
+            ["toolUse", "toolUse", "toolUse", "toolUse", "toolUse", "stop"],
+            projection["assistant_stop_reasons"],
+        )
+        self.assertEqual(
+            [
+                ("read", "slugger.py", False),
+                ("read", "test_slugger.py", False),
+                ("bash", None, True),
+                ("edit", "slugger.py", False),
+                ("bash", None, False),
+            ],
+            [
+                (item["tool_name"], item["target_path"], item["is_error"])
+                for item in projection["tool_executions"]
+            ],
+        )
+        before = {item["path"]: item for item in envelope["workspace"]["before"]}
+        after = {item["path"]: item for item in envelope["workspace"]["after"]}
+        self.assertEqual(
+            {"slugger.py"},
+            {
+                name
+                for name in before
+                if before[name]["sha256"] != after[name]["sha256"]
+            },
+        )
+        expected = (
+            b'import re\n\n\ndef slugify(text):\n'
+            b'    """Return a URL-safe identifier for a short ASCII label."""\n'
+            b'    words = re.findall(r"[a-z0-9]+", text.casefold())\n'
+            b'    return "-".join(words)\n'
+        )
+        self.assertEqual(
+            hashlib.sha256(expected).hexdigest(), after["slugger.py"]["sha256"]
         )
 
     def test_provider_failure_returns_a_typed_failed_capture(self):
