@@ -260,6 +260,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
                         "arguments_sha256": canonical_digest(arguments),
                         "arguments_stage": "pre_tool_call_hook",
                         "result_sha256": canonical_digest(event.get("result")),
+                        "result_stage": "post_tool_result_hook",
                         "is_error": event.get("isError"),
                     }
                 )

@@ -59,6 +59,11 @@ Pi preserves the successful effect, catches the extension error, continues later
 rejects the extension runtime error even though Pi exits zero and its JSON lifecycle
 looks successful; the experiment oracle treats that exact failure as the treatment.
 
+The result-rewrite pair reverses handlers that replace both result content and
+`isError`. Result handlers see earlier rewrites and the final handler wins. Both arms
+create the treatment file, but one reports success and the other reports failure.
+Normalized executions therefore label result evidence as `post_tool_result_hook`.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -158,6 +163,8 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run block_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run allow_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_throw_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_audit_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run result_mask_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run result_restore_first.json
 ```
 
 Those source-bound commands deliberately use the Workbench from the current
@@ -243,7 +250,8 @@ paired plan/action policy enforcement and its negative mutations, an
 undeclared-difference mutation matrix, extension mutation/guard ordering,
 throwing-handler fail-closed and audit-order behavior, terminal block precedence
 over explicit allow, post-effect result-handler failure and stderr classification,
-and sealed-record tamper rejection.
+last-writer result rewriting versus durable effects, and sealed-record tamper
+rejection.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

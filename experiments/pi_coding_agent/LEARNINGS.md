@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 56 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 57 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -376,6 +376,57 @@ transactional tools that may implement their own rollback.
 **Next.** Reverse result handlers that mutate `isError` or content to test
 whether post-processing can make recorded tool status disagree with the durable
 effect, then combine argument mutation with terminal guard ordering.
+
+## E09 — Result rewriting versus durable effect
+
+**Question.** When two Pi `tool_result` handlers rewrite both content and
+`isError`, which rewrite becomes the recorded tool result, what does the later
+handler observe, and can the final status disagree with the filesystem effect?
+
+**Expectation.** Result handlers should behave as ordered middleware. If the
+last patch wins, mask-first/restore-last should finish successful, while
+restore-first/mask-last should finish errored. The treatment file should exist
+in both arms because rewriting occurs after execution.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, result masker,
+result restorer, and 12 declared inputs. The masker returns synthetic failure
+content plus `isError: true`; the restorer returns synthetic success content
+plus `isError: false`. `result_rewrite_oracle.py` binds each intermediate view,
+final digest/status, lifecycle, and durable effect.
+
+**Evidence.** Mask-first run `20260815T215421Z-42311e-6353` and restore-first
+run `20260815T215423Z-b5726f-73b2` both completed and conformed with matching
+maps of 12 frozen/receipted inputs. The 57-test Pi suite passed, including
+mutations that mislabel the result stage or remove the treatment effect.
+
+**Result.** Mask-first recorded the masker observing Pi's original successful
+write, then the restorer observing the synthetic error; the final result was
+synthetic success. Restore-first recorded the restorer observing the original
+success, then the masker observing the synthetic success; the final result was
+synthetic failure. Both arms created the same exact treatment and control files.
+
+**Learned.** Pi result handlers are last-writer-wins middleware. Final tool
+content and `isError` describe the post-processed result, not the underlying
+tool outcome. A reported failure can coexist with a completed effect, and a
+later handler can erase an earlier failure report. Tool status is therefore not
+durable-effect ground truth.
+
+**Code consequence.** **Change now, completed locally.** Normalized tool
+executions now label `result_stage: post_tool_result_hook`, complementing the
+existing pre-hook argument-stage label. The new oracle treats final status,
+intermediate handler evidence, and filesystem effect as separate facts.
+**Candidate for reuse:** cross-harness result schemas need explicit observation
+stages and external effects; a generic `success` boolean without provenance is
+unsafe. Keep Pi's exact middleware details local.
+
+**Limits.** This begins with a genuinely successful write and rewrites only
+text content plus `isError`. It does not test an underlying failure rewritten
+to success, details or usage patches, parallel tools, or model behavior after
+receiving misleading result content.
+
+**Next.** Start with a real tool failure, rewrite it to apparent success, and
+prove that an effect-aware oracle rejects the false success. Then test result
+rewrites across parallel tool completion order.
 
 ## Cross-harness footing established by Pi
 

@@ -70,6 +70,13 @@ sys.modules["result_failure_oracle"] = result_failure_oracle
 result_failure_runner = load_module(
     "pi_hwb_result_failure_runner", EXPERIMENT / "result_failure_runner.py"
 )
+result_rewrite_oracle = load_module(
+    "pi_hwb_result_rewrite_oracle", EXPERIMENT / "result_rewrite_oracle.py"
+)
+sys.modules["result_rewrite_oracle"] = result_rewrite_oracle
+result_rewrite_runner = load_module(
+    "pi_hwb_result_rewrite_runner", EXPERIMENT / "result_rewrite_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -194,6 +201,8 @@ class PiNormalizerTests(unittest.TestCase):
         execution = summary["projection"]["tool_executions"][0]
         self.assertEqual("hwb-write-001", execution["tool_call_id"])
         self.assertEqual("forbidden.txt", execution["target_path"])
+        self.assertEqual("pre_tool_call_hook", execution["arguments_stage"])
+        self.assertEqual("post_tool_result_hook", execution["result_stage"])
         self.assertTrue(execution["is_error"])
 
     def test_rejects_non_json_noise(self):
@@ -555,6 +564,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(result_failure_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "composition_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
+                set(raw["steps"][0]["inputs"]),
+            )
+
+        for name, variant in (
+            ("result_mask_first.json", "mask-first"),
+            ("result_restore_first.json", "restore-first"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_result_rewrite.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(result_rewrite_runner.INPUTS)
                 | set(
                     json.loads(
                         (EXPERIMENT / "composition_adapter_config.json").read_text()
@@ -1546,6 +1573,65 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 errors, _comparison = result_failure_oracle.evaluate(
                     "throw-first", capture
+                )
+                self.assertTrue(errors)
+
+    def test_result_rewrite_order_can_disagree_with_durable_effect(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("mask-first", "restore-first"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "result_rewrite_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelope = json.loads(result.stdout)
+            envelopes[variant] = envelope
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+            self.assertTrue(envelope["comparison"]["last_rewrite_won"])
+            self.assertTrue(envelope["comparison"]["durable_treatment_effect"])
+            self.assertTrue(envelope["comparison"]["positive_control"])
+            self.assertEqual(
+                "post_tool_result_hook", envelope["comparison"]["result_stage"]
+            )
+
+        self.assertFalse(envelopes["mask-first"]["comparison"]["final_reported_error"])
+        self.assertTrue(
+            envelopes["mask-first"]["comparison"]["reported_status_agrees_with_effect"]
+        )
+        self.assertTrue(
+            envelopes["restore-first"]["comparison"]["final_reported_error"]
+        )
+        self.assertFalse(
+            envelopes["restore-first"]["comparison"]["reported_status_agrees_with_effect"]
+        )
+
+        mutations = []
+        changed = copy.deepcopy(envelopes["restore-first"]["adapter"])
+        changed["pi"]["summary"]["projection"]["tool_executions"][0][
+            "result_stage"
+        ] = "raw_tool_result"
+        mutations.append(("false-result-stage", changed))
+        changed = copy.deepcopy(envelopes["restore-first"]["adapter"])
+        changed["workspace"]["after"] = [
+            item
+            for item in changed["workspace"]["after"]
+            if item["path"] != "requested.txt"
+        ]
+        mutations.append(("missing-durable-effect", changed))
+        for name, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = result_rewrite_oracle.evaluate(
+                    "restore-first", capture
                 )
                 self.assertTrue(errors)
 
