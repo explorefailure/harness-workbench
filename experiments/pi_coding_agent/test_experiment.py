@@ -43,6 +43,9 @@ control_runner = load_module("pi_hwb_control_runner", EXPERIMENT / "control_runn
 coding_oracle = load_module("pi_hwb_coding_oracle", EXPERIMENT / "coding_oracle.py")
 sys.modules["coding_oracle"] = coding_oracle
 coding_runner = load_module("pi_hwb_coding_runner", EXPERIMENT / "coding_runner.py")
+plan_oracle = load_module("pi_hwb_plan_oracle", EXPERIMENT / "plan_oracle.py")
+sys.modules["plan_oracle"] = plan_oracle
+plan_runner = load_module("pi_hwb_plan_runner", EXPERIMENT / "plan_runner.py")
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -462,6 +465,16 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             set(coding["steps"][0]["inputs"]),
         )
         self.assertEqual(set(coding_runner.CODING_INPUTS), set(coding["steps"][0]["inputs"]))
+
+        for name, variant in (("plan_mode.json", "plan"), ("action_mode.json", "act")):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual("confirmation", raw["run_class"])
+            self.assertEqual(
+                ["./run_plan_mode.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(plan_runner.PLAN_INPUTS), set(raw["steps"][0]["inputs"])
+            )
 
     def test_pin_is_exact(self):
         pin = json.loads((EXPERIMENT / "pin.json").read_text(encoding="utf-8"))
@@ -1171,6 +1184,86 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(expected).hexdigest(), after["slugger.py"]["sha256"]
         )
+
+    def test_plan_mode_blocks_effects_without_breaking_read_controls(self):
+        pi = shutil.which("pi")
+        if pi is None:
+            self.skipTest("Pi is not installed")
+        version = subprocess.run(
+            [pi, "--version"], check=True, stdout=subprocess.PIPE, text=True
+        ).stdout.strip()
+        if version != "0.84.1":
+            self.skipTest(f"Pi 0.84.1 is required, found {version}")
+
+        envelopes = {}
+        with tempfile.TemporaryDirectory() as parent:
+            for variant in ("plan", "act"):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(EXPERIMENT / "plan_runner.py"),
+                        "--variant",
+                        variant,
+                        "--workspace-parent",
+                        parent,
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                )
+                envelopes[variant] = json.loads(result.stdout)
+
+        for envelope in envelopes.values():
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+        self.assertEqual(
+            envelopes["plan"]["adapter"]["configuration"]["input_digests"],
+            envelopes["act"]["adapter"]["configuration"]["input_digests"],
+        )
+        self.assertEqual(
+            (True, True, False, False),
+            tuple(
+                envelopes["plan"]["comparison"][key]
+                for key in (
+                    "read_succeeded",
+                    "safe_bash_succeeded",
+                    "direct_write_effect",
+                    "shell_write_effect",
+                )
+            ),
+        )
+        self.assertEqual(
+            (True, True, True, True),
+            tuple(
+                envelopes["act"]["comparison"][key]
+                for key in (
+                    "read_succeeded",
+                    "safe_bash_succeeded",
+                    "direct_write_effect",
+                    "shell_write_effect",
+                )
+            ),
+        )
+
+        mutations = []
+        plan_capture = envelopes["plan"]["adapter"]
+        changed = copy.deepcopy(plan_capture)
+        changed["pi"]["summary"]["projection"]["tool_executions"][3]["is_error"] = False
+        mutations.append(("blocked-shell-reported-success", "plan", changed))
+        changed = copy.deepcopy(plan_capture)
+        changed["workspace"]["after"].append(
+            {"path": "direct.txt", "mode": 0o644, "size": 1, "sha256": "0" * 64}
+        )
+        mutations.append(("plan-write-effect", "plan", changed))
+        act_capture = envelopes["act"]["adapter"]
+        changed = copy.deepcopy(act_capture)
+        changed["evidence"]["plan_decisions"]["jsonl"] = []
+        mutations.append(("missing-policy-evidence", "act", changed))
+        for name, variant, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = plan_oracle.evaluate(variant, capture)
+                self.assertTrue(errors)
 
     def test_provider_failure_returns_a_typed_failed_capture(self):
         if shutil.which("pi") is None:

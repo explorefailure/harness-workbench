@@ -34,6 +34,11 @@ than adapter simulations. `coding_runner.py` applies a separate coding-specific
 oracle: the release-facing command passes only for the exact red-test → intended
 edit → green-test lifecycle, with no invariant or unexpected workspace changes.
 
+`plan_adapter_config.json` drives a fifth workload through paired plan/action
+arms. The same provider performs two read-only positive controls, a direct
+`write`, and a shell-mediated write. Plan mode disables the direct tool and
+blocks the unsafe shell command; action mode permits both exact effects.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -112,6 +117,14 @@ Run that repair as a sealed Workbench workload with frozen inputs and receipts:
 ```sh
 PYTHONPATH=../../src python3.11 -m harness_workbench run coding.json
 PYTHONPATH=../../src python3.11 -m harness_workbench verify <coding-run-id>
+```
+
+Run the sealed plan/action pair with:
+
+```sh
+PYTHONPATH=../../src python3.11 -m harness_workbench run plan_mode.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run action_mode.json
+PYTHONPATH=../../src python3.11 verify_plan_pair.py runs/<plan-run-id> runs/<act-run-id>
 ```
 
 Those source-bound commands deliberately use the Workbench from the current
@@ -193,7 +206,8 @@ filtering, ambient project-resource suppression and explicit loading, adapter/or
 separation, independent text-only and read/edit workloads, a coding-repair
 false-success matrix, the real red→repair→green Pi run, eight concurrent isolated Pi
 runs, deterministic provider and extension failure captures, both real Pi controls,
-an undeclared-difference mutation matrix, and sealed-record tamper rejection.
+paired plan/action policy enforcement and its negative mutations, an
+undeclared-difference mutation matrix, and sealed-record tamper rejection.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

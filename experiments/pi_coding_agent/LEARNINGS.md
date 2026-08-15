@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 50 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 51 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -133,6 +133,56 @@ cross-platform compatibility claim.
 **Next.** Apply this separation to plan-mode enforcement: generic Pi capture,
 plan-specific decision/effect oracle, then a negative matrix that tries to make
 writes escape the read-only arm.
+
+## E04 — Plan-mode tool policy versus action mode
+
+**Question.** Can Pi remain useful for read-only inspection while preventing
+both direct `write` calls and shell-mediated writes, then permit those same
+effects in an action-mode control arm?
+
+**Expectation.** `read` and an allowlisted read-only `bash` command must succeed
+in both arms. Plan mode must leave the workspace unchanged; action mode must
+create the two exact declared files from the same provider sequence.
+
+**Setup.** Both confirmation specs bind the same 12 inputs and run Pi `0.84.1`
+with the same deterministic provider and extension. The plan arm activates only
+`read,bash` and blocks non-allowlisted bash. The action arm activates
+`read,bash,write`. `plan_oracle.py` checks tool/result digests, active-tool and
+hook evidence, unchanged controls, and exact durable effects.
+
+**Evidence.** Plan run `20260815T203038Z-2eb055-ff2d` and action run
+`20260815T203039Z-ac33a9-4684` both completed and conformed. The sealed-pair
+verifier passed with one shared map of 12 frozen and receipted inputs. The plan
+comparison reports both positive controls true and both write effects false.
+The action comparison reports all four true. The experiment suite also rejects
+a falsely successful blocked shell, a leaked plan-mode file, and missing policy
+evidence.
+
+**Result.** Plan mode preserved read usefulness and produced no write effects.
+Action mode produced both exact effects. Pi returned a typed failed execution
+for the inactive direct `write`; the plan extension did not receive a
+`tool_call` event for that inactive tool. The unsafe `bash` remained active,
+reached the extension hook, and was explicitly blocked there.
+
+**Learned.** “Blocked by plan mode” has two distinct mechanisms in Pi. Removing
+a tool from the active set prevents its extension preflight hook from seeing the
+call, while constraining an active general-purpose tool requires a separate
+policy decision. An audit that expects one uniform block event would falsely
+report missing evidence for the direct write.
+
+**Code consequence.** **Keep local, with a candidate for reuse.** The Pi oracle
+now distinguishes inactive-tool rejection from hook-policy rejection and
+requires durable-effect absence for both. Future adapters should preserve a
+typed enforcement layer (`tool availability`, `policy hook`, or later
+`containment`) when their subject exposes it. Do not add these Pi event semantics
+to Workbench core until another harness shows an equivalent distinction.
+
+**Limits.** The bash allowlist contains one exact safe command and one exact
+unsafe command. This does not establish parser completeness, obfuscation
+resistance, mode transitions within a live session, or hostile-code containment.
+
+**Next.** Expand the plan arm with command chaining, substitution, redirects,
+encoded commands, and path indirection; then test plan→act transition using RPC.
 
 ## Cross-harness footing established by Pi
 
