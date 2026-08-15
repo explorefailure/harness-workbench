@@ -23,6 +23,25 @@ These failures do not always produce an obvious error. Harness Workbench makes
 them visible through controlled experiments and preserves the evidence you
 need to reproduce and understand them.
 
+## Who this is for
+
+Harness Workbench is for people who build harnesses—or add new features to
+one—and need to know whether those changes really work.
+
+It is especially useful if you are:
+
+- building your own software or AI harness;
+- adding features such as retries, redaction, guardrails, tool controls,
+  memory, or change detection;
+- comparing harness, model, provider, or extension upgrades;
+- investigating failures that leave behind a successful-looking run; or
+- developing integrations for AI coding harnesses such as Pi, Claude Code,
+  Codex, or Hermes Agent.
+
+If your main question is whether an answer or generated program is good,
+Harness Workbench is not a general-purpose benchmark. It focuses on whether
+the harness around that work behaved as intended.
+
 ## What I'm building next
 
 Harness Workbench can already run anything exposed as a command, while your
