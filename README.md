@@ -1,9 +1,50 @@
 # Harness Workbench
 
-Harness Workbench helps you test the parts around a software or AI workflow —
-things like retries, redaction, timing, and change detection. It records each
-run and deliberately stresses those features so you can see what worked, what
-interfered, and what failed without being noticed.
+**Harness Workbench is a test bench for your own software or AI harness—and for
+the features you add to it.**
+
+Bring a real workload and connect the harness behavior you want to test,
+whether that's a retry policy, a redaction layer, a change detector, or
+something entirely your own. Harness Workbench records each run so you can
+inspect what happened and compare it with other runs.
+
+Its measurement campaigns deliberately change conditions, introduce faults,
+combine features, interrupt runs, and replay preserved inputs. They help reveal
+whether a feature had an effect, stayed contained, interfered with another
+feature, or failed without being noticed.
+
+## Why this matters
+
+A workload can finish successfully even when its harness did not work as
+expected. A retry policy can fail when it is needed, a detector can miss a
+change, or two features that work separately can interfere when used together.
+
+These failures do not always produce an obvious error. Harness Workbench makes
+them visible through controlled experiments and preserves the evidence you
+need to reproduce and understand them.
+
+## What we're building next
+
+Harness Workbench can already run anything exposed as a command, while your
+own harness behavior can be added as Workbench features. We're now building
+first-class adapters for popular AI coding harnesses:
+
+- **Pi—first:** Launch isolated Pi runs, capture structured events and tool
+  activity, preserve the original evidence, and test its behavior under
+  controlled changes and failures.
+
+- **Planned next:** Extend the adapter approach to **Claude Code**, **OpenAI
+  Codex**, and **NousResearch Hermes Agent**.
+
+- **Built on a shared foundation:** Give each adapter a consistent way to run
+  experiments and preserve evidence while respecting the differences between
+  harnesses.
+
+- **Tested before release:** Verify every adapter against the real harness
+  before presenting it as supported.
+
+Harness Workbench will remain independent of any particular model, provider,
+or agent framework.
 
 [`Try it`](#try-it) · [`What it can test`](#what-it-can-test) ·
 [`How it works`](#how-it-works) · [`Documentation`](#documentation)
