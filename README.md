@@ -42,31 +42,10 @@ If your main question is whether an answer or generated program is good,
 Harness Workbench is not a general-purpose benchmark. It focuses on whether
 the harness around that work behaved as intended.
 
-## What I'm building next
-
-Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. I'm now building
-first-class adapters for popular AI coding harnesses:
-
-- **Pi—first:** I'm starting with an adapter that can launch isolated Pi runs,
-  capture structured events and tool activity, preserve the original evidence,
-  and test its behavior under controlled changes and failures.
-
-- **Planned next:** I plan to extend the adapter approach to **Claude Code**,
-  **OpenAI Codex**, and **NousResearch Hermes Agent**.
-
-- **Built on a shared foundation:** Each adapter will have a consistent way to
-  run experiments and preserve evidence while respecting the differences
-  between harnesses.
-
-- **Tested before release:** I'll verify every adapter against the real harness
-  before presenting it as supported.
-
-Harness Workbench will remain independent of any particular model, provider,
-or agent framework.
-
 [`Try it`](#try-it) · [`What it can test`](#what-it-can-test) ·
-[`How it works`](#how-it-works) · [`Documentation`](#documentation)
+[`Experiment ideas`](#experiment-ideas) ·
+[`Measure your own code`](docs/measuring-your-own-code.md) ·
+[`How the evidence works`](#what-gets-recorded)
 
 Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
@@ -119,29 +98,64 @@ default.
 the harness completes successfully. A non-zero workload exit is recorded data,
 not a harness error.
 
+### See it test something
+
+The deterministic [`examples/flaky/`](examples/flaky/) workload fails twice
+and then succeeds. From that directory, attach the shipped `retry` feature and
+run it:
+
+```console
+$ rm -f .flaky-state
+$ hwb run retry.json
+[timing] step check: 3 attempt(s)
+20260807T174244Z-947867-1117  discovery  1 step(s)  completed
+```
+
+The final attempt passed, but Harness Workbench did not erase the two failures
+that came before it. The full example compares the run with and without retry,
+shows what changed, and demonstrates redaction and change detection without a
+model or network connection.
+
+## What gets recorded
+
+Every attempt is kept, flat and append-only, and never collapsed to an
+outcome:
+
+```console
+$ hwb show <run id>
+attempts
+  step check n=0   exit=1     8ms  <- retry:0
+  step check n=1   exit=1     8ms  <- retry:1
+  step check n=2   exit=0     7ms  <- retry:2
+```
+
+Each attempt names what caused it. A harness that reduced this to "passed"
+would destroy the only evidence that the step is flaky at all. Reduction
+happens at read time, never at capture.
+
+The record is meant to be readable **without this tool**—raw output as bytes,
+the spec that ran, and every attached feature's source preserved beside it.
+`hwb fidelity` checks that claim rather than asserting it, and
+[`docs/the-record.md`](docs/the-record.md) is the map for reading a run with
+nothing but `cat`.
+
 ## What it can test
 
-Harness Workbench tests the harness itself—the features that observe, change,
-protect, and record a run. It can help answer:
+Harness Workbench tests the features that observe, change, protect, and record
+a run. It can help answer:
 
-- Did a harness feature make an observable difference, or was it present but
-  ineffective?
-- Is the unchanged baseline stable enough to support a meaningful comparison?
-- What changed between two runs—in the harness and in the stored output—and
-  what was deliberately ignored?
-- Does a detector notice deliberate changes to its declared inputs?
-- If a feature breaks or hangs, is the damage contained?
-- Do features interfere with one another or behave differently when their
-  order changes?
-- Do features stay within their declared record channels and watched
-  filesystem boundaries?
-- If the runner is interrupted, does an unfinished run remain clearly
-  incomplete instead of looking successful?
-- Has a saved record changed since it was closed, and does it still satisfy the
-  record's invariants?
-- What can be answered from the saved evidence alone, and can the preserved run
-  be replayed?
-- Do Harness Workbench's own verdict engines still reject known violations?
+- **Did it work?** Did the feature change the downstream result it was supposed
+  to change, or was it present but ineffective?
+- **Did it notice what it should?** Does a detector catch deliberate changes to
+  its declared inputs while ignoring changes outside its job?
+- **Did it fail safely?** If a feature breaks, hangs, or writes somewhere it
+  should not, is the damage contained and the unfinished run clearly marked?
+- **Did anything interfere?** Do features behave differently together or when
+  their order changes?
+- **Can the evidence be trusted?** Is the record complete, intact, readable
+  without Harness Workbench, and capable of being replayed?
+- **Is the comparison meaningful?** Is the unchanged baseline stable, what
+  changed between runs, and what noise was deliberately ignored?
 
 Harness Workbench does not score whether the workload produced a good answer
 or prove that a harness is correct in every environment. Each measurement
@@ -152,6 +166,8 @@ your own command and feature, then choose the measurement that matches your
 question.
 
 ## Experiment ideas
+
+### Problems I'm building adapters to test
 
 The most revealing experiments ask whether the harness kept a promise that an
 ordinary successful run could hide:
@@ -172,11 +188,14 @@ ordinary successful run could hide:
   after changing the harness, model, provider, or extension. Compare the tools,
   decisions, events, and durable outcomes—not just the final answer.
 
-Some of these can be assembled today by exposing your harness as a command and
-its behavior as Workbench features. The upcoming adapters will provide direct,
-structured access to more of these experiments, starting with Pi.
+These experiments need structured access to the target harness. The upcoming
+adapters will provide that access, starting with Pi. Until an adapter is
+released and verified, this list describes the problems I am building toward,
+not capabilities claimed for the current release.
 
-Other useful experiments include:
+### Experiments you can run now
+
+Start with a small, deterministic workload whenever possible:
 
 - Make a workload fail twice and succeed on the third attempt. Add a retry
   policy and see whether a successful final result still preserves the evidence
@@ -199,6 +218,30 @@ Other useful experiments include:
   harness configurations while focusing on observable differences rather than
   scoring answer quality.
 
+## What I'm building next
+
+Harness Workbench can already run anything exposed as a command, while your
+own harness behavior can be added as Workbench features. I'm now building
+first-class adapters for popular AI coding harnesses:
+
+- **Pi—first:** I'm starting with an adapter that can launch isolated Pi runs,
+  capture structured events and tool activity, preserve the original evidence,
+  and test its behavior under controlled changes and failures.
+
+- **Shared foundation, proven twice:** Each adapter will use a consistent way
+  to run experiments and preserve evidence while respecting the differences
+  between harnesses. After Pi, I'll test that approach against a second coding
+  harness before expanding it further.
+
+- **Candidates after that:** Claude Code, OpenAI Codex, and NousResearch Hermes
+  Agent are candidates, not promised integrations.
+
+- **Tested before release:** I'll verify every adapter against the real harness
+  before presenting it as supported.
+
+Harness Workbench will remain independent of any particular model, provider,
+or agent framework.
+
 ## How it works
 
 Each step is a command. The runner executes it and records every attempt, exit
@@ -217,11 +260,6 @@ Campaigns deliberately change or damage part of the setup, then compare what
 happened. They can test whether a feature failure was contained, whether an
 inverted decision changed downstream behavior, whether a detector observed an
 input mutation, and whether verdict engines reject a known record violation.
-
-Campaign manifests use their own stores (`./sweeps`, `./steadies`, and so on).
-A campaign store must be disjoint from the run store: equality or nesting in
-either direction is rejected after resolving symlinks, before either kind of
-evidence is created. The separate defaults already satisfy this contract.
 
 ## Project status and support
 
@@ -242,12 +280,10 @@ the full Linux/macOS matrix; the release-final conformance record is attached
 to the [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
-than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
-terminate a direct child at published checkpoints, filesystem measurements
-preserve and inspect executable modes, symlinks, and special nodes such as
-FIFOs, and the shipped examples execute `/bin/sh` scripts. Workload commands
-are passed directly to `subprocess` without a shell, so users choose their own
-POSIX command or request `/bin/sh -c` explicitly.
+than merely untested there: its interruption and filesystem measurements rely
+on POSIX behavior. Workload commands are passed directly to `subprocess`
+without a shell, so users choose their own command or request `/bin/sh -c`
+explicitly.
 
 ## Security boundary
 
@@ -263,6 +299,10 @@ declared workload files into a separate directory to avoid overwriting the
 original workload. That directory is ordinary filesystem organization, not
 OS-level isolation: replayed commands and feature modules retain the user's
 filesystem, process, environment, and network access.
+
+Passing a bounded Workbench experiment is evidence about that declared
+scenario and observed boundary—not a general security, sandboxing, or
+prompt-injection certification.
 
 Run records preserve stdout, stderr, selected environment values, specs, and
 feature source. Do not put secrets in a spec's `env` list or commands unless
@@ -295,34 +335,7 @@ them by name.
 | `receipt` | annotate | binds the run to the identity of what it ran on |
 | `timing` | observe | reports seam dispatch cost (an instrument, not a capability) |
 
-Omitting `features_root` looks in `<spec dir>/features`, which is where local
-features go. **Shipped features are never a fallback**: an invalid root or
-feature name fails during feature loading instead of selecting a builtin.
-
 Write your own: [`docs/writing-a-feature.md`](docs/writing-a-feature.md).
-
-## What gets recorded
-
-Every attempt is kept, flat and append-only, and never collapsed to an
-outcome:
-
-```console
-$ hwb show <run id>
-attempts
-  step check n=0   exit=1     8ms  <- retry:0
-  step check n=1   exit=1     8ms  <- retry:1
-  step check n=2   exit=0     7ms  <- retry:2
-```
-
-Each attempt names what caused it. A harness that reduced this to "passed"
-would destroy the only evidence that the step is flaky at all. Reduction
-happens at read time, never at capture.
-
-The record is meant to be readable **without this tool** — raw output as
-bytes, the spec that ran and every attached feature's source preserved beside
-it. `hwb fidelity` checks that claim rather than asserting it, and
-[`docs/the-record.md`](docs/the-record.md) is the map for reading a run with
-nothing but `cat`.
 
 ## Measuring the harness
 
@@ -394,25 +407,9 @@ questions and non-sensitive bugs, and discuss larger changes there before
 substantial implementation. The complete posture and local checks are in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
 
-Release tooling is pinned in the `release` extra so local and CI artifact
-checks use the same versions:
-
-```sh
-python3 -m pip install '.[release]'
-python3 -m build --wheel
-python3 -m twine check --strict dist/*.whl
-```
-
-Maintainers should use the complete, fail-closed candidate and final-release
-procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,
-commit-derived timestamps, ownership-neutral source-distribution repacking,
-tag/version agreement, and checksums. A raw backend-built sdist must not be
+Maintainers should use the complete candidate and final-release procedure in
+[`RELEASING.md`](RELEASING.md). A raw backend-built sdist must not be
 uploaded; building an archive is not by itself a release.
-
-It includes a deterministic, stdlib-only generated corpus for the JSON,
-spec, feature-manifest, conformance, and partial-close boundaries. The fixed
-seed and case counts live in `tests/test_properties.py`; a generated failure
-should be reduced to an ordinary regression case before its fix lands.
 
 ## Licence
 
