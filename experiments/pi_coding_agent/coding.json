@@ -15,6 +15,8 @@
         "run_coding_adapter.sh",
         "coding_adapter_config.json",
         "adapter.py",
+        "coding_runner.py",
+        "coding_oracle.py",
         "normalizer.py",
         "coding_provider.ts",
         "pin.json",

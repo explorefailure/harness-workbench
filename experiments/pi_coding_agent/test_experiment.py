@@ -40,6 +40,9 @@ sys.modules["adapter"] = adapter
 control_oracle = load_module("pi_hwb_control_oracle", EXPERIMENT / "control_oracle.py")
 sys.modules["control_oracle"] = control_oracle
 control_runner = load_module("pi_hwb_control_runner", EXPERIMENT / "control_runner.py")
+coding_oracle = load_module("pi_hwb_coding_oracle", EXPERIMENT / "coding_oracle.py")
+sys.modules["coding_oracle"] = coding_oracle
+coding_runner = load_module("pi_hwb_coding_runner", EXPERIMENT / "coding_runner.py")
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -119,6 +122,42 @@ def valid_events(*, is_error=False):
 
 def as_jsonl(events):
     return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def valid_coding_capture():
+    before, after = coding_oracle.expected_manifests()
+    executions = coding_oracle.expected_tool_evidence()
+    assistant_calls = [
+        {
+            key: value
+            for key, value in item.items()
+            if key not in {"is_error", "result_sha256"}
+        }
+        for item in executions
+    ]
+    return {
+        "verdict": {"passed": True, "errors": []},
+        "workspace": {"before": before, "after": after},
+        "pi": {
+            "summary": {
+                "valid": True,
+                "errors": [],
+                "projection": {
+                    "assistant_stop_reasons": [
+                        "toolUse",
+                        "toolUse",
+                        "toolUse",
+                        "toolUse",
+                        "toolUse",
+                        "stop",
+                    ],
+                    "assistant_tool_calls": assistant_calls,
+                    "tool_executions": executions,
+                    "event_types": {"agent_start": 1, "agent_settled": 1},
+                },
+            }
+        },
+    }
 
 
 class PiNormalizerTests(unittest.TestCase):
@@ -297,6 +336,98 @@ class PiNormalizerTests(unittest.TestCase):
                 self.assertFalse(summary["valid"], summary)
 
 
+class PiCodingOracleTests(unittest.TestCase):
+    def test_accepts_only_the_complete_red_repair_green_path(self):
+        errors, comparison = coding_oracle.evaluate(valid_coding_capture())
+        self.assertEqual([], errors)
+        self.assertTrue(comparison["first_test_failed"])
+        self.assertTrue(comparison["final_test_passed"])
+        self.assertEqual(["slugger.py"], comparison["changed_paths"])
+        self.assertTrue(comparison["invariants_unchanged"])
+
+    def test_rejects_false_success_matrix(self):
+        cases = (
+            "first-test-passed",
+            "missing-initial-test",
+            "test-command-missing",
+            "test-process-signaled",
+            "wrong-edit-target",
+            "final-test-failed",
+            "missing-final-test",
+            "volatile-final-test-output",
+            "implementation-unchanged",
+            "invariant-changed",
+            "unexpected-file",
+            "tool-order-changed",
+            "adapter-failed",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                capture = valid_coding_capture()
+                projection = capture["pi"]["summary"]["projection"]
+                executions = projection["tool_executions"]
+                calls = projection["assistant_tool_calls"]
+                after = capture["workspace"]["after"]
+
+                if case == "first-test-passed":
+                    executions[2]["is_error"] = False
+                elif case == "missing-initial-test":
+                    del executions[2]
+                    del calls[2]
+                elif case == "test-command-missing":
+                    changed = normalizer.canonical_digest(
+                        {"command": "missing-hwb-test-command"}
+                    )
+                    executions[2]["arguments_sha256"] = changed
+                    calls[2]["arguments_sha256"] = changed
+                elif case == "test-process-signaled":
+                    executions[2]["result_sha256"] = "sha256:" + "0" * 64
+                elif case == "wrong-edit-target":
+                    executions[3]["target_path"] = "other.py"
+                    calls[3]["target_path"] = "other.py"
+                elif case == "final-test-failed":
+                    executions[4]["is_error"] = True
+                elif case == "missing-final-test":
+                    del executions[4]
+                    del calls[4]
+                elif case == "volatile-final-test-output":
+                    executions[4]["result_sha256"] = "sha256:" + "2" * 64
+                elif case == "implementation-unchanged":
+                    before_slugger = next(
+                        item
+                        for item in capture["workspace"]["before"]
+                        if item["path"] == "slugger.py"
+                    )
+                    after_slugger = next(
+                        item for item in after if item["path"] == "slugger.py"
+                    )
+                    after_slugger.update(before_slugger)
+                elif case == "invariant-changed":
+                    invariant = next(
+                        item for item in after if item["path"] == "test_slugger.py"
+                    )
+                    invariant["sha256"] = "0" * 64
+                elif case == "unexpected-file":
+                    after.append(
+                        {
+                            "path": "surprise.txt",
+                            "mode": 0o644,
+                            "size": 1,
+                            "sha256": "1" * 64,
+                        }
+                    )
+                elif case == "tool-order-changed":
+                    executions[3], executions[4] = executions[4], executions[3]
+                    calls[3], calls[4] = calls[4], calls[3]
+                elif case == "adapter-failed":
+                    capture["verdict"] = {
+                        "passed": False,
+                        "errors": ["Pi exited with status 7"],
+                    }
+
+                errors, _comparison = coding_oracle.evaluate(capture)
+                self.assertTrue(errors, f"false success was accepted: {case}")
+
 class PiExperimentSurfaceTests(unittest.TestCase):
     def test_specs_bind_every_executable_input(self):
         expected = set(control_runner.EXPERIMENT_INPUTS)
@@ -319,6 +450,8 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 "run_coding_adapter.sh",
                 "coding_adapter_config.json",
                 "adapter.py",
+                "coding_runner.py",
+                "coding_oracle.py",
                 "normalizer.py",
                 "coding_provider.ts",
                 "pin.json",
@@ -328,6 +461,7 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             },
             set(coding["steps"][0]["inputs"]),
         )
+        self.assertEqual(set(coding_runner.CODING_INPUTS), set(coding["steps"][0]["inputs"]))
 
     def test_pin_is_exact(self):
         pin = json.loads((EXPERIMENT / "pin.json").read_text(encoding="utf-8"))
@@ -936,7 +1070,7 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             after["nested dir/naïve file.txt"]["sha256"],
         )
 
-    def test_generic_adapter_repairs_code_and_runs_tests_when_pi_is_installed(self):
+    def test_coding_runner_proves_red_repair_green_when_pi_is_installed(self):
         pi = shutil.which("pi")
         if pi is None:
             self.skipTest("Pi is not installed")
@@ -950,8 +1084,7 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             result = subprocess.run(
                 [
                     sys.executable,
-                    str(EXPERIMENT / "adapter.py"),
-                    str(EXPERIMENT / "coding_adapter_config.json"),
+                    str(EXPERIMENT / "coding_runner.py"),
                     "--workspace-parent",
                     parent,
                 ],
@@ -961,13 +1094,21 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 text=True,
                 timeout=30,
             )
-        envelope = json.loads(result.stdout)
+        coding_envelope = json.loads(result.stdout)
+        envelope = coding_envelope["adapter"]
         projection = envelope["pi"]["summary"]["projection"]
+        self.assertTrue(
+            coding_envelope["verdict"]["passed"],
+            coding_envelope["verdict"]["errors"],
+        )
         self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"]["errors"])
         self.assertEqual(
             {
+                "run_coding_adapter.sh",
                 "coding_adapter_config.json",
                 "adapter.py",
+                "coding_runner.py",
+                "coding_oracle.py",
                 "normalizer.py",
                 "coding_provider.ts",
                 "pin.json",
@@ -976,6 +1117,23 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 "coding_fixture/test_slugger.py",
             },
             set(envelope["configuration"]["input_digests"]),
+        )
+        self.assertEqual(
+            {
+                "first_test_failed": True,
+                "final_test_passed": True,
+                "changed_paths": ["slugger.py"],
+                "invariants_unchanged": True,
+            },
+            {
+                key: coding_envelope["comparison"][key]
+                for key in (
+                    "first_test_failed",
+                    "final_test_passed",
+                    "changed_paths",
+                    "invariants_unchanged",
+                )
+            },
         )
         self.assertEqual(
             ["toolUse", "toolUse", "toolUse", "toolUse", "toolUse", "stop"],
