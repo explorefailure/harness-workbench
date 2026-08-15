@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 52 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 53 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -223,6 +223,56 @@ bypassed through another execution layer.
 
 **Next.** Test throwing handlers and conflicting block/allow handlers in both
 orders, then determine whether Pi supplies a post-mutation observation seam.
+
+## E06 — Throwing handler order and audit visibility
+
+**Question.** When a Pi `tool_call` handler throws, does the tool fail closed,
+do later handlers still run, and can the session continue to an independent
+positive control?
+
+**Expectation.** The treatment write must fail without a durable effect in both
+orders. If handler dispatch stops at the exception, the downstream audit hook
+must be absent only in the throw-first arm. The next control write must still
+succeed.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, throwing hook,
+audit hook, and 12 declared inputs. Throw-first registers the throwing hook
+before the audit hook; audit-first reverses them. `failure_order_oracle.py`
+checks exact handler evidence, Pi tool results, lifecycle completion, and
+filesystem effects.
+
+**Evidence.** Throw-first run `20260815T205310Z-c443c2-2a7c` and audit-first
+run `20260815T205311Z-60a3c8-44e5` both completed and conformed with 12
+frozen/receipted inputs. The 53-test Pi suite passed. Throw-first recorded only
+the thrower; audit-first recorded audit then thrower. Both produced the same
+failed treatment result, no treatment file, and the exact positive-control file.
+
+**Result.** Pi converted the thrown preflight exception into an errored tool
+result and prevented the write. It stopped that handler chain at the exception,
+then continued the agent loop and successfully executed the next tool call.
+
+**Learned.** Fail-closed execution and complete audit coverage are separate
+properties. A missing audit record can mean that the audit hook was registered
+after a failing hook, not that the tool escaped enforcement or that the audit
+extension was absent. Handler-order provenance is therefore necessary to
+interpret negative evidence.
+
+**Code consequence.** **Change now, completed locally.** The new runner and
+oracle expose `observed_handlers`, `failed_closed`, `treatment_effect`, and
+`positive_control` separately instead of collapsing them into one pass flag.
+**Candidate for reuse:** external-harness adapters should preserve handler order
+and failure position whenever the subject exposes them. Do not treat missing
+downstream telemetry as proof of fail-open behavior, and do not move Pi's hook
+semantics into Workbench core.
+
+**Limits.** This covers one synchronous exception during preflight and one
+subsequent write. It does not test asynchronous failures, `tool_result` handler
+exceptions, multiple throwing hooks, or whether an external audit sink observes
+the attempted call independently of Pi's extension chain.
+
+**Next.** Reverse conflicting block/allow handlers, then throw from a
+`tool_result` handler to see whether Pi preserves the completed effect and how
+the failure is represented.
 
 ## Cross-harness footing established by Pi
 

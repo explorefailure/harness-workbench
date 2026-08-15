@@ -43,6 +43,11 @@ The extension-composition pair reverses a target-mutating hook and a guarding
 hook. It demonstrates that policy order changes the durable result and that
 Pi's execution-start arguments are pre-hook proposals, not effective arguments.
 
+The throwing-handler pair reverses an auditing hook and a hook that raises during
+`tool_call`. Pi fails the treatment closed and continues to a healthy positive
+control, but stops invoking later handlers after the exception. The experiment's
+oracle distinguishes execution safety from complete audit visibility.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -131,6 +136,15 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run action_mode.json
 PYTHONPATH=../../src python3.11 verify_plan_pair.py runs/<plan-run-id> runs/<act-run-id>
 ```
 
+Run the sealed extension-order and throwing-handler pairs with:
+
+```sh
+PYTHONPATH=../../src python3.11 -m harness_workbench run mutate_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run guard_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run throw_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run audit_first.json
+```
+
 Those source-bound commands deliberately use the Workbench from the current
 checkout. If you use the shorter installed `hwb` command instead, run `hwb
 --version` first and confirm that it is the intended Harness Workbench release;
@@ -211,7 +225,9 @@ separation, independent text-only and read/edit workloads, a coding-repair
 false-success matrix, the real red→repair→green Pi run, eight concurrent isolated Pi
 runs, deterministic provider and extension failure captures, both real Pi controls,
 paired plan/action policy enforcement and its negative mutations, an
-undeclared-difference mutation matrix, and sealed-record tamper rejection.
+undeclared-difference mutation matrix, extension mutation/guard ordering,
+throwing-handler fail-closed and audit-order behavior, and sealed-record tamper
+rejection.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

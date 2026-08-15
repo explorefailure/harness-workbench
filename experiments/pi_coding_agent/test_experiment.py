@@ -49,6 +49,13 @@ plan_runner = load_module("pi_hwb_plan_runner", EXPERIMENT / "plan_runner.py")
 composition_oracle = load_module("pi_hwb_composition_oracle", EXPERIMENT / "composition_oracle.py")
 sys.modules["composition_oracle"] = composition_oracle
 composition_runner = load_module("pi_hwb_composition_runner", EXPERIMENT / "composition_runner.py")
+failure_order_oracle = load_module(
+    "pi_hwb_failure_order_oracle", EXPERIMENT / "failure_order_oracle.py"
+)
+sys.modules["failure_order_oracle"] = failure_order_oracle
+failure_order_runner = load_module(
+    "pi_hwb_failure_order_runner", EXPERIMENT / "failure_order_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -485,6 +492,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 set(composition_runner.INPUTS)
                 | set(json.loads((EXPERIMENT / "composition_adapter_config.json").read_text())["inputs"]),
+                set(raw["steps"][0]["inputs"]),
+            )
+
+        for name, variant in (
+            ("throw_first.json", "throw-first"),
+            ("audit_first.json", "audit-first"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_failure_order.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(failure_order_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "composition_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
                 set(raw["steps"][0]["inputs"]),
             )
 
@@ -1294,6 +1319,49 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         self.assertTrue(comparisons["guard-first"]["treatment_effect"])
         self.assertEqual("redirected.txt", comparisons["mutate-first"]["guard_observed"])
         self.assertEqual("requested.txt", comparisons["guard-first"]["guard_observed"])
+
+    def test_throwing_handler_fails_closed_and_short_circuits_chain(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("throw-first", "audit-first"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "failure_order_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelopes[variant] = json.loads(result.stdout)
+            self.assertTrue(
+                envelopes[variant]["verdict"]["passed"],
+                envelopes[variant]["verdict"],
+            )
+            self.assertTrue(envelopes[variant]["comparison"]["failed_closed"])
+            self.assertTrue(envelopes[variant]["comparison"]["positive_control"])
+            self.assertFalse(envelopes[variant]["comparison"]["treatment_effect"])
+
+        self.assertEqual(
+            ["thrower"],
+            envelopes["throw-first"]["comparison"]["observed_handlers"],
+        )
+        self.assertEqual(
+            ["audit", "thrower"],
+            envelopes["audit-first"]["comparison"]["observed_handlers"],
+        )
+
+        changed = copy.deepcopy(envelopes["throw-first"]["adapter"])
+        changed["pi"]["summary"]["projection"]["tool_executions"][0][
+            "is_error"
+        ] = False
+        errors, _comparison = failure_order_oracle.evaluate("throw-first", changed)
+        self.assertTrue(errors, "oracle accepted a falsely successful treatment")
 
     def test_provider_failure_returns_a_typed_failed_capture(self):
         if shutil.which("pi") is None:
