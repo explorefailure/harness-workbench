@@ -23,24 +23,24 @@ These failures do not always produce an obvious error. Harness Workbench makes
 them visible through controlled experiments and preserves the evidence you
 need to reproduce and understand them.
 
-## What we're building next
+## What I'm building next
 
 Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. We're now building
+own harness behavior can be added as Workbench features. I'm now building
 first-class adapters for popular AI coding harnesses:
 
-- **Pi—first:** Launch isolated Pi runs, capture structured events and tool
-  activity, preserve the original evidence, and test its behavior under
-  controlled changes and failures.
+- **Pi—first:** I'm starting with an adapter that can launch isolated Pi runs,
+  capture structured events and tool activity, preserve the original evidence,
+  and test its behavior under controlled changes and failures.
 
-- **Planned next:** Extend the adapter approach to **Claude Code**, **OpenAI
-  Codex**, and **NousResearch Hermes Agent**.
+- **Planned next:** I plan to extend the adapter approach to **Claude Code**,
+  **OpenAI Codex**, and **NousResearch Hermes Agent**.
 
-- **Built on a shared foundation:** Give each adapter a consistent way to run
-  experiments and preserve evidence while respecting the differences between
-  harnesses.
+- **Built on a shared foundation:** Each adapter will have a consistent way to
+  run experiments and preserve evidence while respecting the differences
+  between harnesses.
 
-- **Tested before release:** Verify every adapter against the real harness
+- **Tested before release:** I'll verify every adapter against the real harness
   before presenting it as supported.
 
 Harness Workbench will remain independent of any particular model, provider,
@@ -102,20 +102,83 @@ not a harness error.
 
 ## What it can test
 
-Harness Workbench can ask whether:
+Harness Workbench tests the harness itself—the features that observe, change,
+protect, and record a run. It can help answer:
 
-- a retry, redaction rule, receipt, or change detector affected the run as
-  intended;
-- a damaged feature stayed contained instead of breaking the whole run;
-- one feature interfered with another or wrote outside its declared boundary;
-- a detector noticed a deliberate change to an input;
-- the unchanged baseline was stable enough to compare;
-- the saved record contains enough evidence to inspect, compare, and replay.
+- Did a harness feature make an observable difference, or was it present but
+  ineffective?
+- Is the unchanged baseline stable enough to support a meaningful comparison?
+- What changed between two runs—in the harness and in the stored output—and
+  what was deliberately ignored?
+- Does a detector notice deliberate changes to its declared inputs?
+- If a feature breaks or hangs, is the damage contained?
+- Do features interfere with one another or behave differently when their
+  order changes?
+- Do features stay within their declared record channels and watched
+  filesystem boundaries?
+- If the runner is interrupted, does an unfinished run remain clearly
+  incomplete instead of looking successful?
+- Has a saved record changed since it was closed, and does it still satisfy the
+  record's invariants?
+- What can be answered from the saved evidence alone, and can the preserved run
+  be replayed?
+- Do Harness Workbench's own verdict engines still reject known violations?
 
-It does not score whether the workload itself produced a good answer. Start
-with [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) to
-attach your own command and feature, then choose the measurement that matches
-your question.
+Harness Workbench does not score whether the workload produced a good answer
+or prove that a harness is correct in every environment. Each measurement
+answers one specific, bounded question and preserves the evidence behind its
+result. Start with
+[`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) to attach
+your own command and feature, then choose the measurement that matches your
+question.
+
+## Experiment ideas
+
+The most revealing experiments ask whether the harness kept a promise that an
+ordinary successful run could hide:
+
+- **Does stop actually mean stop?** Cancel a harness while a delayed tool action
+  is about to arrive. Check whether any tool still runs or any file changes
+  after cancellation.
+- **Is the guardrail actually doing anything?** Run the same operation once
+  blocked and once allowed. The durable outcome should reverse, proving that
+  the guardrail—not something else—controlled the result.
+- **What did context compaction forget?** Force compaction halfway through a
+  task whose later steps depend on earlier decisions. Check whether the harness
+  preserves the decisions, file state, tool results, and next required action.
+- **Did a retry perform the action twice?** Let an action succeed but hide or
+  delay its acknowledgement. Check whether retries recover safely or duplicate
+  the effect.
+- **What changed when you upgraded?** Replay the same scenarios before and
+  after changing the harness, model, provider, or extension. Compare the tools,
+  decisions, events, and durable outcomes—not just the final answer.
+
+Some of these can be assembled today by exposing your harness as a command and
+its behavior as Workbench features. The upcoming adapters will provide direct,
+structured access to more of these experiments, starting with Pi.
+
+Other useful experiments include:
+
+- Make a workload fail twice and succeed on the third attempt. Add a retry
+  policy and see whether a successful final result still preserves the evidence
+  of the earlier failures.
+- Take two features that work correctly on their own, run them together, and
+  reverse their order. Check whether combination or composition changes either
+  feature's behavior.
+- Give a feature a silent fault—such as a valid-looking but incorrect return—
+  instead of making it crash. Check whether the harness notices and contains
+  the damage.
+- Interrupt the runner moments before and after it finishes closing a record.
+  Check whether any unfinished evidence can masquerade as a successful run.
+- Introduce a violation that a checker is supposed to reject. Confirm that the
+  checker still detects it rather than treating silence as success.
+- Print an unmistakably synthetic secret and verify that a redaction feature
+  removes it before the output is stored.
+- Allow one filesystem destination, deliberately write somewhere else, and
+  verify that the boundary violation is detected.
+- For an AI workload, repeat the same prompt or compare model, prompt, and
+  harness configurations while focusing on observable differences rather than
+  scoring answer quality.
 
 ## How it works
 
