@@ -228,6 +228,34 @@ class TestSourceDistributionPrivacy(unittest.TestCase):
 
 
 class TestReleaseSurfaces(unittest.TestCase):
+    def test_each_experiment_directory_has_a_learning_record(self):
+        experiment_root = ROOT / "experiments"
+        if not experiment_root.is_dir():
+            self.skipTest(
+                "local experiments are not part of the source distribution"
+            )
+        experiment_directories = sorted(
+            path
+            for path in experiment_root.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
+        )
+        self.assertTrue(experiment_directories)
+        for directory in experiment_directories:
+            with self.subTest(experiment=directory.name):
+                self.assertTrue((directory / "README.md").is_file())
+                learning_record = directory / "LEARNINGS.md"
+                self.assertTrue(learning_record.is_file())
+                text = learning_record.read_text(encoding="utf-8")
+                for required in (
+                    "**Question.**",
+                    "**Evidence.**",
+                    "**Learned.**",
+                    "**Code consequence.**",
+                    "**Limits.**",
+                    "**Next.**",
+                ):
+                    self.assertIn(required, text)
+
     def test_public_identity_and_minimal_verification_provenance_are_explicit(self):
         with (ROOT / "pyproject.toml").open("rb") as stream:
             project = tomllib.load(stream)["project"]

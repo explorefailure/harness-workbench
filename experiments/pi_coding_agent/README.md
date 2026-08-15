@@ -1,5 +1,9 @@
 # Pi Coding Agent adapter and integration proof
 
+Experiment results and code consequences are recorded in
+[`LEARNINGS.md`](LEARNINGS.md). The repository-wide write-up standard is
+[`docs/experiment-writeups.md`](../../docs/experiment-writeups.md).
+
 Status: implemented and locally testable, but not shipped. This experiment remains
 outside the Python package and release examples while Harness Workbench is at
 `0.1.0rc1`.

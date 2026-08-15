@@ -13,7 +13,7 @@ known record violation.
 Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
 with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 326 tests.
+runtime dependencies, Python 3.11+, 327 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -229,6 +229,7 @@ option reference.
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
+| [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the source-bundled pre-release conformance record; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) is attached to the GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
