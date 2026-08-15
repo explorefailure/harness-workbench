@@ -442,6 +442,7 @@ def generic_errors(
     summary: dict[str, Any] | None,
     normalization_error: str | None,
     evidence: dict[str, dict[str, Any]],
+    extension_errors: list[dict[str, str]],
 ) -> list[str]:
     errors: list[str] = []
     if process["timed_out"]:
@@ -465,9 +466,39 @@ def generic_errors(
         errors.append("Pi stdout could not be normalized")
     elif not summary["valid"]:
         errors.extend(f"stream: {error}" for error in summary["errors"])
+    for item in extension_errors:
+        errors.append(
+            f"Pi extension {item['extension']} failed: {item['error']}"
+        )
     for name, item in evidence.items():
         errors.extend(f"evidence {name}: {error}" for error in item["errors"])
     return errors
+
+
+def parse_extension_errors(
+    stderr_text: str | None,
+    extension_paths: list[Path],
+    base: Path,
+) -> list[dict[str, str]]:
+    """Project Pi print-mode extension errors without retaining host paths."""
+    if stderr_text is None:
+        return []
+    known = {
+        str(path): path.relative_to(base).as_posix() for path in extension_paths
+    }
+    records: list[dict[str, str]] = []
+    prefix = "Extension error ("
+    separator = "): "
+    for line in stderr_text.splitlines():
+        if not line.startswith(prefix) or separator not in line:
+            continue
+        raw_path, error = line[len(prefix):].split(separator, 1)
+        records.append({
+            "schema": "pi-hwb-extension-error/v0.1",
+            "extension": known.get(raw_path, "<unbound>"),
+            "error": error,
+        })
+    return records
 
 
 def capture(
@@ -651,6 +682,7 @@ def capture(
             stderr_text = process["stderr"].decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         pass
+    extension_errors = parse_extension_errors(stderr_text, extension_paths, base)
 
     evidence: dict[str, dict[str, Any]] = {}
     for name, spec in evidence_specs.items():
@@ -665,7 +697,9 @@ def capture(
             "path": spec["relative_path"],
             "environment_variable": spec["environment_variable"],
         }
-    errors = generic_errors(process, summary, normalization_error, evidence)
+    errors = generic_errors(
+        process, summary, normalization_error, evidence, extension_errors
+    )
     summary_bytes = (
         json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8")
         if summary is not None
@@ -730,6 +764,7 @@ def capture(
             ),
             "stderr_utf8": stderr_text,
             "stderr_sha256": process["stderr_sha256"],
+            "extension_errors": extension_errors,
             "summary": summary,
             "summary_sha256": sha256_bytes(summary_bytes),
         },

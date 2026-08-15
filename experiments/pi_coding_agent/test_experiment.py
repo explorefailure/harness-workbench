@@ -63,6 +63,13 @@ sys.modules["policy_order_oracle"] = policy_order_oracle
 policy_order_runner = load_module(
     "pi_hwb_policy_order_runner", EXPERIMENT / "policy_order_runner.py"
 )
+result_failure_oracle = load_module(
+    "pi_hwb_result_failure_oracle", EXPERIMENT / "result_failure_oracle.py"
+)
+sys.modules["result_failure_oracle"] = result_failure_oracle
+result_failure_runner = load_module(
+    "pi_hwb_result_failure_runner", EXPERIMENT / "result_failure_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -538,6 +545,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 set(raw["steps"][0]["inputs"]),
             )
 
+        for name, variant in (
+            ("result_throw_first.json", "throw-first"),
+            ("result_audit_first.json", "audit-first"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_result_failure.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(result_failure_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "composition_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
+                set(raw["steps"][0]["inputs"]),
+            )
+
     def test_pin_is_exact(self):
         pin = json.loads((EXPERIMENT / "pin.json").read_text(encoding="utf-8"))
         self.assertEqual("0.84.1", pin["version"])
@@ -821,6 +846,28 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             self.assertRegex(item["errors"][0], "not a regular file")
             self.assertEqual(base64.b64encode(b"").decode("ascii"), item["raw_base64"])
             self.assertEqual(hashlib.sha256(b"").hexdigest(), item["raw_sha256"])
+
+    def test_pi_extension_stderr_is_projected_without_host_paths(self):
+        base = Path("/private/example/experiment")
+        extension = base / "fixture_extension.ts"
+        records = adapter.parse_extension_errors(
+            "ordinary warning\n"
+            "Extension error (/private/example/experiment/fixture_extension.ts): "
+            "deterministic failure\n",
+            [extension],
+            base,
+        )
+        self.assertEqual(
+            [
+                {
+                    "schema": "pi-hwb-extension-error/v0.1",
+                    "extension": "fixture_extension.ts",
+                    "error": "deterministic failure",
+                }
+            ],
+            records,
+        )
+        self.assertNotIn("/private/example", json.dumps(records))
 
     @unittest.skipUnless(os.name == "posix", "capture-limit contract is POSIX-only")
     def test_output_limit_stops_and_bounds_the_owned_process(self):
@@ -1444,6 +1491,64 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 )
                 self.assertTrue(errors)
 
+    def test_result_hook_failure_preserves_effect_and_remaining_handlers(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("throw-first", "audit-first"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "result_failure_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelope = json.loads(result.stdout)
+            envelopes[variant] = envelope
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+            self.assertFalse(envelope["adapter"]["verdict"]["passed"])
+            for key in (
+                "adapter_detected_extension_error",
+                "effect_survived_post_hook_failure",
+                "remaining_handler_ran",
+                "positive_control",
+                "session_completed",
+            ):
+                self.assertTrue(envelope["comparison"][key], key)
+
+        self.assertEqual(
+            ["thrower", "audit"],
+            envelopes["throw-first"]["comparison"]["observed_handlers"],
+        )
+        self.assertEqual(
+            ["audit", "thrower"],
+            envelopes["audit-first"]["comparison"]["observed_handlers"],
+        )
+
+        mutations = []
+        changed = copy.deepcopy(envelopes["throw-first"]["adapter"])
+        changed["pi"]["extension_errors"] = []
+        mutations.append(("missing-structured-error", changed))
+        changed = copy.deepcopy(envelopes["throw-first"]["adapter"])
+        changed["workspace"]["after"] = [
+            item
+            for item in changed["workspace"]["after"]
+            if item["path"] != "requested.txt"
+        ]
+        mutations.append(("false-rollback", changed))
+        for name, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = result_failure_oracle.evaluate(
+                    "throw-first", capture
+                )
+                self.assertTrue(errors)
+
     def test_provider_failure_returns_a_typed_failed_capture(self):
         if shutil.which("pi") is None:
             self.skipTest("Pi is not installed")
@@ -1688,6 +1793,8 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             experiment_copy = Path(directory) / "experiment"
             shutil.copytree(EXPERIMENT, experiment_copy)
+            for name in ("block.freeze.lock", "allow.freeze.lock"):
+                (experiment_copy / name).unlink(missing_ok=True)
             root = Path(directory) / "runs"
             env = os.environ.copy()
             env["PYTHONPATH"] = str(ROOT / "src")

@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 54 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 56 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -323,6 +323,59 @@ post-execution policy.
 **Next.** Combine mutation with allow/block precedence to test whether a
 terminal guard sees the final arguments, then throw from a `tool_result` handler
 to measure post-effect failure semantics.
+
+## E08 — Post-effect `tool_result` handler failure
+
+**Question.** If a Pi `tool_result` handler throws after a write has executed,
+does Pi preserve the effect, continue later result handlers, report the tool as
+successful, and expose the extension failure to the adapter?
+
+**Expectation.** The treatment file should already exist before either result
+handler runs. Reversing thrower/audit order should change only their evidence
+order; both handlers and the next positive control should still run. The adapter
+must not call a zero-exit, valid-lifecycle session clean if Pi reports an
+extension runtime error outside JSON stdout.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, result thrower,
+result auditor, and 12 declared inputs. Only handler order changes. The generic
+adapter projects Pi's print-mode extension-error stderr into a relative-path
+structured record. `result_failure_oracle.py` expects that inner adapter failure
+while separately proving successful tool results and exact durable effects.
+
+**Evidence.** Throw-first run `20260815T214733Z-8dd1c1-6bf2` and audit-first
+run `20260815T214734Z-ef03c9-d24e` both completed and conformed with matching
+maps of 12 frozen/receipted inputs. The 56-test Pi suite passed, including
+mutations that remove the structured error or falsely remove the completed
+treatment effect.
+
+**Result.** Both writes succeeded and both exact files exist. Throw-first
+recorded thrower then audit; audit-first recorded audit then thrower. Pi exited
+zero, completed normally, and left both tool results successful. It reported the
+exception only as an `Extension error (...)` stderr line.
+
+**Learned.** Hook phase changes failure semantics. A `tool_call` exception is a
+pre-execution failure that prevents the effect and short-circuits later handlers.
+A `tool_result` exception is a post-effect telemetry failure: Pi catches it,
+continues later result handlers, preserves the successful tool result, and does
+not roll back the effect. Exit status and JSON lifecycle alone therefore miss a
+real subject-harness failure.
+
+**Code consequence.** **Change now, completed locally.** `adapter.py` now
+extracts pinned Pi print-mode extension errors from stderr, removes host paths in
+the structured projection, and fails its generic verdict. The outer experiment
+oracle passes only for the exact declared adapter failure plus the proven durable
+effect and continued chain. **Candidate for reuse:** future harness adapters
+need phase-aware extension failures and must inspect every documented error
+channel; they must never imply rollback from a post-effect failure.
+
+**Limits.** This covers one synchronous `tool_result` exception after a
+successful write. It does not test result mutation, failed underlying tools,
+multiple errors, multiline error messages, asynchronous background failures, or
+transactional tools that may implement their own rollback.
+
+**Next.** Reverse result handlers that mutate `isError` or content to test
+whether post-processing can make recorded tool status disagree with the durable
+effect, then combine argument mutation with terminal guard ordering.
 
 ## Cross-harness footing established by Pi
 

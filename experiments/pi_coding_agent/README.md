@@ -12,7 +12,8 @@ The reusable layer is `adapter.py`. It accepts a `pi-hwb-adapter-config/v0.1`
 configuration, verifies the pinned Pi installation, creates a disposable workspace,
 launches Pi in JSON mode, preserves raw evidence, normalizes Pi events, and emits a
 `pi-hwb-adapter-run/v0.1` envelope. It has no experiment verdict, guard variant, or
-knowledge of the files below.
+knowledge of the files below. Pi print-mode extension errors are projected from
+stderr into host-path-free structured records and fail the generic adapter verdict.
 
 `text_adapter_config.json` is a second, independent consumer of that same adapter.
 It uses a different fixture, task, scripted provider, model, system prompt, and tool
@@ -51,6 +52,12 @@ oracle distinguishes execution safety from complete audit visibility.
 The conflicting-policy pair reverses an explicit `{block: false}` handler and a
 blocking handler. Both orders deny the treatment: allow continues the chain, while
 block is a terminal veto that prevents later handlers from running.
+
+The result-handler failure pair throws after the treatment write has executed.
+Pi preserves the successful effect, catches the extension error, continues later
+`tool_result` handlers, and completes the next positive control. The generic adapter
+rejects the extension runtime error even though Pi exits zero and its JSON lifecycle
+looks successful; the experiment oracle treats that exact failure as the treatment.
 
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
@@ -149,6 +156,8 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run throw_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run audit_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run block_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run allow_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run result_throw_first.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run result_audit_first.json
 ```
 
 Those source-bound commands deliberately use the Workbench from the current
@@ -233,7 +242,8 @@ runs, deterministic provider and extension failure captures, both real Pi contro
 paired plan/action policy enforcement and its negative mutations, an
 undeclared-difference mutation matrix, extension mutation/guard ordering,
 throwing-handler fail-closed and audit-order behavior, terminal block precedence
-over explicit allow, and sealed-record tamper rejection.
+over explicit allow, post-effect result-handler failure and stderr classification,
+and sealed-record tamper rejection.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC
