@@ -1,19 +1,106 @@
 # Harness Workbench
 
-`hwb` executes commands from a JSON spec and records every attempt, exit code,
-raw output, attached feature, and feature result. **Features** are declared
-units of behavior that hook into a run at fixed seams.
+Harness Workbench helps you test the parts around a software or AI workflow —
+things like retries, redaction, timing, and change detection. It records each
+run and deliberately stresses those features so you can see what worked, what
+interfered, and what failed without being noticed.
 
-The same harness cannot observe all of its own defects. `hwb` therefore ships
-campaigns that evaluate specific relations: whether a feature failure was
-contained, whether an inverted decision changed downstream behavior, whether
-a detector observed an input mutation, and whether verdict engines reject a
-known record violation.
+[`Try it`](#try-it) · [`What it can test`](#what-it-can-test) ·
+[`How it works`](#how-it-works) · [`Documentation`](#documentation)
 
 Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
 with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 326 tests.
+runtime dependencies, Python 3.11+, 326 tests. **Actively developed, solo
+maintained.**
+
+---
+
+## Try it
+
+The prerelease is not published to PyPI. Install it from a clone in a virtual
+environment:
+
+```console
+$ git clone https://github.com/explorefailure/harness-workbench.git
+$ cd harness-workbench
+$ python3 -m venv .venv
+$ . .venv/bin/activate
+$ pip install .
+$ hwb --version
+hwb 0.1.0rc1
+```
+
+Create `hello.json` with one command and no features:
+
+```json
+{
+  "schema": "hwbspec/v0.1",
+  "features": [],
+  "steps": [{"id": "01", "argv": ["/bin/echo", "hello"]}]
+}
+```
+
+```console
+$ hwb run hello.json
+20260807T170423Z-6beee9-4472  discovery  1 step(s)  completed
+
+$ hwb ls
+RUN                            CLASS         STATE       STEPS  FEATURES
+20260807T170423Z-6beee9-4472   discovery     complete    1      -
+
+$ hwb show 20260807T170423Z-6beee9-4472
+```
+
+This run needs no configuration or features. The run store is `./runs` by
+default.
+
+**`completed` describes the harness, not the command.** `hwb run` exits 0 when
+the harness completes successfully. A non-zero workload exit is recorded data,
+not a harness error.
+
+## What it can test
+
+Harness Workbench can ask whether:
+
+- a retry, redaction rule, receipt, or change detector affected the run as
+  intended;
+- a damaged feature stayed contained instead of breaking the whole run;
+- one feature interfered with another or wrote outside its declared boundary;
+- a detector noticed a deliberate change to an input;
+- the unchanged baseline was stable enough to compare;
+- the saved record contains enough evidence to inspect, compare, and replay.
+
+It does not score whether the workload itself produced a good answer. Start
+with [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) to
+attach your own command and feature, then choose the measurement that matches
+your question.
+
+## How it works
+
+Each step is a command. The runner executes it and records every attempt, exit
+code, raw output, attached feature, and feature result. **Features** are
+declared units of behavior that hook into a run at fixed seams.
+
+The runner has **no notion of a model, a provider, or a prompt.** A step calling
+`curl`, a test suite, a build script, a shell pipeline, or a Python script
+hitting some API is identical to the workbench. Several examples call a local
+model through ollama, but those are examples, not requirements: nothing in
+`src/` couples to ollama and the test suite has no network references. Start
+with [`examples/flaky/`](examples/flaky/), which uses a shell script and no
+model.
+
+Campaigns deliberately change or damage part of the setup, then compare what
+happened. They can test whether a feature failure was contained, whether an
+inverted decision changed downstream behavior, whether a detector observed an
+input mutation, and whether verdict engines reject a known record violation.
+
+Campaign manifests use their own stores (`./sweeps`, `./steadies`, and so on).
+A campaign store must be disjoint from the run store: equality or nesting in
+either direction is rejected after resolving symlinks, before either kind of
+evidence is created. The separate defaults already satisfy this contract.
+
+## Project status and support
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -21,38 +108,6 @@ should start with an issue. There is no response, merge, compatibility, or
 support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
 process, [SUPPORT.md](SUPPORT.md) for public help, and
 [SECURITY.md](SECURITY.md) for private vulnerability reporting.
-
----
-
-## A step is any command
-
-The runner executes `argv` with `subprocess.run` and records what came back.
-It has **no notion of a model, a provider, or a prompt.** A step calling
-`curl`, a test suite, a build script, a shell pipeline, a Python script
-hitting some API — all identical to the workbench.
-
-Several examples in `examples/` call a local model through ollama. Those are
-*examples*, not requirements: nothing in `src/` couples to ollama and the
-test suite has no network references at all. Start with
-[`examples/flaky/`](examples/flaky/), which uses a shell script and no model.
-
-## Install
-
-```console
-$ pip install .           # from a clone
-$ hwb --version
-hwb 0.1.0rc1
-```
-
-**If `hwb` is not found afterwards**, the script went somewhere not on your
-PATH — commonly `~/Library/Python/3.11/bin` on macOS, `~/.local/bin` on Linux.
-Either add it, or skip the problem entirely:
-
-```console
-$ python3 -m harness_workbench --help   # equivalent, always works
-```
-
-A virtualenv avoids it as well, and is the recommended way to try this out.
 
 ## Compatibility
 
@@ -90,42 +145,6 @@ Run records preserve stdout, stderr, selected environment values, specs, and
 feature source. Do not put secrets in a spec's `env` list or commands unless
 you intend those values to enter the run store. See [SECURITY.md](SECURITY.md)
 for supported versions and private vulnerability reporting.
-
-## First run, no features and no model
-
-Write a spec:
-
-```json
-{
-  "schema": "hwbspec/v0.1",
-  "features": [],
-  "steps": [{"id": "01", "argv": ["/bin/echo", "hello"]}]
-}
-```
-
-```console
-$ hwb run hello.json
-20260807T170423Z-6beee9-4472  discovery  1 step(s)  completed
-
-$ hwb ls
-RUN                            CLASS         STATE       STEPS  FEATURES
-20260807T170423Z-6beee9-4472   discovery     complete    1      -
-
-$ hwb show 20260807T170423Z-6beee9-4472
-```
-
-This run needs no configuration or features. The run store is `./runs` by
-default.
-
-Campaign manifests use their own stores (`./sweeps`, `./steadies`, and so
-on). A campaign store must be disjoint from the run store: equality or
-nesting in either direction is rejected after resolving symlinks, before
-either kind of evidence is created. The separate defaults already satisfy
-this contract.
-
-**`completed` describes the harness, not the command.** `hwb run` exits 0 when
-the harness completes successfully. A non-zero workload exit is recorded data,
-not a harness error.
 
 ## Adding features
 
