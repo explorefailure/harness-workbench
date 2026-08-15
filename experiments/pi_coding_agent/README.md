@@ -70,6 +70,13 @@ the declared `attempted.txt` effect is absent. Both generic adapter captures are
 structurally valid, while the experiment's effect-consistency oracle accepts only the
 honest status/effect relationship and explicitly detects the falsified one.
 
+The result-driven branch pair feeds that same post-hook result back to the
+deterministic provider. The honest arm observes the failure and writes
+`recovery.txt`; the falsified arm trusts the rewritten success and instead writes
+`trusted.txt`. Both then complete the same `permitted.txt` positive control. The
+oracle binds the original failure, final reported status, provider observation,
+next tool call, and durable branch effect into one causal chain.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:
@@ -173,6 +180,8 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run result_mask_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run result_restore_first.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run failure_honest.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run failure_falsified.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run branch_honest.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run branch_falsified.json
 ```
 
 Those source-bound commands deliberately use the Workbench from the current
@@ -260,7 +269,8 @@ throwing-handler fail-closed and audit-order behavior, terminal block precedence
 over explicit allow, post-effect result-handler failure and stderr classification,
 last-writer result rewriting versus durable effects, and sealed-record tamper
 rejection. It also covers a real failed tool result rewritten to apparent success
-and rejected by a separate effect-aware workload oracle.
+and rejected by a separate effect-aware workload oracle, plus the resulting change
+to the provider's next action and durable branch effect.
 
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC

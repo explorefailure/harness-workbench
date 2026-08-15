@@ -84,6 +84,13 @@ sys.modules["failure_rewrite_oracle"] = failure_rewrite_oracle
 failure_rewrite_runner = load_module(
     "pi_hwb_failure_rewrite_runner", EXPERIMENT / "failure_rewrite_runner.py"
 )
+branch_rewrite_oracle = load_module(
+    "pi_hwb_branch_rewrite_oracle", EXPERIMENT / "branch_rewrite_oracle.py"
+)
+sys.modules["branch_rewrite_oracle"] = branch_rewrite_oracle
+branch_rewrite_runner = load_module(
+    "pi_hwb_branch_rewrite_runner", EXPERIMENT / "branch_rewrite_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -610,6 +617,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 | set(
                     json.loads(
                         (EXPERIMENT / "failure_rewrite_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
+                set(raw["steps"][0]["inputs"]),
+            )
+
+        for name, variant in (
+            ("branch_honest.json", "honest"),
+            ("branch_falsified.json", "falsified"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_branch_rewrite.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(branch_rewrite_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "branch_rewrite_adapter_config.json").read_text()
                     )["inputs"]
                 ),
                 set(raw["steps"][0]["inputs"]),
@@ -1716,6 +1741,68 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         for name, capture in mutations:
             with self.subTest(mutation=name):
                 errors, _comparison = failure_rewrite_oracle.evaluate(
+                    "falsified", capture
+                )
+                self.assertTrue(errors)
+
+    def test_falsified_result_changes_provider_next_action(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("honest", "falsified"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "branch_rewrite_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelope = json.loads(result.stdout)
+            envelopes[variant] = envelope
+            comparison = envelope["comparison"]
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+            self.assertTrue(envelope["adapter"]["verdict"]["passed"])
+            self.assertTrue(comparison["underlying_failure_observed"])
+            self.assertFalse(comparison["durable_treatment_effect"])
+            self.assertTrue(comparison["branch_effect"])
+            self.assertTrue(comparison["positive_control"])
+
+        honest = envelopes["honest"]["comparison"]
+        self.assertTrue(honest["final_reported_error"])
+        self.assertTrue(honest["branch_observed_error"])
+        self.assertEqual("recovery", honest["selected_branch"])
+        self.assertTrue(honest["effect_oracle_accepted"])
+        self.assertFalse(honest["false_success_changed_next_action"])
+
+        falsified = envelopes["falsified"]["comparison"]
+        self.assertFalse(falsified["final_reported_error"])
+        self.assertFalse(falsified["branch_observed_error"])
+        self.assertEqual("trusted-success", falsified["selected_branch"])
+        self.assertFalse(falsified["effect_oracle_accepted"])
+        self.assertTrue(falsified["false_success_changed_next_action"])
+
+        mutations = []
+        changed = copy.deepcopy(envelopes["falsified"]["adapter"])
+        changed["evidence"]["branch_decision"]["jsonl"][0][
+            "observedIsError"
+        ] = True
+        mutations.append(("forged-branch-observation", changed))
+        changed = copy.deepcopy(envelopes["falsified"]["adapter"])
+        changed["workspace"]["after"] = [
+            item
+            for item in changed["workspace"]["after"]
+            if item["path"] != "trusted.txt"
+        ]
+        mutations.append(("missing-selected-branch-effect", changed))
+        for name, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = branch_rewrite_oracle.evaluate(
                     "falsified", capture
                 )
                 self.assertTrue(errors)

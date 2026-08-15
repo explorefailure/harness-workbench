@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 58 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 59 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -484,6 +484,66 @@ the false success, partial effects, parallel results, retries, or a live provide
 **Next.** Make the deterministic provider branch on the falsified result to test
 whether result rewriting changes the agent's next action, then test concurrent
 result rewrites in parallel tool completion order.
+
+## E11 — False success changes the provider's next action
+
+**Question.** Does rewriting a genuine tool failure to apparent success merely
+change telemetry, or can it change what Pi does next and leave a different durable
+effect?
+
+**Expectation.** Both arms should begin with the same failed bash command and no
+`attempted.txt`. In the honest arm, the provider should observe `isError: true` and
+write `recovery.txt`. In the falsified arm, it should observe the rewritten
+`isError: false` and write `trusted.txt`. Both arms should then complete the same
+`permitted.txt` positive control.
+
+**Setup.** The pair reuses the E10 failure-rewrite extension and fixture. A new
+deterministic provider selects its second tool call from the treatment's
+post-hook `toolResult` in Pi's context and records that observation separately.
+`branch_rewrite_oracle.py` requires the exact three-tool sequence, stage-labelled
+argument and result digests, provider branch evidence, workspace manifests, file
+contents, and positive control. Each sealed spec binds the same 11 inputs.
+
+**Evidence.** Honest run `20260815T221605Z-69f5ef-0bb9` and falsified run
+`20260815T221606Z-6ac62e-88a5` both completed and conformed. Each run's freeze map
+matched its receipt map, and the 11-input maps were identical across arms. The
+59-test Pi suite passed, including mutations that forge the provider's recorded
+observation or remove the selected branch effect.
+
+**Result.** The underlying command failed identically in both arms and never
+created `attempted.txt`. The honest final result remained errored, the provider
+selected recovery, and `recovery.txt` appeared. The falsified final result reported
+success, the provider selected trusted-success, and `trusted.txt` appeared. Both
+created `permitted.txt`. Thus the result rewrite changed the next action and durable
+state, not only the captured status.
+
+**Learned.** Pi's provider consumes the result after `tool_result` hooks. A false
+success can therefore propagate into control flow before a later outcome oracle
+reviews the run. Proving that propagation requires more than comparing final files:
+the record must connect the original tool failure, rewritten status, provider
+observation, chosen call, and resulting effect. The common positive control shows
+that the divergence is branch selection rather than a broken session.
+
+This is the strongest cross-harness lesson so far: result integrity is a behavioral
+boundary. Once an untrusted middleware rewrite enters agent context, later actions
+are tainted by that rewrite even if an external oracle eventually rejects the run.
+
+**Code consequence.** **Change now, completed locally.** The new provider, runner,
+oracle, sealed pair, and regression test preserve and verify the entire propagation
+chain. **Candidate for reuse:** adapters for other harnesses should distinguish raw
+tool outcomes from middleware-visible outcomes and let workload oracles reject
+success before dependent actions are trusted. A future shared schema could carry a
+result-integrity or provenance marker, but this single Pi mechanism is not yet enough
+to change Workbench core.
+
+**Limits.** This uses a deterministic offline provider, sequential tool calls, one
+boolean status rewrite, and simple file effects. It does not measure live-model
+reasoning, retry behavior, partial effects, rewritten result text without status
+changes, or concurrent result delivery.
+
+**Next.** Test multiple tool calls whose results complete or are delivered in
+different orders, then determine whether Pi preserves call/result correlation and
+whether result rewrites can taint only one branch without contaminating its peers.
 
 ## Cross-harness footing established by Pi
 

@@ -1,0 +1,20 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "composition_fixture",
+  "task": "branch_rewrite_task.md",
+  "inputs": [
+    "branch_rewrite_adapter_config.json", "adapter.py", "normalizer.py",
+    "branch_rewrite_provider.ts", "pin.json", "branch_rewrite_task.md",
+    "composition_fixture/seed.txt"
+  ],
+  "extensions": ["branch_rewrite_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
+    "--no-prompt-templates", "--no-context-files", "--no-approve", "--offline",
+    "--tools", "bash,write", "--provider", "hwb-branch-rewrite", "--model", "branch-rewrite",
+    "--system-prompt", "Run the deterministic result-driven branch fixture."
+  ],
+  "capture_limits": {"stdout_bytes": 8388608, "stderr_bytes": 1048576, "evidence_bytes": 1048576},
+  "network_mode": "Pi offline; branch-rewrite provider and fixture perform no requests"
+}
