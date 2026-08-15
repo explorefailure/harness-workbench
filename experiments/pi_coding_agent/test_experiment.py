@@ -46,6 +46,9 @@ coding_runner = load_module("pi_hwb_coding_runner", EXPERIMENT / "coding_runner.
 plan_oracle = load_module("pi_hwb_plan_oracle", EXPERIMENT / "plan_oracle.py")
 sys.modules["plan_oracle"] = plan_oracle
 plan_runner = load_module("pi_hwb_plan_runner", EXPERIMENT / "plan_runner.py")
+composition_oracle = load_module("pi_hwb_composition_oracle", EXPERIMENT / "composition_oracle.py")
+sys.modules["composition_oracle"] = composition_oracle
+composition_runner = load_module("pi_hwb_composition_runner", EXPERIMENT / "composition_runner.py")
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -474,6 +477,15 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(plan_runner.PLAN_INPUTS), set(raw["steps"][0]["inputs"])
+            )
+
+        for name, variant in (("mutate_first.json", "mutate-first"), ("guard_first.json", "guard-first")):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(["./run_composition.sh", variant], raw["steps"][0]["argv"])
+            self.assertEqual(
+                set(composition_runner.INPUTS)
+                | set(json.loads((EXPERIMENT / "composition_adapter_config.json").read_text())["inputs"]),
+                set(raw["steps"][0]["inputs"]),
             )
 
     def test_pin_is_exact(self):
@@ -1264,6 +1276,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 errors, _comparison = plan_oracle.evaluate(variant, capture)
                 self.assertTrue(errors)
+
+    def test_extension_order_changes_guard_effectiveness(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        comparisons = {}
+        for variant in ("mutate-first", "guard-first"):
+            result = subprocess.run(
+                [sys.executable, str(EXPERIMENT / "composition_runner.py"), "--variant", variant],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=30,
+            )
+            envelope = json.loads(result.stdout)
+            self.assertTrue(envelope["verdict"]["passed"], envelope["verdict"])
+            comparisons[variant] = envelope["comparison"]
+        self.assertFalse(comparisons["mutate-first"]["treatment_effect"])
+        self.assertTrue(comparisons["guard-first"]["treatment_effect"])
+        self.assertEqual("redirected.txt", comparisons["mutate-first"]["guard_observed"])
+        self.assertEqual("requested.txt", comparisons["guard-first"]["guard_observed"])
 
     def test_provider_failure_returns_a_typed_failed_capture(self):
         if shutil.which("pi") is None:

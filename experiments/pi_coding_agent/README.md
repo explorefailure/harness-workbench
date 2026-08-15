@@ -39,6 +39,10 @@ arms. The same provider performs two read-only positive controls, a direct
 `write`, and a shell-mediated write. Plan mode disables the direct tool and
 blocks the unsafe shell command; action mode permits both exact effects.
 
+The extension-composition pair reverses a target-mutating hook and a guarding
+hook. It demonstrates that policy order changes the durable result and that
+Pi's execution-start arguments are pre-hook proposals, not effective arguments.
+
 The first consumer is a separate controlled experiment. `control_runner.py` adds the
 guard extension and delegates its verdict to `control_oracle.py`. An offline scripted
 provider asks Pi to make two writes:

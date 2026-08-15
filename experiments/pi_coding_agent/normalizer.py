@@ -258,6 +258,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
                         "tool_name": tool_name,
                         "target_path": _target_path(start["toolName"], arguments),
                         "arguments_sha256": canonical_digest(arguments),
+                        "arguments_stage": "pre_tool_call_hook",
                         "result_sha256": canonical_digest(event.get("result")),
                         "is_error": event.get("isError"),
                     }

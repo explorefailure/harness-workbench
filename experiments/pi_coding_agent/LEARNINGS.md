@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 51 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 52 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -183,6 +183,46 @@ resistance, mode transitions within a live session, or hostile-code containment.
 
 **Next.** Expand the plan arm with command chaining, substitution, redirects,
 encoded commands, and path indirection; then test plan→act transition using RPC.
+
+## E05 — Extension mutation and guard ordering
+
+**Question.** If one Pi extension mutates tool arguments and another guards the
+call, does reversing their load order change the durable effect?
+
+**Expectation.** Mutate-first should let the guard inspect and block the final
+target. Guard-first should expose whether a later mutation can bypass an earlier
+allow decision while the positive control remains healthy.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, mutator, guard,
+and 12 declared inputs. Only the order of the two `tool_call` extensions changes.
+
+**Evidence.** Mutate-first run `20260815T204412Z-0dd831-4036` and guard-first
+run `20260815T204413Z-808612-6669` both conformed with 12 frozen/receipted
+inputs. The positive-control write succeeded in both arms. Mutate-first let the
+guard observe `redirected.txt` and block it; guard-first let the guard approve
+`requested.txt`, after which the mutator redirected and created
+`redirected.txt`.
+
+**Result.** Mutate-first blocked the treatment effect. Guard-first created the
+mutated target even though the guard had inspected and allowed a different path.
+
+**Learned.** Handler order is security-relevant. A guard can validate stale
+arguments when a later extension mutates them. Pi's JSON `tool_execution_start`
+also retains the original target even when the mutated target is the durable
+effect, because the event precedes extension preflight.
+
+**Code consequence.** **Change now, completed locally.** Normalized execution
+records now label their arguments as `pre_tool_call_hook`; the composition
+oracle reconciles proposal, mutation evidence, guard observation, result, and
+filesystem effect. **Candidate for reuse:** future adapters must distinguish
+proposed from effective tool arguments and policy must validate the final form.
+
+**Limits.** This covers one deterministic mutation and guard. It does not prove
+that every extension chain is observable or that policy-last ordering cannot be
+bypassed through another execution layer.
+
+**Next.** Test throwing handlers and conflicting block/allow handlers in both
+orders, then determine whether Pi supplies a post-mutation observation seam.
 
 ## Cross-harness footing established by Pi
 
