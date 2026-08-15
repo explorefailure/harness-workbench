@@ -63,7 +63,7 @@ space-containing `read`→`edit`, and `read`→test→edit→test coding flows. 
 concurrency tests vary malformed evidence, provider/extension failure, timeout,
 signals, output pressure, and eight simultaneous retained workspaces.
 
-**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 53 tests on
+**Evidence.** `python3.11 -m unittest test_experiment.py` passed all 54 tests on
 2026-08-15, including real pinned Pi runs. `test_generic_adapter_contains_no_control_oracle`
 guards the separation directly.
 
@@ -273,6 +273,56 @@ the attempted call independently of Pi's extension chain.
 **Next.** Reverse conflicting block/allow handlers, then throw from a
 `tool_result` handler to see whether Pi preserves the completed effect and how
 the failure is represented.
+
+## E07 — Conflicting allow/block policy order
+
+**Question.** If one Pi `tool_call` handler explicitly returns `{block: false}`
+and another returns `{block: true}`, does registration order determine the
+result, or does either decision have precedence?
+
+**Expectation.** A block-first arm should reveal whether the terminal denial
+short-circuits the later allower. An allow-first arm should reveal whether an
+earlier allow authorizes immediately or merely permits evaluation to continue.
+The independent control write must succeed in both arms.
+
+**Setup.** Both arms use the same pinned Pi, provider, fixture, allower,
+blocker, and 12 declared inputs. Only handler order changes.
+`policy_order_oracle.py` requires exact decision order, failed treatment result,
+absence of the treatment effect, normal lifecycle completion, and the exact
+positive-control effect.
+
+**Evidence.** Block-first run `20260815T211543Z-50d393-ba91` and allow-first
+run `20260815T211544Z-c70e85-c076` both completed and conformed with matching
+maps of 12 frozen/receipted inputs. The 54-test Pi suite passed, including
+mutations that falsely report treatment success or remove the terminal block
+evidence.
+
+**Result.** Block-first recorded only `block` and denied the write. Allow-first
+recorded `allow` then `block` and also denied the write. Both arms created the
+exact positive-control file and no treatment file.
+
+**Learned.** Pi policy results are asymmetric. `{block: false}` is not a final
+authorization and cannot override a later block; it means evaluation continues.
+`{block: true}` is a terminal veto and prevents later policy handlers from
+observing the call. This is a deny-overrides chain, not voting or last-write-wins
+composition.
+
+**Code consequence.** **Change now, completed locally.** The policy-order
+runner and oracle expose `observed_decisions`, `allower_reached`,
+`blocker_reached`, and `terminal_block_won` separately. **Candidate for reuse:**
+a cross-harness policy model must represent allow/continue and deny/terminal as
+different control-flow outcomes, not symmetric booleans. Keep Pi's exact return
+shape local and do not add a generic policy algebra to Workbench core until a
+second harness exposes comparable semantics.
+
+**Limits.** This covers two synchronous preflight handlers over an unchanged
+write request. It does not test multiple blockers and competing reasons,
+argument mutation between decisions, asynchronous handlers, inactive tools, or
+post-execution policy.
+
+**Next.** Combine mutation with allow/block precedence to test whether a
+terminal guard sees the final arguments, then throw from a `tool_result` handler
+to measure post-effect failure semantics.
 
 ## Cross-harness footing established by Pi
 

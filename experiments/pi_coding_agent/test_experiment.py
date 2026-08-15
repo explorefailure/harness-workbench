@@ -56,6 +56,13 @@ sys.modules["failure_order_oracle"] = failure_order_oracle
 failure_order_runner = load_module(
     "pi_hwb_failure_order_runner", EXPERIMENT / "failure_order_runner.py"
 )
+policy_order_oracle = load_module(
+    "pi_hwb_policy_order_oracle", EXPERIMENT / "policy_order_oracle.py"
+)
+sys.modules["policy_order_oracle"] = policy_order_oracle
+policy_order_runner = load_module(
+    "pi_hwb_policy_order_runner", EXPERIMENT / "policy_order_runner.py"
+)
 pair_verifier = load_module("pi_hwb_pair", EXPERIMENT / "verify_pair.py")
 
 
@@ -505,6 +512,24 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(failure_order_runner.INPUTS)
+                | set(
+                    json.loads(
+                        (EXPERIMENT / "composition_adapter_config.json").read_text()
+                    )["inputs"]
+                ),
+                set(raw["steps"][0]["inputs"]),
+            )
+
+        for name, variant in (
+            ("block_first.json", "block-first"),
+            ("allow_first.json", "allow-first"),
+        ):
+            raw = json.loads((EXPERIMENT / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["./run_policy_order.sh", variant], raw["steps"][0]["argv"]
+            )
+            self.assertEqual(
+                set(policy_order_runner.INPUTS)
                 | set(
                     json.loads(
                         (EXPERIMENT / "composition_adapter_config.json").read_text()
@@ -1362,6 +1387,62 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         ] = False
         errors, _comparison = failure_order_oracle.evaluate("throw-first", changed)
         self.assertTrue(errors, "oracle accepted a falsely successful treatment")
+
+    def test_terminal_block_wins_over_allow_in_both_orders(self):
+        if shutil.which("pi") is None:
+            self.skipTest("Pi is not installed")
+        envelopes = {}
+        for variant in ("block-first", "allow-first"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXPERIMENT / "policy_order_runner.py"),
+                    "--variant",
+                    variant,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            envelopes[variant] = json.loads(result.stdout)
+            self.assertTrue(
+                envelopes[variant]["verdict"]["passed"],
+                envelopes[variant]["verdict"],
+            )
+            self.assertTrue(
+                envelopes[variant]["comparison"]["terminal_block_won"]
+            )
+            self.assertTrue(envelopes[variant]["comparison"]["positive_control"])
+            self.assertFalse(envelopes[variant]["comparison"]["treatment_effect"])
+
+        self.assertEqual(
+            ["block"],
+            envelopes["block-first"]["comparison"]["observed_decisions"],
+        )
+        self.assertEqual(
+            ["allow", "block"],
+            envelopes["allow-first"]["comparison"]["observed_decisions"],
+        )
+
+        mutations = []
+        changed = copy.deepcopy(envelopes["allow-first"]["adapter"])
+        changed["pi"]["summary"]["projection"]["tool_executions"][0][
+            "is_error"
+        ] = False
+        mutations.append(("false-success", changed))
+        changed = copy.deepcopy(envelopes["allow-first"]["adapter"])
+        changed["evidence"]["policy_order"]["jsonl"] = changed["evidence"][
+            "policy_order"
+        ]["jsonl"][:1]
+        mutations.append(("missing-block-veto", changed))
+        for name, capture in mutations:
+            with self.subTest(mutation=name):
+                errors, _comparison = policy_order_oracle.evaluate(
+                    "allow-first", capture
+                )
+                self.assertTrue(errors)
 
     def test_provider_failure_returns_a_typed_failed_capture(self):
         if shutil.which("pi") is None:
