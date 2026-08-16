@@ -25,7 +25,7 @@ Every `cross-harness-adapter-run/v0.1` object contains:
 | `capabilities` | Explicit booleans or typed values for native events, hook events, native terminal events, tool correlation, result status, and model-identity strength. Unsupported features are not synthesized. |
 | `invocation` | Credential-safe argv, working directory marker, timeout, and credential-source class. |
 | `isolation` | Disposable-workspace claim, ambient-config policy, and network scope. This is disclosure, not proof of containment. |
-| `capture` | Complete raw stdout, stderr, and named sidecar bytes with byte counts and SHA-256 digests; process return code and timeout state. |
+| `capture` | Credential-scrubbed stdout, stderr, and named sidecar bytes up to declared positive limits, with source/stored byte counts, stored SHA-256 digests, redaction counts, overflow state, process return code, and termination reason. |
 | `lifecycle` | Acquisition method, completeness class, ordered native event types, normalized tool attempts, and the strongest observed terminal boundary. |
 | `workspace` | Exact before and after manifests collected outside the subject. |
 | `verdict` | Whether the adapter could establish its declared identity, capture, and lifecycle invariants. |
@@ -43,6 +43,8 @@ Each available attempt has:
 {
   "call_id": "subject correlation id or null",
   "tool_name": "subject tool family",
+  "effect_kind": "read | write | command | other",
+  "operation": "recognized semantic operation or null",
   "arguments_sha256": "sha256:...",
   "arguments_stage": "subject_proposal | subject_event | pre_tool_call_hook",
   "reported_error": false,
@@ -67,9 +69,9 @@ not make the adapter structurally invalid by itself.
 | Harness | Acquisition | Strongest terminal evidence | Tool evidence | Observed limitation |
 | --- | --- | --- | --- | --- |
 | Pi `0.84.1` | Native JSON stream | Native session lifecycle | Correlated native calls and results | Pi-specific extension and provider events must remain local. |
-| Claude Code `2.1.228` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
+| Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
-| Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs when a call occurs | The final local-model run terminated after three denied outside-workspace proposals; other probes timed out before or after an exact effect. |
+| Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs when a call occurs | The final repair run terminated cleanly after one read but never attempted red/edit/green; earlier probes also timed out or proposed outside-workspace paths. |
 
 Claude documents noninteractive `-p` operation and streamed JSON output, while
 its hooks expose lifecycle and tool boundaries:
@@ -92,8 +94,8 @@ available:
   security boundary.
 - No assumption that process exit zero proves the requested task succeeded.
 - No assumption that a durable effect proves the harness finished cleanly.
-- No extraction into Workbench core until the candidate survives additional
-  workloads, timeout/cancellation probes, and mutation tests for all adapters.
+- No extraction into Workbench core until Hermes completes a second workload
+  and the remaining containment/redaction edge cases are tested.
 
 ## Promotion gate
 
@@ -106,3 +108,8 @@ Promote this shape only after:
 4. timeout and cancellation record partial effects without claiming a native
    terminal event; and
 5. credential redaction and bounded raw-capture limits are implemented.
+
+Current status: gates 1, 2, 4, and 5 have passing sealed evidence. Gate 3 is
+complete for Claude and Codex. Hermes produced valid adapter evidence on the
+second workload but stopped after one read without performing the repair, so
+promotion remains blocked.

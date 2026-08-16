@@ -10,7 +10,25 @@ hooks:
     - matcher: write_file
       command: python3.11 hook.py
       timeout: 5
+    - matcher: read_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: patch
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: terminal
+      command: python3.11 hook.py
+      timeout: 5
   post_tool_call:
     - matcher: write_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: read_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: patch
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: terminal
       command: python3.11 hook.py
       timeout: 5

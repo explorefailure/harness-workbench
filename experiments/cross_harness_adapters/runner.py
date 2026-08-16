@@ -11,13 +11,15 @@ import adapters
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--subject", required=True, choices=("claude", "codex", "hermes"))
+    parser.add_argument("--workload", default="write", choices=tuple(adapters.WORKLOADS))
     args = parser.parse_args()
     try:
-        capture = adapters.capture(args.subject)
+        capture = adapters.capture(args.subject, args.workload)
     except (adapters.AdapterError, OSError, TypeError, ValueError) as error:
         print(json.dumps({
             "schema": "cross-harness-experiment-run/v0.1",
             "subject": args.subject,
+            "workload": args.workload,
             "error": str(error),
         }, sort_keys=True))
         return 2
@@ -25,6 +27,7 @@ def main() -> int:
     print(json.dumps({
         "schema": "cross-harness-experiment-run/v0.1",
         "subject": args.subject,
+        "workload": args.workload,
         "verdict": {
             "passed": passed,
             "adapter_passed": capture["verdict"]["passed"],

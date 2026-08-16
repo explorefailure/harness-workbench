@@ -40,6 +40,46 @@ def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> No
             errors.append(f"{label} {stream} byte count disagrees")
         if hashlib.sha256(raw).hexdigest() != item.get("sha256"):
             errors.append(f"{label} {stream} digest disagrees")
+        if not isinstance(item.get("source_bytes"), int) or item["source_bytes"] < 0:
+            errors.append(f"{label} {stream} has invalid source byte count")
+        if (
+            not isinstance(item.get("redaction_count"), int)
+            or item["redaction_count"] < 0
+        ):
+            errors.append(f"{label} {stream} has invalid redaction count")
+    limits = capture.get("limits")
+    if (
+        not isinstance(limits, dict)
+        or set(limits) != {
+            "stdout_bytes", "stderr_bytes", "hook_evidence_bytes"
+        }
+        or not all(isinstance(value, int) and value > 0 for value in limits.values())
+    ):
+        errors.append(f"{label} has invalid capture limits")
+    overflow = capture.get("overflow")
+    if not isinstance(overflow, dict) or set(overflow) != {
+        "stdout", "stderr", "hook_evidence"
+    } or not all(isinstance(value, bool) for value in overflow.values()):
+        errors.append(f"{label} has invalid overflow evidence")
+    overflow_map = overflow if isinstance(overflow, dict) else {}
+    if capture.get("termination_reason") not in {
+        None, "timeout", "stdout_limit", "stderr_limit"
+    }:
+        errors.append(f"{label} has an invalid termination reason")
+    if not isinstance(capture.get("returncode"), int):
+        errors.append(f"{label} has an invalid return code")
+    if capture.get("timed_out") is not (
+        capture.get("termination_reason") == "timeout"
+    ):
+        errors.append(f"{label} timeout flag disagrees with termination reason")
+    if capture.get("termination_reason") == "stdout_limit" and not overflow_map.get(
+        "stdout", False
+    ):
+        errors.append(f"{label} stdout limit reason lacks overflow evidence")
+    if capture.get("termination_reason") == "stderr_limit" and not overflow_map.get(
+        "stderr", False
+    ):
+        errors.append(f"{label} stderr limit reason lacks overflow evidence")
 
 
 def verify_record(

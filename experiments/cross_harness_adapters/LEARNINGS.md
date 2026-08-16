@@ -91,3 +91,107 @@ captures, forged digests, altered hook results, or escaped child processes.
 
 **Next.** Add contract-comparison mutations for raw-capture digests, receipt
 maps, capability claims, and partial timeout effects.
+
+## E03 — Shared red → edit → green repair
+
+**Question.** Does the candidate adapter boundary survive a second workload
+that needs reads, a failing command, a code mutation, and a passing command,
+without requiring identical implementations from every harness?
+
+**Expectation.** Each structurally valid record must preserve its subject's
+native evidence. A passing task outcome additionally requires an externally red
+initial suite, only `slugger.py` changed, an externally green final suite, and
+recognized `python3.11 -m unittest -v` evidence ordered as red command → write →
+green command.
+
+**Setup.** Claude Code `2.1.233` with pinned Haiku, Codex CLI `0.144.1` with
+`gpt-5.6-luna`, and Hermes Agent `0.16.0` with content-pinned local
+`qwen3.5:9b`. All arms receive the same four-file fixture, prompt, ten frozen
+inputs, capture limits, and semantic oracle. Claude receives Read/Edit/Bash,
+Codex uses its workspace sandbox, and Hermes receives file/terminal tools plus
+pre/post shell hooks.
+
+**Evidence.** Final sealed discovery runs: Claude
+`20260816T051134Z-775f00-4aaf`, Codex
+`20260816T051134Z-e20662-04c1`, and Hermes
+`20260816T051220Z-9be918-2cb9`. All records conform. `compare.py` returns
+`contract_passed: true` with matching ten-input freeze, receipt, and adapter
+maps.
+
+**Result.** Claude and Codex both passed. Claude exposed three reads followed by
+the exact red → edit → green sequence. Codex exposed three setup commands,
+followed by the same recognized sequence and one final command. Their final
+`slugger.py` SHA-256 values differ, while both external suites pass and all
+invariants match. Hermes completed one successful read hook pair and terminated
+normally, but never attempted the required tests or edit; `slugger.py` remained
+unchanged and the external final suite remained red. Its adapter passed while
+its outcome failed, without invalidating the three-record contract comparison.
+
+**Learned.** A reusable outcome boundary must permit semantically equivalent
+effects while tightly constraining changed files and causal sequence. Tool
+family alone is too weak: “some failing command” could manufacture a false red
+control, so the normalized evidence needs a recognized operation marker. A
+contract-compliant record can still describe a subject failure.
+
+**Code consequence.** **Promote after repetition.** `effect_kind` and optional
+`operation` now extend normalized tool attempts, and the adapter accepts named
+workloads with separate fixtures/prompts/oracles. Keep workload recognition and
+the repair oracle outside Workbench core. Core promotion remains blocked because
+Hermes has not completed the second workload.
+
+**Limits.** The recognized operation is one exact unittest substring, not a
+general command parser. The suite is small and visible to the subject. No hidden
+tests, dependency install, multi-file repair, or interactive continuation is
+covered.
+
+**Next.** Diagnose why local Hermes stops after a successful read, then retry
+with a smaller context/model configuration without weakening the oracle.
+
+## E04 — Bounded capture, partial timeout, and credential scrubbing
+
+**Question.** Can the shared process boundary stop unbounded output, preserve a
+partial effect on timeout without inventing a terminal event, and prevent an
+inherited credential value from reaching persisted evidence?
+
+**Expectation.** Output beyond 128 bytes terminates the owned process group with
+a typed capture-limit reason; a timed-out process leaves its declared partial
+file and records no native terminal; a synthetic secret printed on both streams
+is absent from text, base64-decoded bytes, and serialized capture metadata.
+
+**Setup.** `fault_runner.py` uses the same streaming process primitive and
+capture serializer as the live adapters. The Workbench discovery spec freezes
+and receipts `fault_runner.py` plus `common.py`.
+
+**Evidence.** Sealed discovery run `20260816T051134Z-1cee3c-d7b8` conforms and
+passes. The deterministic suite now passes 27 tests, including sidecar-limit
+refusal, hook-payload scrubbing, and an escaped child holding inherited output
+pipes open after its parent exits.
+
+**Result.** The output-pressure child was terminated with return code 125,
+`stdout_limit`, 10,001 observed source bytes, and exactly 128 stored bytes. The
+timeout child returned 124 with `timeout`, retained `partial.txt`, and explicitly
+reported `native_terminal_event: false`. Both stdout and stderr stored only
+`[REDACTED]\n`; the synthetic credential does not occur in serialized evidence.
+
+**Learned.** “Raw evidence” cannot mean unlimited or secret-bearing bytes.
+Useful evidence is bounded, integrity-digested after redaction, and explicit
+about the gap between source bytes and stored bytes. Timeout and task effect are
+independent facts just like adapter and outcome success.
+
+**Code consequence.** **Candidate for reuse.** The shared primitive now streams
+stdout/stderr under positive limits, terminates on overflow or timeout, records
+typed termination/overflow metadata, scrubs credential-looking environment
+values before serialization, removes those variables from local Hermes, and
+bounds the Hermes hook sidecar. The capture loop also returns after its grace
+period when an escaped child keeps a pipe open. Do not move it into core until
+escaped-child containment and adversarial redaction encodings are tested.
+
+**Limits.** The credential is synthetic. Exact-value replacement does not detect
+encoded, transformed, split, or exfiltrated secrets. The escaped-child test
+proves reader liveness, not containment: the new session briefly survives.
+Source byte counts stop when the owned group is terminated; they are not the
+number an unbounded process would eventually have emitted.
+
+**Next.** Add adversarial encoding mutations and an actual escaped-session
+containment mechanism before treating the redaction and process boundary as
+security controls.

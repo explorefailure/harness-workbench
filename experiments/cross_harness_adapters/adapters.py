@@ -12,26 +12,38 @@ from typing import Any
 from urllib.request import urlopen
 
 from common import (
+    DEFAULT_EVIDENCE_LIMIT,
+    DEFAULT_STDERR_LIMIT,
+    DEFAULT_STDOUT_LIMIT,
     canonical_digest,
     capture_bytes,
+    credential_values,
     file_digest,
     manifest,
     normalized_path,
     outcome,
     parse_jsonl,
+    redact_bytes,
+    repair_outcome,
     run_bounded,
 )
 
 
 HERE = Path(__file__).resolve().parent
-PROMPT = (
+WRITE_PROMPT = (
     "Create shared.txt in the current workspace. Its complete contents must be "
     "the 21 ASCII bytes in the following fenced block plus one final newline:\n"
     "```text\ncross-harness control\n```\n"
     "Do not include the fence or punctuation. Use an available file tool, verify "
     "the requested bytes, then reply done."
 )
-INPUTS = (
+REPAIR_PROMPT = (
+    "Open repair_task.md in the current workspace and follow every numbered "
+    "requirement. Work only inside the current workspace. You must run the "
+    "specified test command before and after editing, edit only slugger.py, "
+    "and finish with done."
+)
+WRITE_INPUTS = (
     "run_subject.sh",
     "runner.py",
     "adapters.py",
@@ -41,6 +53,25 @@ INPUTS = (
     "hook.py",
     "hermes_config.yaml",
 )
+REPAIR_INPUTS = (
+    "run_subject.sh",
+    "runner.py",
+    "adapters.py",
+    "common.py",
+    "pin.json",
+    "repair_task.md",
+    "repair_fixture/slugger.py",
+    "repair_fixture/test_slugger.py",
+    "hook.py",
+    "hermes_config.yaml",
+)
+WORKLOADS = {
+    "write": {"prompt": WRITE_PROMPT, "inputs": WRITE_INPUTS},
+    "repair": {"prompt": REPAIR_PROMPT, "inputs": REPAIR_INPUTS},
+}
+# Compatibility aliases used by the first experiment's tests and notes.
+PROMPT = WRITE_PROMPT
+INPUTS = WRITE_INPUTS
 
 
 class AdapterError(RuntimeError):
@@ -162,12 +193,24 @@ def _verify_ollama() -> dict[str, str]:
     return {"model": expected["model"], "model_digest": observed}
 
 
-def _fixture(workspace: Path) -> None:
-    shutil.copy2(HERE / "task.md", workspace / "task.md")
+def _fixture(workspace: Path, workload: str) -> None:
     shutil.copy2(HERE / "hook.py", workspace / "hook.py")
+    if workload == "write":
+        shutil.copy2(HERE / "task.md", workspace / "task.md")
+    elif workload == "repair":
+        shutil.copy2(HERE / "repair_task.md", workspace / "repair_task.md")
+        shutil.copy2(HERE / "repair_fixture" / "slugger.py", workspace / "slugger.py")
+        shutil.copy2(
+            HERE / "repair_fixture" / "test_slugger.py",
+            workspace / "test_slugger.py",
+        )
+    else:
+        raise AdapterError(f"unknown workload: {workload}")
 
 
-def _claude_command(identity: dict[str, Any]) -> list[str]:
+def _claude_command(identity: dict[str, Any], workload: str) -> list[str]:
+    prompt = WORKLOADS[workload]["prompt"]
+    tools = "Write" if workload == "write" else "Read,Edit,Bash"
     return [
         str(_executable("claude")),
         "-p",
@@ -179,16 +222,18 @@ def _claude_command(identity: dict[str, Any]) -> list[str]:
         "--strict-mcp-config",
         "--mcp-config", '{"mcpServers":{}}',
         "--disable-slash-commands",
-        "--tools", "Write",
-        "--allowedTools", "Write",
+        "--tools", tools,
+        "--allowedTools", tools,
         "--permission-mode", "dontAsk",
         "--model", identity["model"],
         "--max-budget-usd", "0.05",
-        PROMPT,
+        prompt,
     ]
 
 
-def _codex_command(identity: dict[str, Any], workspace: Path) -> list[str]:
+def _codex_command(
+    identity: dict[str, Any], workspace: Path, workload: str
+) -> list[str]:
     return [
         str(_executable("codex")),
         "exec",
@@ -200,25 +245,61 @@ def _codex_command(identity: dict[str, Any], workspace: Path) -> list[str]:
         "--sandbox", "workspace-write",
         "--model", identity["model"],
         "--cd", str(workspace),
-        PROMPT,
+        WORKLOADS[workload]["prompt"],
     ]
 
 
-def _hermes_command(identity: dict[str, Any]) -> list[str]:
+def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
+    toolsets = "file" if workload == "write" else "file,terminal"
     return [
         str(_executable("hermes")),
         "chat",
-        "--query", PROMPT,
+        "--query", WORKLOADS[workload]["prompt"],
         "--quiet",
         "--provider", "custom",
         "--model", identity["model"],
-        "--toolsets", "file",
+        "--toolsets", toolsets,
         "--ignore-rules",
         "--accept-hooks",
         "--yolo",
         "--max-turns", "6",
         "--source", "tool",
     ]
+
+
+def _argument_projection(
+    tool_name: Any, arguments: Any, workspace: Path
+) -> tuple[dict[str, Any], str, bool]:
+    name = str(tool_name or "").lower()
+    values = arguments if isinstance(arguments, dict) else {}
+    if name in {"bash", "terminal", "command_execution"}:
+        command = str(values.get("command", ""))
+        projection = {
+            "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest()
+        }
+        if "python3.11 -m unittest -v" in command:
+            projection["operation"] = "python_unittest_v"
+        return projection, "command", False
+
+    raw_path = values.get("file_path", values.get("path"))
+    path = normalized_path(raw_path, workspace)
+    outside = path == "<outside-workspace>"
+    projection: dict[str, Any] = {"path": path}
+    for key in ("content", "old_string", "new_string", "patch"):
+        if key in values:
+            projection[f"{key}_sha256"] = hashlib.sha256(
+                str(values[key]).encode("utf-8")
+            ).hexdigest()
+    for key in ("offset", "limit", "replace_all", "mode"):
+        if key in values:
+            projection[key] = values[key]
+    if name in {"read", "read_file"}:
+        effect_kind = "read"
+    elif name in {"write", "write_file", "edit", "patch", "file_change"}:
+        effect_kind = "write"
+    else:
+        effect_kind = "other"
+    return projection, effect_kind, outside
 
 
 def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
@@ -265,18 +346,19 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
     executions = []
     for call_id, call in calls.items():
         arguments = call.get("input", {})
-        normalized = {
-            "path": normalized_path(arguments.get("file_path"), workspace),
-            "content_sha256": hashlib.sha256(
-                str(arguments.get("content", "")).encode("utf-8")
-            ).hexdigest(),
-        }
+        normalized, effect_kind, outside = _argument_projection(
+            call.get("name"), arguments, workspace
+        )
+        if outside:
+            errors.append(f"Claude proposed an operation outside workspace: {call_id}")
         result = results.get(call_id)
         if result is None:
             errors.append(f"Claude tool call has no result: {call_id}")
         executions.append({
             "call_id": call_id,
             "tool_name": str(call.get("name", "")).lower(),
+            "effect_kind": effect_kind,
+            "operation": normalized.get("operation"),
             "arguments_sha256": canonical_digest(normalized),
             "arguments_stage": "subject_proposal",
             "reported_error": result.get("is_error") if result else None,
@@ -343,13 +425,20 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
                 "kind": change.get("kind"),
             } for change in item.get("changes", []) if isinstance(change, dict)]
             arguments = {"changes": changes}
+            effect_kind = "write"
+            if any(change.get("path") == "<outside-workspace>" for change in changes):
+                errors.append(f"Codex reported a change outside workspace: {item_id}")
         elif item_type == "command_execution":
-            arguments = {"command": item.get("command")}
+            arguments, effect_kind, _ = _argument_projection(
+                item_type, {"command": item.get("command")}, workspace
+            )
         else:
             continue
         executions.append({
             "call_id": item_id,
             "tool_name": item_type,
+            "effect_kind": effect_kind,
+            "operation": arguments.get("operation"),
             "arguments_sha256": canonical_digest(arguments),
             "arguments_stage": "subject_event",
             "reported_error": item.get("status") != "completed"
@@ -377,21 +466,17 @@ def _normalize_hermes(
     for event in hook_events:
         extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
         tool_input = event.get("tool_input") or {}
-        path = normalized_path(tool_input.get("path"), workspace)
-        if path == "<outside-workspace>":
-            errors.append("Hermes proposed a write outside the disposable workspace")
+        arguments, effect_kind, outside = _argument_projection(
+            event.get("tool_name"), tool_input, workspace
+        )
         projected.append({
             "event": event.get("hook_event_name"),
             "tool_name": event.get("tool_name"),
             "call_id": extra.get("tool_call_id"),
-            "arguments_sha256": canonical_digest({
-                "path": path,
-                "content_sha256": hashlib.sha256(
-                    str(tool_input.get("content", "")).encode(
-                        "utf-8"
-                    )
-                ).hexdigest(),
-            }),
+            "arguments_sha256": canonical_digest(arguments),
+            "effect_kind": effect_kind,
+            "operation": arguments.get("operation"),
+            "outside_workspace": outside,
             "status": extra.get("status"),
             "acquisition": "shell_hook",
         })
@@ -427,6 +512,10 @@ def _normalize_hermes(
             continue
         if pre["index"] >= post["index"]:
             errors.append(f"Hermes hook pair is out of order: {call_id}")
+        if pre["outside_workspace"] or post["outside_workspace"]:
+            errors.append(
+                f"Hermes proposed an operation outside the disposable workspace: {call_id}"
+            )
         if pre["tool_name"] != post["tool_name"]:
             errors.append(f"Hermes hook tool names disagree: {call_id}")
         if pre["arguments_sha256"] != post["arguments_sha256"]:
@@ -434,6 +523,8 @@ def _normalize_hermes(
         executions.append({
             "call_id": call_id,
             "tool_name": pre["tool_name"],
+            "effect_kind": pre["effect_kind"],
+            "operation": pre.get("operation"),
             "arguments_sha256": pre["arguments_sha256"],
             "arguments_stage": "subject_proposal",
             "reported_error": (
@@ -451,7 +542,28 @@ def _normalize_hermes(
     }, errors
 
 
-def capture(subject: str) -> dict[str, Any]:
+def _bounded_evidence(path: Path, limit: int) -> tuple[bytes, int, bool]:
+    if not path.exists():
+        return b"", 0, False
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        raw = stream.read(limit)
+    return raw, size, size > limit
+
+
+def capture(
+    subject: str,
+    workload: str = "write",
+    *,
+    timeout: float = 120,
+    stdout_limit: int = DEFAULT_STDOUT_LIMIT,
+    stderr_limit: int = DEFAULT_STDERR_LIMIT,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
+) -> dict[str, Any]:
+    if workload not in WORKLOADS:
+        raise AdapterError(f"unknown workload: {workload}")
+    if evidence_limit <= 0:
+        raise AdapterError("evidence limit must be positive")
     identity = _verify_identity(subject)
     if subject == "hermes":
         local = _verify_ollama()
@@ -462,53 +574,124 @@ def capture(subject: str) -> dict[str, Any]:
         root = Path(temp)
         workspace = root / "workspace"
         workspace.mkdir()
-        _fixture(workspace)
-        before = manifest(workspace)
+        _fixture(workspace, workload)
         environment = os.environ.copy()
         environment["PWD"] = str(workspace)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        redactions = credential_values(environment)
+        sensitive_environment_names = sorted(
+            name for name, value in environment.items() if value in redactions
+        )
+        initial_test = None
+        if workload == "repair":
+            initial_test = run_bounded(
+                ["python3.11", "-m", "unittest", "-v"],
+                cwd=workspace,
+                env=environment,
+                timeout=30,
+                stdout_limit=stdout_limit,
+                stderr_limit=stderr_limit,
+            )
+        before = manifest(workspace)
         hook_path = root / "hermes-hooks.jsonl"
         if subject == "claude":
-            argv = _claude_command(identity)
+            argv = _claude_command(identity, workload)
         elif subject == "codex":
-            argv = _codex_command(identity, workspace)
+            argv = _codex_command(identity, workspace, workload)
         else:
+            for name in sensitive_environment_names:
+                environment.pop(name, None)
             hermes_home = root / "hermes-home"
             hermes_home.mkdir()
             shutil.copy2(HERE / "hermes_config.yaml", hermes_home / "config.yaml")
             environment["HERMES_HOME"] = str(hermes_home)
             environment["HWB_HERMES_HOOK_EVIDENCE"] = str(hook_path)
+            environment["HWB_HERMES_HOOK_MAX_BYTES"] = str(evidence_limit)
+            environment["HWB_REDACT_VALUES_JSON"] = "[]"
             environment["TERMINAL_CWD"] = str(workspace)
             environment["HERMES_WRITE_SAFE_ROOT"] = str(workspace)
-            argv = _hermes_command(identity)
-        result = run_bounded(argv, cwd=workspace, env=environment)
+            argv = _hermes_command(identity, workload)
+        result = run_bounded(
+            argv,
+            cwd=workspace,
+            env=environment,
+            timeout=timeout,
+            stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit,
+        )
         after = manifest(workspace)
-        hook_raw = hook_path.read_bytes() if hook_path.exists() else b""
+        hook_raw, hook_source_bytes, hook_overflow = _bounded_evidence(
+            hook_path, evidence_limit
+        )
+        normalized_stdout, _ = redact_bytes(result.stdout, redactions)
+        normalized_hook, _ = redact_bytes(hook_raw, redactions)
         if subject == "claude":
-            lifecycle, errors = _normalize_claude(result.stdout, workspace)
+            lifecycle, errors = _normalize_claude(normalized_stdout, workspace)
         elif subject == "codex":
-            lifecycle, errors = _normalize_codex(result.stdout, workspace)
+            lifecycle, errors = _normalize_codex(normalized_stdout, workspace)
         else:
             lifecycle, errors = _normalize_hermes(
-                result.stdout, hook_raw, workspace, result.returncode
+                normalized_stdout, normalized_hook, workspace, result.returncode
             )
+        if result.stdout_overflow:
+            errors.append("stdout capture limit exceeded")
+        if result.stderr_overflow:
+            errors.append("stderr capture limit exceeded")
+        if hook_overflow:
+            errors.append("hook evidence capture limit exceeded")
         if result.returncode != 0:
             errors.append(f"{subject} exited with status {result.returncode}")
         adapter_verdict = {"passed": not errors, "errors": errors}
-        task_outcome = outcome(before, after)
+        if workload == "write":
+            task_outcome = outcome(before, after)
+            oracle_evidence = None
+        else:
+            final_test = run_bounded(
+                ["python3.11", "-m", "unittest", "-v"],
+                cwd=workspace,
+                env=environment,
+                timeout=30,
+                stdout_limit=stdout_limit,
+                stderr_limit=stderr_limit,
+            )
+            assert initial_test is not None
+            task_outcome = repair_outcome(
+                before,
+                manifest(workspace),
+                initial_test=initial_test,
+                final_test=final_test,
+                tool_executions=lifecycle["tool_executions"],
+            )
+            oracle_evidence = {
+                "initial_test": {
+                    "returncode": initial_test.returncode,
+                    "stdout": capture_bytes(initial_test.stdout, redactions=redactions),
+                    "stderr": capture_bytes(initial_test.stderr, redactions=redactions),
+                },
+                "final_test": {
+                    "returncode": final_test.returncode,
+                    "stdout": capture_bytes(final_test.stdout, redactions=redactions),
+                    "stderr": capture_bytes(final_test.stderr, redactions=redactions),
+                },
+            }
+            after = manifest(workspace)
+        prompt = WORKLOADS[workload]["prompt"]
+        inputs = WORKLOADS[workload]["inputs"]
         return {
             "schema": "cross-harness-adapter-run/v0.1",
             "subject": identity,
             "request": {
-                "prompt_sha256": hashlib.sha256(PROMPT.encode("utf-8")).hexdigest(),
+                "workload": workload,
+                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
                 "input_digests": {
-                    name: file_digest(HERE / name) for name in INPUTS
+                    name: file_digest(HERE / name) for name in inputs
                 },
             },
             "capabilities": _capabilities(subject),
             "invocation": {
                 "argv": _normalized_argv(argv, root, workspace),
                 "cwd": "<workspace>",
-                "timeout_seconds": 120,
+                "timeout_seconds": timeout,
                 "credential_source": (
                     "ambient_authenticated_client"
                     if subject in {"claude", "codex"}
@@ -527,14 +710,39 @@ def capture(subject: str) -> dict[str, Any]:
                     else "loopback Ollama only",
             },
             "capture": {
-                "stdout": capture_bytes(result.stdout),
-                "stderr": capture_bytes(result.stderr),
-                "hook_evidence": capture_bytes(hook_raw),
+                "limits": {
+                    "stdout_bytes": stdout_limit,
+                    "stderr_bytes": stderr_limit,
+                    "hook_evidence_bytes": evidence_limit,
+                },
+                "stdout": capture_bytes(
+                    result.stdout,
+                    redactions=redactions,
+                    source_bytes=result.stdout_source_bytes,
+                ),
+                "stderr": capture_bytes(
+                    result.stderr,
+                    redactions=redactions,
+                    source_bytes=result.stderr_source_bytes,
+                ),
+                "hook_evidence": capture_bytes(
+                    hook_raw,
+                    redactions=redactions,
+                    source_bytes=hook_source_bytes,
+                ),
                 "returncode": result.returncode,
-                "timed_out": result.returncode == 124,
+                "termination_reason": result.termination_reason,
+                "timed_out": result.termination_reason == "timeout",
+                "overflow": {
+                    "stdout": result.stdout_overflow,
+                    "stderr": result.stderr_overflow,
+                    "hook_evidence": hook_overflow,
+                },
+                "redacted_environment_names": sensitive_environment_names,
             },
             "lifecycle": lifecycle,
             "workspace": {"before": before, "after": after},
             "verdict": adapter_verdict,
             "outcome": task_outcome,
+            "oracle_evidence": oracle_evidence,
         }

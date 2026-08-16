@@ -3,13 +3,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 import adapters
 import compare as comparator
-from common import EXPECTED_CONTENT, manifest, outcome, parse_jsonl
+from common import (
+    EXPECTED_CONTENT,
+    ProcessResult,
+    capture_bytes,
+    credential_values,
+    manifest,
+    outcome,
+    parse_jsonl,
+    redact_bytes,
+    repair_outcome,
+    run_bounded,
+)
 
 
 def jsonl(*events: dict) -> bytes:
@@ -51,6 +66,118 @@ class CommonTests(unittest.TestCase):
                 [feature["name"] for feature in spec["features"]],
                 ["freeze", "receipt"],
             )
+
+    def test_repair_specs_bind_the_same_complete_input_set(self) -> None:
+        for subject in ("claude", "codex", "hermes"):
+            spec = json.loads(
+                (adapters.HERE / f"repair_{subject}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                tuple(spec["steps"][0]["inputs"]), adapters.REPAIR_INPUTS
+            )
+
+    def test_streaming_capture_enforces_stdout_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_bounded(
+                [sys.executable, "-c", 'print("x" * 10000)'],
+                cwd=Path(directory),
+                env=os.environ.copy(),
+                timeout=2,
+                stdout_limit=100,
+                stderr_limit=100,
+            )
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(result.termination_reason, "stdout_limit")
+        self.assertTrue(result.stdout_overflow)
+        self.assertEqual(len(result.stdout), 100)
+        self.assertGreater(result.stdout_source_bytes, len(result.stdout))
+
+    def test_timeout_preserves_partial_effect_without_terminal_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = run_bounded(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import time; "
+                    "Path('partial.txt').write_text('partial'); "
+                    "print('started', flush=True); time.sleep(10)",
+                ],
+                cwd=root,
+                env=os.environ.copy(),
+                timeout=0.1,
+            )
+            self.assertEqual((root / "partial.txt").read_text(), "partial")
+        self.assertEqual(result.returncode, 124)
+        self.assertEqual(result.termination_reason, "timeout")
+        self.assertEqual(result.stdout, b"started\n")
+
+    def test_escaped_child_pipe_cannot_hold_capture_loop_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            started = time.monotonic()
+            result = run_bounded(
+                [
+                    sys.executable,
+                    "-c",
+                    "import subprocess,sys; "
+                    "subprocess.Popen([sys.executable,'-c','import time;time.sleep(.4)'], "
+                    "start_new_session=True); print('parent',flush=True)",
+                ],
+                cwd=Path(directory),
+                env=os.environ.copy(),
+                timeout=0.05,
+                termination_grace=0.05,
+            )
+            elapsed = time.monotonic() - started
+        self.assertEqual(result.termination_reason, "timeout")
+        self.assertLess(elapsed, 0.3)
+
+    def test_credentials_are_redacted_before_serialization(self) -> None:
+        secret = 'credential-"quoted"-value'
+        values = credential_values({"HWB_TEST_SECRET": secret, "NORMAL": "visible"})
+        raw = ("plain=" + secret + " json=" + json.dumps(secret)[1:-1]).encode()
+        stored, count = redact_bytes(raw, values)
+        self.assertNotIn(secret.encode(), stored)
+        self.assertNotIn(json.dumps(secret)[1:-1].encode(), stored)
+        self.assertGreaterEqual(count, 2)
+        captured = capture_bytes(raw, redactions=values)
+        serialized = json.dumps(captured)
+        self.assertNotIn(secret, serialized)
+        self.assertGreater(captured["redaction_count"], 0)
+
+    def test_hook_redacts_and_refuses_oversized_evidence(self) -> None:
+        secret = "hook-secret-value"
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "hooks.jsonl"
+            environment = os.environ.copy()
+            environment.update({
+                "HWB_HERMES_HOOK_EVIDENCE": str(evidence),
+                "HWB_HERMES_HOOK_MAX_BYTES": "4096",
+                "HWB_REDACT_VALUES_JSON": json.dumps([secret]),
+            })
+            payload = json.dumps({"value": secret}).encode()
+            accepted = subprocess.run(
+                [sys.executable, str(adapters.HERE / "hook.py")],
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                check=False,
+            )
+            self.assertEqual(accepted.returncode, 0)
+            self.assertNotIn(secret, evidence.read_text())
+            environment["HWB_HERMES_HOOK_MAX_BYTES"] = "1"
+            refused = subprocess.run(
+                [sys.executable, str(adapters.HERE / "hook.py")],
+                input=b"{}",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                check=False,
+            )
+            self.assertEqual(refused.returncode, 3)
 
 
 class ClaudeNormalizerTests(unittest.TestCase):
@@ -244,8 +371,10 @@ class HermesNormalizerTests(unittest.TestCase):
             b"done\n", jsonl(pre, post), Path("/workspace"), 0
         )
         self.assertEqual(
-            errors.count("Hermes proposed a write outside the disposable workspace"),
-            2,
+            errors,
+            [
+                "Hermes proposed an operation outside the disposable workspace: call-1"
+            ],
         )
 
     def test_hook_error_is_preserved_without_invalidating_structure(self) -> None:
@@ -262,6 +391,77 @@ class HermesNormalizerTests(unittest.TestCase):
         self.assertTrue(lifecycle["tool_executions"][0]["reported_error"])
 
 
+class RepairOutcomeTests(unittest.TestCase):
+    @staticmethod
+    def process(returncode: int) -> ProcessResult:
+        return ProcessResult(
+            args=["python3.11", "-m", "unittest", "-v"],
+            returncode=returncode,
+            stdout=b"",
+            stderr=b"",
+            stdout_source_bytes=0,
+            stderr_source_bytes=0,
+            termination_reason=None,
+            stdout_overflow=False,
+            stderr_overflow=False,
+        )
+
+    def test_exact_repair_boundary_and_subject_sequence_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("hook.py", "repair_task.md", "test_slugger.py"):
+                (root / name).write_text(name, encoding="utf-8")
+            (root / "slugger.py").write_text("broken", encoding="utf-8")
+            before = manifest(root)
+            (root / "slugger.py").write_text("fixed", encoding="utf-8")
+            after = manifest(root)
+        executions = [
+            {
+                "effect_kind": "command",
+                "operation": "python_unittest_v",
+                "reported_error": True,
+            },
+            {"effect_kind": "write", "reported_error": False},
+            {
+                "effect_kind": "command",
+                "operation": "python_unittest_v",
+                "reported_error": False,
+            },
+        ]
+        result = repair_outcome(
+            before,
+            after,
+            initial_test=self.process(1),
+            final_test=self.process(0),
+            tool_executions=executions,
+        )
+        self.assertTrue(result["passed"])
+
+    def test_green_effect_without_subject_red_green_sequence_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("hook.py", "repair_task.md", "test_slugger.py"):
+                (root / name).write_text(name, encoding="utf-8")
+            (root / "slugger.py").write_text("broken", encoding="utf-8")
+            before = manifest(root)
+            (root / "slugger.py").write_text("fixed", encoding="utf-8")
+            after = manifest(root)
+        result = repair_outcome(
+            before,
+            after,
+            initial_test=self.process(1),
+            final_test=self.process(0),
+            tool_executions=[
+                {"effect_kind": "write", "reported_error": False},
+            ],
+        )
+        self.assertFalse(result["passed"])
+        self.assertIn(
+            "subject evidence lacks red-command -> write -> green-command",
+            result["errors"],
+        )
+
+
 class PinTests(unittest.TestCase):
     def test_expected_effect_digest_is_stable(self) -> None:
         self.assertEqual(
@@ -274,10 +474,31 @@ class ContractComparisonTests(unittest.TestCase):
     def outer(self, subject: str, *, passed: bool) -> dict:
         empty_sha = hashlib.sha256(b"").hexdigest()
         capture = {
-            name: {"bytes": 0, "sha256": empty_sha, "base64": "", "text": ""}
+            name: {
+                "bytes": 0,
+                "source_bytes": 0,
+                "sha256": empty_sha,
+                "base64": "",
+                "text": "",
+                "redaction_count": 0,
+            }
             for name in ("stdout", "stderr", "hook_evidence")
         }
-        capture.update({"returncode": 0 if passed else 124, "timed_out": not passed})
+        capture.update({
+            "limits": {
+                "stdout_bytes": 1024,
+                "stderr_bytes": 1024,
+                "hook_evidence_bytes": 1024,
+            },
+            "overflow": {
+                "stdout": False,
+                "stderr": False,
+                "hook_evidence": False,
+            },
+            "returncode": 0 if passed else 124,
+            "termination_reason": None if passed else "timeout",
+            "timed_out": not passed,
+        })
         adapter = {
             "schema": "cross-harness-adapter-run/v0.1",
             "subject": {"name": subject},
