@@ -1285,7 +1285,7 @@ def capture(
                 "limits": {
                     "stdout_bytes": stdout_limit,
                     "stderr_bytes": stderr_limit,
-                    "hook_evidence_bytes": evidence_limit,
+                    "sidecar_bytes": evidence_limit,
                 },
                 "stdout": capture_bytes(
                     result.stdout,
@@ -1297,7 +1297,7 @@ def capture(
                     redactions=redactions,
                     source_bytes=result.stderr_source_bytes,
                 ),
-                "hook_evidence": capture_bytes(
+                "sidecar": capture_bytes(
                     evidence_raw,
                     redactions=redactions,
                     source_bytes=evidence_source_bytes,
@@ -1309,7 +1309,7 @@ def capture(
                 "overflow": {
                     "stdout": result.stdout_overflow,
                     "stderr": result.stderr_overflow,
-                    "hook_evidence": evidence_overflow,
+                    "sidecar": evidence_overflow,
                 },
                 "redacted_environment_names": sensitive_environment_names,
             },

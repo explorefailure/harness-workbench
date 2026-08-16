@@ -26,7 +26,7 @@ def load_source(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any]]:
 
 
 def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> None:
-    for stream in ("stdout", "stderr", "hook_evidence"):
+    for stream in ("stdout", "stderr", "sidecar"):
         item = capture.get(stream)
         if not isinstance(item, dict):
             errors.append(f"{label} has no {stream} capture")
@@ -51,14 +51,14 @@ def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> No
     if (
         not isinstance(limits, dict)
         or set(limits) != {
-            "stdout_bytes", "stderr_bytes", "hook_evidence_bytes"
+            "stdout_bytes", "stderr_bytes", "sidecar_bytes"
         }
         or not all(isinstance(value, int) and value > 0 for value in limits.values())
     ):
         errors.append(f"{label} has invalid capture limits")
     overflow = capture.get("overflow")
     if not isinstance(overflow, dict) or set(overflow) != {
-        "stdout", "stderr", "hook_evidence"
+        "stdout", "stderr", "sidecar"
     } or not all(isinstance(value, bool) for value in overflow.values()):
         errors.append(f"{label} has invalid overflow evidence")
     overflow_map = overflow if isinstance(overflow, dict) else {}

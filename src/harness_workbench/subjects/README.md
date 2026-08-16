@@ -96,11 +96,17 @@ context snapshot are disabled; the local provider declares reasoning `off` and
 an 8,192-token per-step cap. Its supported headless stdout is final text only,
 so the adapter collects the first-party uncompressed session log from the
 isolated `DSH_HOME` and normalizes native `tool/call`, `tool/result`, and
-`turn/end` events. The current schema stores those raw sidecar bytes in the
-legacy `hook_evidence` capture slot with
-`sidecar_kind: native_persisted_session_jsonl`.
+`turn/end` events. The schema stores those raw bytes in the `sidecar` capture
+slot with `sidecar_kind: native_persisted_session_jsonl`.
 
-Stdout, stderr, and hook evidence have positive byte limits. Exceeding stdout or
+The slot is named for its position, not its source, because its source is not
+the same on every subject: `sidecar_kind` is `shell_hook_jsonl` for Hermes,
+`native_persisted_session_jsonl` for DeepSeek, and `none` where no sidecar
+exists. Reading the discriminator is mandatory — a persisted session log and a
+hook transcript are different evidence with different trust, and a slot named
+after one of them invites the other to be read as it.
+
+Stdout, stderr, and the sidecar have positive byte limits. Exceeding stdout or
 stderr terminates the owned process group; the Hermes hook refuses a sidecar
 append that would exceed its limit. Credential-looking environment values are
 scrubbed before captured bytes are serialized, and credential variables are not

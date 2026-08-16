@@ -687,18 +687,18 @@ class ContractComparisonTests(unittest.TestCase):
                 "text": "",
                 "redaction_count": 0,
             }
-            for name in ("stdout", "stderr", "hook_evidence")
+            for name in ("stdout", "stderr", "sidecar")
         }
         capture.update({
             "limits": {
                 "stdout_bytes": 1024,
                 "stderr_bytes": 1024,
-                "hook_evidence_bytes": 1024,
+                "sidecar_bytes": 1024,
             },
             "overflow": {
                 "stdout": False,
                 "stderr": False,
-                "hook_evidence": False,
+                "sidecar": False,
             },
             "returncode": 0 if passed else 124,
             "termination_reason": None if passed else "timeout",
