@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 from pathlib import Path
 import signal
@@ -101,6 +102,34 @@ class RedactionTests(unittest.TestCase):
         stored, count = capture.redact_bytes(raw, (secret,))
         self.assertEqual(1, count)
         self.assertNotIn(b"secret", stored)
+
+    def test_ascii_escaped_json_form_is_redacted_too(self):
+        """`json.dumps` escapes non-ASCII BY DEFAULT, and that form once slipped.
+
+        A secret with any non-ASCII byte reached stored evidence as `\\uXXXX`
+        while `redaction_count` said 0 -- indistinguishable from bytes that
+        never held a secret. Python's default, not an exotic encoder: every
+        `json.dumps` without `ensure_ascii=False` produces this, including one
+        in this repository.
+        """
+        secret = "sécret-value-ünicode"
+        raw = json.dumps({"k": secret}).encode("utf-8")
+        self.assertIn(b"\\u00e9", raw)
+        stored, count = capture.redact_bytes(raw, (secret,))
+        self.assertEqual(1, count)
+        self.assertNotIn(b"\\u00e9", stored)
+        self.assertNotIn(secret.encode("utf-8"), stored)
+
+    def test_a_secret_is_counted_once_per_occurrence_not_once_per_variant(self):
+        """Three variants are registered; one occurrence must still count one.
+
+        Otherwise `redaction_count` inflates with the encoder list rather than
+        with what was actually found, and stops describing the evidence.
+        """
+        secret = "sécret-value-ünicode"
+        raw = b"plain=" + secret.encode("utf-8")
+        _, count = capture.redact_bytes(raw, (secret,))
+        self.assertEqual(1, count)
 
     def test_capture_bytes_digests_what_was_stored_not_what_arrived(self):
         item = capture.capture_bytes(b"tok=SECRETVALUE", redactions=("SECRETVALUE",))

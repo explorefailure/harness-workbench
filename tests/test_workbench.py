@@ -3770,7 +3770,11 @@ class TestPackageIdentity(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         destination = os.path.join(tmp, "materialized")
         written, skipped = subject_tree.materialize(destination)
-        self.assertEqual(sorted(written), subject_tree.subject_files())
+        # The shipped files plus the apparatus manifest, which is generated
+        # rather than copied and so is not one of `subject_files()`.
+        self.assertEqual(
+            sorted(written),
+            sorted(subject_tree.subject_files() + [subject_tree.APPARATUS]))
         self.assertEqual([], skipped)
 
         target = os.path.join(destination, "adapters.py")
@@ -3778,7 +3782,11 @@ class TestPackageIdentity(unittest.TestCase):
             fh.write("# edited by whoever owns this copy\n")
 
         written, skipped = subject_tree.materialize(destination)
-        self.assertEqual([], written)
+        # The manifest is rewritten every time and is the one thing the skip
+        # rule must NOT protect: it describes which primitive is importable
+        # now, so a stale copy of it is a false statement rather than someone's
+        # edited work.
+        self.assertEqual([subject_tree.APPARATUS], written)
         self.assertEqual(sorted(skipped), subject_tree.subject_files())
         self.assertEqual("# edited by whoever owns this copy\n",
                          read_text(target))
@@ -3786,6 +3794,30 @@ class TestPackageIdentity(unittest.TestCase):
         written, skipped = subject_tree.materialize(destination, force=True)
         self.assertEqual([], skipped)
         self.assertNotIn("edited by whoever", read_text(target))
+
+    def test_materialize_records_which_primitive_the_tree_was_cut_against(self):
+        # The adapters import `capture` from the installed package, so those
+        # bytes decide how a subject is measured from outside everything a spec
+        # can declare. This is the baseline the adapter compares itself to.
+        import json
+        from harness_workbench import canon, capture, subject_tree
+
+        tmp = tempfile.mkdtemp(prefix="hb-apparatus-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        destination = os.path.join(tmp, "materialized")
+        subject_tree.materialize(destination)
+
+        manifest = json.loads(
+            read_text(os.path.join(destination, subject_tree.APPARATUS)))
+        self.assertEqual("hwb-subject-apparatus/v0.1", manifest["schema"])
+        # Both modules, not just the obvious one: `capture.digest_file` wraps
+        # `canon.digest_file`, so a change in canon moves every digest in a
+        # record while capture.py stays byte-identical.
+        self.assertEqual({"canon", "capture"}, set(manifest["modules"]))
+        for name, module in (("canon", canon), ("capture", capture)):
+            self.assertEqual(
+                canon.digest_file(module.__file__).split(":", 1)[1],
+                manifest["modules"][name]["sha256"])
 
     def test_source_and_project_metadata_have_one_version_authority(self):
         import tomllib

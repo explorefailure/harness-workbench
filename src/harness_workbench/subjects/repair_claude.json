@@ -10,6 +10,12 @@
       "name": "receipt"
     },
     {
+      "name": "retry",
+      "config": {
+        "max": 2
+      }
+    },
+    {
       "name": "sample",
       "config": {
         "n": 3

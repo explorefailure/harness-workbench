@@ -366,10 +366,28 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     secret are otherwise indistinguishable, and their digests differ for a
     reason nothing records.
 
-    Each value is also matched in its JSON-escaped form: a subject that logs a
-    credential inside a JSON string emits escapes the raw value does not
-    contain, and matching only the raw form leaks exactly the case most likely
-    to occur.
+    Each value is also matched in its JSON-escaped forms, BOTH of them. A
+    subject that logs a credential inside a JSON string emits escapes the raw
+    value does not contain, and matching only the raw form leaks exactly the
+    case most likely to occur -- every harness here speaks JSONL.
+
+    `ensure_ascii=True` is not a third-party quirk to be generous about; it is
+    Python's `json.dumps` DEFAULT, and this project's own Hermes hook
+    serializes with it. A secret containing any non-ASCII byte is written as
+    `\\uXXXX` escapes, which the raw form and the non-ASCII-preserving form
+    both miss -- and the capture is then stored with `redaction_count: 0`,
+    which reads as "no secret was present". That is worse than an obvious
+    failure, and it was live until it was looked for.
+
+    Registering variants of a known value is what the state of the art does:
+    the GitHub Actions runner registers four encoders per secret for base64
+    alone. Its ADR also names the cost, which is why this list is principled
+    rather than maximal -- each extra variant that fires reveals a little more
+    about where the secret was and how long it is. These three cover "the
+    value" and "the value as a JSON string", which is the shape this project's
+    evidence actually takes. Percent-encoded and base64 forms are deliberately
+    NOT registered: no subject here has been observed emitting one, and
+    guessing at encodings buys leak surface for coverage nobody has needed.
     """
     redacted = raw
     count = 0
@@ -377,6 +395,7 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
         variants = {
             value.encode("utf-8"),
             json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"),
+            json.dumps(value, ensure_ascii=True)[1:-1].encode("utf-8"),
         }
         for variant in sorted(variants, key=len, reverse=True):
             if not variant:

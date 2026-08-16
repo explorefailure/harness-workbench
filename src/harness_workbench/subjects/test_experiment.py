@@ -71,10 +71,36 @@ class CommonTests(unittest.TestCase):
             # seam.
             self.assertEqual(
                 [feature["name"] for feature in spec["features"]],
-                ["freeze", "receipt", "sample", "timing"],
+                ["freeze", "receipt", "retry", "sample", "timing"],
             )
-            sample = spec["features"][2]
-            self.assertEqual(sample["config"]["n"], 3)
+            by_name = {f["name"]: f for f in spec["features"]}
+            self.assertEqual(by_name["sample"]["config"]["n"], 3)
+            self.assertEqual(by_name["retry"]["config"]["max"], 2)
+
+    def test_retry_is_nested_inside_sample_not_around_it(self) -> None:
+        # Order is the experiment, not a formatting choice. The last-declared
+        # wrap is outermost, so `retry` before `sample` composes as
+        # sample(retry(step)): a failed draw is retried on its own. Reversed,
+        # retry(sample(step)) re-runs the whole set when one draw failed --
+        # discarding draws that were already valid and paying for them twice.
+        for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
+            spec = json.loads(
+                (adapters.HERE / f"{subject}.json").read_text(encoding="utf-8")
+            )
+            names = [feature["name"] for feature in spec["features"]]
+            self.assertLess(names.index("retry"), names.index("sample"))
+
+    def test_worst_case_subject_invocations_stay_bounded(self) -> None:
+        # Nothing meters spend, so the bound has to come from the only two
+        # numbers that multiply: draws and retries. 3 x 2 = 6 invocations per
+        # spec worst case, 3 when nothing needs retrying. Stated as a test so
+        # raising either number is a decision someone makes on purpose.
+        spec = json.loads(
+            (adapters.HERE / "claude.json").read_text(encoding="utf-8")
+        )
+        by_name = {f["name"]: f for f in spec["features"]}
+        worst_case = by_name["sample"]["config"]["n"] * by_name["retry"]["config"]["max"]
+        self.assertLessEqual(worst_case, 6)
 
     def test_repair_specs_bind_the_same_complete_input_set(self) -> None:
         for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
@@ -165,6 +191,35 @@ class CommonTests(unittest.TestCase):
         serialized = json.dumps(captured)
         self.assertNotIn(secret, serialized)
         self.assertGreater(captured["redaction_count"], 0)
+
+    def test_a_non_ascii_secret_survives_json_escaping(self) -> None:
+        # The inversion of the encoding-variant fix. `json.dumps` escapes any
+        # non-ASCII byte to \uXXXX BY DEFAULT -- including this project's own
+        # Hermes hook -- so a secret that contains one reached sealed evidence
+        # while `redaction_count: 0` said no secret had been present.
+        secret = "sécret-token-with-ünicode"
+        values = credential_values({"HWB_TEST_TOKEN": secret})
+        self.assertEqual(values, (secret,))
+        escaped = json.dumps({"command": f"export KEY={secret}"}).encode("utf-8")
+        self.assertIn(b"\\u00e9", escaped)  # the form that used to slip
+        stored, count = redact_bytes(escaped, values)
+        self.assertNotIn(b"\\u00e9", stored)
+        self.assertNotIn(secret.encode("utf-8"), stored)
+        self.assertEqual(count, 1)
+        captured = capture_bytes(escaped, redactions=values)
+        self.assertNotIn("u00e9", json.dumps(captured))
+        self.assertGreater(captured["redaction_count"], 0)
+
+    def test_the_hermes_hook_scrubber_is_not_handed_an_empty_list(self) -> None:
+        # The second layer, which was switched off. The hook scrubs values
+        # before serialization, so it is the one place an encoding cannot
+        # defeat -- but only if it is told what to scrub.
+        source = (adapters.HERE / "adapters.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'environment["HWB_REDACT_VALUES_JSON"] = json.dumps(list(redactions))',
+            source,
+        )
+        self.assertNotIn('environment["HWB_REDACT_VALUES_JSON"] = "[]"', source)
 
     def test_hook_redacts_and_refuses_oversized_evidence(self) -> None:
         secret = "hook-secret-value"
@@ -694,6 +749,57 @@ class PinTests(unittest.TestCase):
             hashlib.sha256(EXPECTED_CONTENT).hexdigest(),
             "2e8552d04a55edf3110197d2dfdaf76a77c9247b76f1438b0c153cf0245d4d2e",
         )
+
+
+class ApparatusBaselineTests(unittest.TestCase):
+    """The control for the hazard `compare.py` structurally cannot see.
+
+    `compare.py` checks that the subjects agree with EACH OTHER. One machine,
+    one `pip install -U`, five runs -- and all five agree perfectly while every
+    one of them was measured by a primitive nobody declared. Only a baseline
+    written when the tree was cut can catch that, so this is the check that has
+    to hold.
+    """
+
+    def setUp(self) -> None:
+        self.baseline = adapters.HERE / "apparatus.json"
+        self.existed = self.baseline.exists()
+        self.original = self.baseline.read_bytes() if self.existed else None
+
+    def tearDown(self) -> None:
+        if self.original is not None:
+            self.baseline.write_bytes(self.original)
+        elif self.baseline.exists():
+            self.baseline.unlink()
+
+    def test_an_unmaterialized_tree_says_so_rather_than_going_quiet(self) -> None:
+        if self.baseline.exists():
+            self.baseline.unlink()
+        baseline = adapters._apparatus()["baseline"]
+        self.assertFalse(baseline["present"])
+        self.assertIsNone(baseline["agrees"])
+        self.assertIn("not materialized", baseline["note"])
+
+    def test_a_matching_baseline_agrees(self) -> None:
+        live = adapters._apparatus()
+        self.baseline.write_text(
+            json.dumps({"version": live["version"], "modules": live["modules"]}),
+            encoding="utf-8",
+        )
+        self.assertTrue(adapters._apparatus()["baseline"]["agrees"])
+
+    def test_an_upgraded_primitive_is_caught_and_named(self) -> None:
+        live = adapters._apparatus()
+        drifted = json.loads(json.dumps(live["modules"]))
+        drifted["capture"]["sha256"] = "0" * 64
+        self.baseline.write_text(
+            json.dumps({"version": "0.0.1-older", "modules": drifted}),
+            encoding="utf-8",
+        )
+        baseline = adapters._apparatus()["baseline"]
+        self.assertFalse(baseline["agrees"])
+        self.assertEqual(["capture"], baseline["changed_modules"])
+        self.assertEqual("0.0.1-older", baseline["version"])
 
 
 class ExitStatusTests(unittest.TestCase):

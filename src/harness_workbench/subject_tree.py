@@ -54,9 +54,12 @@ carries no compatibility promise, and core imports nothing from it.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
+
+APPARATUS = "apparatus.json"
 
 
 def subjects_root() -> str:
@@ -77,6 +80,42 @@ def subject_files() -> List[str]:
             path = os.path.join(directory, name)
             found.append(os.path.relpath(path, root))
     return sorted(found)
+
+
+def apparatus_manifest() -> Dict[str, Any]:
+    """Which build of the primitive this copy of the tree was cut against.
+
+    The adapters import `capture` (and, through it, `canon`) from the installed
+    package rather than carrying it, so those bytes decide how a subject is
+    measured while sitting outside everything a spec can declare. Written at
+    materialize time, this is the baseline the adapter compares itself to at
+    run time -- which is what turns "the primitive changed" from invisible into
+    a recorded fault.
+
+    Deliberately NOT added to any spec's `inputs`. Declaring it would put it
+    under `freeze`, and `freeze` would be weaker here than it looks: a baseline
+    lock is created on first run, so materializing into a FRESH directory --
+    the normal way to get a new copy -- writes a new manifest and a new lock
+    together and reports no drift. The comparison that catches an upgrade has
+    to happen against the running primitive, not against a lock made at the
+    same moment.
+    """
+    from . import canon, capture
+
+    return {
+        "schema": "hwb-subject-apparatus/v0.1",
+        "package": "harness_workbench",
+        "version": __import__("harness_workbench").__version__,
+        "modules": {
+            name: {
+                "file": os.path.basename(module.__file__),
+                "sha256": canon.digest_file(module.__file__).split(":", 1)[1],
+            }
+            for name, module in sorted(
+                {"canon": canon, "capture": capture}.items()
+            )
+        },
+    }
 
 
 def materialize(destination: str, force: bool = False) -> Tuple[List[str], List[str]]:
@@ -101,4 +140,15 @@ def materialize(destination: str, force: bool = False) -> Tuple[List[str], List[
         shutil.copyfile(os.path.join(root, relative), target)
         shutil.copymode(os.path.join(root, relative), target)
         written.append(relative)
+
+    # Written last and unconditionally, unlike the copied files: it describes
+    # THIS install, so preserving an older copy's manifest would be preserving
+    # a false statement about which primitive is now importable. It is not an
+    # edited file in the sense the skip rule protects -- nobody hand-writes it.
+    manifest_path = os.path.join(destination, APPARATUS)
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(apparatus_manifest(), handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    if APPARATUS not in written:
+        written.append(APPARATUS)
     return written, skipped

@@ -1056,7 +1056,7 @@ def _apparatus() -> dict[str, Any]:
         "capture": Path(capture_module.__file__).resolve(),
         "canon": Path(canon_module.__file__).resolve(),
     }
-    return {
+    live = {
         "package": "harness_workbench",
         "version": harness_workbench.__version__,
         "modules": {
@@ -1064,6 +1064,36 @@ def _apparatus() -> dict[str, Any]:
             for name, path in sorted(modules.items())
         },
     }
+    # The baseline `hwb subjects --into` wrote when this copy was cut. Comparing
+    # against it is the only thing that catches the likely shape of the hazard:
+    # one machine, one `pip install -U`, every subject upgraded together. The
+    # cross-subject check in compare.py cannot see that, because all five agree.
+    baseline_path = HERE / "apparatus.json"
+    if not baseline_path.is_file():
+        # Stated, not omitted. An unmaterialized tree runs against whatever is
+        # importable and has nothing to disagree with -- which is a fact about
+        # the run, not a clean result.
+        live["baseline"] = {"present": False, "agrees": None,
+                            "note": "tree was not materialized; no baseline"}
+        return live
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        live["baseline"] = {"present": True, "agrees": False,
+                            "note": f"baseline is not JSON: {error.msg}"}
+        return live
+    differences = sorted(
+        name for name in set(baseline.get("modules", {})) | set(live["modules"])
+        if baseline.get("modules", {}).get(name, {}).get("sha256")
+        != live["modules"].get(name, {}).get("sha256")
+    )
+    live["baseline"] = {
+        "present": True,
+        "agrees": not differences,
+        "version": baseline.get("version"),
+        "changed_modules": differences,
+    }
+    return live
 
 
 def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
@@ -1181,7 +1211,16 @@ def capture(
             environment["HERMES_HOME"] = str(hermes_home)
             environment["HWB_HERMES_HOOK_EVIDENCE"] = str(evidence_path)
             environment["HWB_HERMES_HOOK_MAX_BYTES"] = str(evidence_limit)
-            environment["HWB_REDACT_VALUES_JSON"] = "[]"
+            # The hook scrubs PARSED VALUES, before they are ever serialized;
+            # `redact_bytes` scrubs a byte stream afterwards. Two layers, and
+            # the tree used to run only one: this was `"[]"`, which left the
+            # structured scrubber switched off and the byte scrubber as the
+            # sole defence. A redactor that only sees one layer is the
+            # documented failure mode -- OpenTelemetry's redaction processor
+            # silently skips non-string attributes for the same structural
+            # reason. The hook is also the layer that CANNOT be defeated by an
+            # encoding, because at that point the secret is still a value.
+            environment["HWB_REDACT_VALUES_JSON"] = json.dumps(list(redactions))
             environment["TERMINAL_CWD"] = str(workspace)
             environment["HERMES_WRITE_SAFE_ROOT"] = str(workspace)
             argv = _hermes_command(identity, workload)
@@ -1308,6 +1347,17 @@ def capture(
             errors.append(f"{subject} run bound fired: {result.termination_reason}")
         if result.returncode != 0:
             errors.append(f"{subject} exited with status {result.returncode}")
+        apparatus = _apparatus()
+        if apparatus["baseline"]["agrees"] is False:
+            # A measurement fault, not an outcome one: the tree is being run
+            # against a primitive it was not cut against, so what the subject
+            # did is not in question -- whether this run can be compared with
+            # the ones beside it is.
+            changed = ", ".join(apparatus["baseline"].get("changed_modules") or [])
+            errors.append(
+                "capture apparatus differs from the materialized baseline"
+                + (f": {changed}" if changed else "")
+            )
         if result.group_alive_after_cleanup:
             # A survivor holds the workspace open and corrupts the *next* run's
             # before-manifest, so it has to be a fault of the run that leaked it.
@@ -1358,7 +1408,7 @@ def capture(
                     name: digest_file(HERE / name) for name in inputs
                 },
             },
-            "apparatus": _apparatus(),
+            "apparatus": apparatus,
             "capabilities": _capabilities(subject),
             "invocation": {
                 "argv": _normalized_argv(argv, root, workspace),

@@ -47,3 +47,7 @@ examples/flaky/.flaky-state
 
 # Efficacy campaigns' shared scratch spec.
 .hwbefficacy-*
+
+# Written by `hwb subjects --into`: it fingerprints the install a tree was
+# cut against, so it is per-copy state and never source.
+apparatus.json

@@ -36,6 +36,18 @@ command below with `PYTHONPATH=../../src`. Every adapter record names the
 version and digests of the primitive that produced it, under `apparatus`,
 because `freeze` binds the files beside the spec and cannot bind that one.
 
+`hwb subjects --into` also writes `apparatus.json`, a baseline recording which
+build of the primitive this copy of the tree was cut against, and every run
+compares itself to it. A mismatch is an **adapter-verdict** fault: the subject
+is not in question, but whether this run can be compared with the ones beside
+it is. An unmaterialized tree has no baseline and says so rather than going
+quiet. This is what catches the likely shape of the hazard — one machine, one
+`pip install -U`, every subject upgraded together — which `compare.py` cannot
+see, because in that case all five subjects agree with each other perfectly.
+The manifest is deliberately not a spec `input`: `freeze` creates its baseline
+lock on first run, so materializing into a fresh directory would write a new
+manifest and a new lock together and report no drift at all.
+
 `runner.py` uses the Workbench's own exit codes, one level down. **0 means
 the subject was measured validly, whatever it did about the task** -- the
 same rule as "a harness that worked exits 0, whatever the steps did". 1
@@ -46,7 +58,7 @@ status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 46 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 53 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
@@ -107,23 +119,43 @@ whoever is asking the question.
 
 ## Workbench features on these subjects
 
-The specs run `freeze`, `receipt`, `sample` and `timing`. Attaching the
-Workbench's own instruments to an external harness is the point: an adapter
+The specs run `freeze`, `receipt`, `retry`, `sample` and `timing`. Attaching
+the Workbench's own instruments to an external harness is the point: an adapter
 that reimplements what a feature already does is a second implementation to
 keep honest, and the tree has been down that road once already.
 
 `sample` runs each subject three times. Its own reason applies here more than
 anywhere it currently ships: *one draw is not a measurement*, and every subject
-in this tree is a nondeterministic agent. Feature order is load-bearing — the
-last-declared wrap ends up outermost, so `[…, sample]` samples the whole step.
-Adding `retry` later means choosing: `[sample, retry]` retries a whole draw
-set, `[retry, sample]` retries within each draw. Those are two different
-experiments, and the composition is the choice, not an accident of ordering.
+in this tree is a nondeterministic agent.
 
-Sampling multiplies cost by `n`. With `model_selection.json` on a gateway
-profile that is real money; on `local-ollama` it is free. `faults.json` is
-deterministic and gets `timing` only — sampling a deterministic step buys
-nothing and triples its runtime.
+**Order is the experiment, not formatting.** The last-declared wrap ends up
+outermost, so `retry` before `sample` composes as `sample(retry(step))`: each
+draw retries on its own until it is a valid measurement, and `sample` then
+collects three of them. Reversed, `retry(sample(step))` re-runs the *whole draw
+set* when any single draw fails, discarding draws that were already good and
+paying for them again. Measured on a step that fails once and then succeeds:
+
+| declared order | composes as | attempts |
+| --- | --- | --- |
+| `[retry, sample]` | `sample(retry(step))` | **4** |
+| `[sample, retry]` | `retry(sample(step))` | 6 |
+
+`retry` fires on a non-zero exit, which under the exit codes above means *the
+measurement was not trustworthy* — never that the subject declined the task.
+That distinction is the whole reason the status was split; without it, `retry`
+re-runs a harness that captured perfectly and simply said no.
+
+**Cost is bounded by arithmetic, not by a meter.** Nothing in the Workbench
+observes spend, so the only real bound is the two numbers that multiply:
+`sample.n × retry.max` = 3 × 2 = **6 subject invocations per spec worst case,
+3 when nothing needs retrying**. A test asserts that product stays ≤ 6 so
+raising either number is a deliberate act. Wall-clock is bounded separately by
+`SUBJECT_TIMEOUT_SECONDS` in `runner.py` and by `step_timeout_ms` in a spec.
+With `model_selection.json` on a gateway profile this is real money; on
+`local-ollama` it is free.
+
+`faults.json` is deterministic and gets `timing` only — sampling a
+deterministic step buys nothing and triples its runtime.
 
 **`redact` is deliberately NOT attached, and that is a finding rather than an
 omission.** It is the right tool for the job — a run store outlives the reason
