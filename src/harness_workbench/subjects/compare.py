@@ -13,16 +13,44 @@ from typing import Any
 SUBJECTS = {"claude", "codex", "deepseek", "hermes", "pi"}
 
 
-def load_source(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+def load_source(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Every draw of the step, not the first one.
+
+    This read `attempts/0` and stopped. That was correct only for as long as
+    nothing sampled: attach `sample` and the comparison would keep reading one
+    draw of three and reporting it as the result, which is the precise failure
+    `sample` exists to prevent -- "one draw is not a measurement". Attempts are
+    numbered directories, so they are collected in numeric order and all of
+    them are returned.
+    """
     if path.is_file():
-        envelope = json.loads(path.read_text(encoding="utf-8"))
-        return None, envelope
+        return None, [json.loads(path.read_text(encoding="utf-8"))]
     record = json.loads((path / "record.json").read_text(encoding="utf-8"))
     steps = record.get("steps", [])
     if len(steps) != 1 or not isinstance(steps[0].get("id"), str):
         raise ValueError(f"{path} does not contain exactly one recorded step")
-    stdout = path / "steps" / steps[0]["id"] / "attempts" / "0" / "stdout.bin"
-    return record, json.loads(stdout.read_text(encoding="utf-8"))
+    attempts = path / "steps" / steps[0]["id"] / "attempts"
+    numbered = sorted(
+        (int(d.name) for d in attempts.iterdir() if d.name.isdigit()),
+    ) if attempts.is_dir() else []
+    if not numbered:
+        raise ValueError(f"{path} recorded no attempts")
+    return record, [
+        json.loads((attempts / str(n) / "stdout.bin").read_text(encoding="utf-8"))
+        for n in numbered
+    ]
+
+
+def _agreed(values: Any) -> Any:
+    """One value if every draw agreed, otherwise the disagreement itself.
+
+    Returning the first and moving on would let a subject that changed its
+    evidence surface between draws be summarised as though it had not.
+    """
+    distinct = sorted({json.dumps(value, sort_keys=True) for value in values})
+    if len(distinct) == 1:
+        return json.loads(distinct[0])
+    return {"disagreed": [json.loads(value) for value in distinct]}
 
 
 def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> None:
@@ -127,60 +155,79 @@ def compare(paths: list[Path]) -> dict[str, Any]:
     errors: list[str] = []
     by_subject: dict[str, tuple[dict[str, Any] | None, dict[str, Any]]] = {}
     for path in paths:
-        record, outer = load_source(path)
-        adapter = outer.get("adapter")
-        subject = outer.get("subject")
-        if outer.get("schema") != "cross-harness-experiment-run/v0.1":
-            errors.append(f"{path} has the wrong outer schema")
+        record, outers = load_source(path)
+        subjects_seen = {outer.get("subject") for outer in outers}
+        if len(subjects_seen) != 1:
+            errors.append(f"{path} mixes subjects across draws: {sorted(subjects_seen)}")
             continue
+        subject = subjects_seen.pop()
         if subject not in SUBJECTS or subject in by_subject:
             errors.append(f"{path} has an unexpected or duplicate subject: {subject!r}")
             continue
-        if not isinstance(adapter, dict) or adapter.get("schema") != (
-            "cross-harness-adapter-run/v0.1"
-        ):
-            errors.append(f"{subject} has the wrong adapter schema")
+        adapters_for_subject: list[dict[str, Any]] = []
+        for draw, outer in enumerate(outers):
+            # Every draw carries the whole contract. A sampled subject that
+            # satisfies the evidence contract on two draws of three has not
+            # satisfied it -- the shape of the evidence is not the thing that
+            # is allowed to vary between draws. What the model DID may vary,
+            # and that is reported below rather than judged here.
+            label = subject if len(outers) == 1 else f"{subject} draw {draw}"
+            adapter = outer.get("adapter")
+            if outer.get("schema") != "cross-harness-experiment-run/v0.1":
+                errors.append(f"{label} has the wrong outer schema")
+                continue
+            if not isinstance(adapter, dict) or adapter.get("schema") != (
+                "cross-harness-adapter-run/v0.1"
+            ):
+                errors.append(f"{label} has the wrong adapter schema")
+                continue
+            adapters_for_subject.append(adapter)
+            verify_capture(label, adapter.get("capture", {}), errors)
+            verify_record(label, record, adapter, errors)
+            for field in (
+                "subject",
+                "request",
+                "apparatus",
+                "capabilities",
+                "invocation",
+                "isolation",
+                "capture",
+                "lifecycle",
+                "workspace",
+                "verdict",
+                "outcome",
+            ):
+                if field not in adapter:
+                    errors.append(f"{label} adapter is missing {field}")
+        if not adapters_for_subject:
             continue
-        by_subject[subject] = (record, adapter)
-        verify_capture(subject, adapter.get("capture", {}), errors)
-        verify_record(subject, record, adapter, errors)
-        for field in (
-            "subject",
-            "request",
-            "apparatus",
-            "capabilities",
-            "invocation",
-            "isolation",
-            "capture",
-            "lifecycle",
-            "workspace",
-            "verdict",
-            "outcome",
-        ):
-            if field not in adapter:
-                errors.append(f"{subject} adapter is missing {field}")
+        by_subject[subject] = (record, adapters_for_subject)
 
     if set(by_subject) != SUBJECTS:
         errors.append(
             "comparison requires exactly Claude, Codex, DeepSeek, Hermes, and Pi"
         )
 
+    every_adapter = [
+        adapter for _, adapters in by_subject.values() for adapter in adapters
+    ]
     if by_subject:
+        # Across every draw of every subject, not one representative each: a
+        # sampled run that changed prompt or apparatus midway is exactly what
+        # these sets exist to catch.
         prompts = {
-            adapter["request"].get("prompt_sha256")
-            for _, adapter in by_subject.values()
+            adapter["request"].get("prompt_sha256") for adapter in every_adapter
         }
         inputs = {
             json.dumps(adapter["request"].get("input_digests"), sort_keys=True)
-            for _, adapter in by_subject.values()
+            for adapter in every_adapter
         }
         expected_effects = {
-            adapter["outcome"].get("expected_sha256")
-            for _, adapter in by_subject.values()
+            adapter["outcome"].get("expected_sha256") for adapter in every_adapter
         }
         apparatus = {
             json.dumps(adapter.get("apparatus"), sort_keys=True)
-            for _, adapter in by_subject.values()
+            for adapter in every_adapter
         }
         if len(prompts) != 1:
             errors.append("subjects did not receive the same prompt bytes")
@@ -196,16 +243,33 @@ def compare(paths: list[Path]) -> dict[str, Any]:
             errors.append("subjects were not captured by the same apparatus")
 
     subjects = {}
-    for subject, (_, adapter) in sorted(by_subject.items()):
-        lifecycle = adapter["lifecycle"]
+    for subject, (_, adapters) in sorted(by_subject.items()):
+        first = adapters[0]
         subjects[subject] = {
-            "adapter_passed": adapter["verdict"].get("passed"),
-            "outcome_passed": adapter["outcome"].get("passed"),
-            "timed_out": adapter["capture"].get("timed_out"),
-            "acquisition": lifecycle.get("acquisition"),
-            "completeness": lifecycle.get("completeness"),
-            "tool_attempts": len(lifecycle.get("tool_executions", [])),
-            "capabilities": adapter["capabilities"],
+            "draws": len(adapters),
+            # Counts, not a rate. A rate over three draws reads as a
+            # probability and is not one, and reduction belongs to whoever is
+            # asking the question -- never to capture.
+            "adapter_passed": sum(
+                1 for a in adapters if a["verdict"].get("passed")
+            ),
+            "outcome_passed": sum(
+                1 for a in adapters if a["outcome"].get("passed")
+            ),
+            "timed_out": sum(
+                1 for a in adapters if a["capture"].get("timed_out")
+            ),
+            # Evidence-shape facts, which the contract requires to be identical
+            # on every draw. Reported once, and reported as disagreement rather
+            # than silently taking the first, if a subject ever varies them.
+            "acquisition": _agreed(a["lifecycle"].get("acquisition") for a in adapters),
+            "completeness": _agreed(
+                a["lifecycle"].get("completeness") for a in adapters
+            ),
+            "tool_attempts": [
+                len(a["lifecycle"].get("tool_executions", [])) for a in adapters
+            ],
+            "capabilities": first["capabilities"],
         }
     return {
         "schema": "cross-harness-contract-comparison/v0.1",

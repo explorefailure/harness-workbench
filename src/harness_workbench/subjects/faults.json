@@ -1,1 +1,29 @@
-{"schema":"hwbspec/v0.1","run_class":"discovery","features_root":"harness_workbench:builtin","features":[{"name":"freeze"},{"name":"receipt"}],"steps":[{"id":"shared-contract-faults","argv":["python3.11","fault_runner.py"],"inputs":["fault_runner.py","oracles.py"]}]}
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "receipt"
+    },
+    {
+      "name": "timing"
+    }
+  ],
+  "steps": [
+    {
+      "id": "shared-contract-faults",
+      "argv": [
+        "python3.11",
+        "fault_runner.py"
+      ],
+      "inputs": [
+        "fault_runner.py",
+        "oracles.py"
+      ]
+    }
+  ]
+}

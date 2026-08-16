@@ -233,7 +233,7 @@ client installed; the subject runs need that subject present:
 
 ```sh
 cd subjects
-python3 -m unittest test_experiment.py            # 44 tests, offline
+python3 -m unittest test_experiment.py            # 46 tests, offline
 python3 runner.py --subject claude --workload repair
 ```
 

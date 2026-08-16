@@ -1,1 +1,46 @@
-{"schema":"hwbspec/v0.1","run_class":"discovery","features_root":"harness_workbench:builtin","features":[{"name":"freeze"},{"name":"receipt"}],"steps":[{"id":"repair-pi-adapter","argv":["./run_subject.sh","pi","repair"],"inputs":["run_subject.sh","runner.py","adapters.py","oracles.py","pin.json","model_selection.json","repair_task.md","repair_fixture/slugger.py","repair_fixture/test_slugger.py","hook.py","hermes_config.yaml","dsh_patch.yml"]}]}
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "receipt"
+    },
+    {
+      "name": "sample",
+      "config": {
+        "n": 3
+      }
+    },
+    {
+      "name": "timing"
+    }
+  ],
+  "steps": [
+    {
+      "id": "repair-pi-adapter",
+      "argv": [
+        "./run_subject.sh",
+        "pi",
+        "repair"
+      ],
+      "inputs": [
+        "run_subject.sh",
+        "runner.py",
+        "adapters.py",
+        "oracles.py",
+        "pin.json",
+        "model_selection.json",
+        "repair_task.md",
+        "repair_fixture/slugger.py",
+        "repair_fixture/test_slugger.py",
+        "hook.py",
+        "hermes_config.yaml",
+        "dsh_patch.yml"
+      ]
+    }
+  ]
+}

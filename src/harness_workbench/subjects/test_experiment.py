@@ -65,10 +65,16 @@ class CommonTests(unittest.TestCase):
                 (adapters.HERE / f"{subject}.json").read_text(encoding="utf-8")
             )
             self.assertEqual(tuple(spec["steps"][0]["inputs"]), adapters.INPUTS)
+            # Order is load-bearing, not cosmetic: the last-declared wrap ends
+            # up outermost, so `sample` must follow anything that would
+            # otherwise enclose it. `timing` is an observe and contends for no
+            # seam.
             self.assertEqual(
                 [feature["name"] for feature in spec["features"]],
-                ["freeze", "receipt"],
+                ["freeze", "receipt", "sample", "timing"],
             )
+            sample = spec["features"][2]
+            self.assertEqual(sample["config"]["n"], 3)
 
     def test_repair_specs_bind_the_same_complete_input_set(self) -> None:
         for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
@@ -893,6 +899,73 @@ class ContractComparisonTests(unittest.TestCase):
         self.assertIn(
             "subjects were not captured by the same apparatus", result["errors"]
         )
+
+    def sampled_run_dir(self, root: Path, subject: str, draws: list[dict]) -> Path:
+        """A run store shaped the way `sample` leaves one: N numbered attempts."""
+        path = root / subject
+        (path / "steps" / "s" / "attempts").mkdir(parents=True)
+        # freeze and receipt must agree with what the adapter reported, or
+        # verify_record fails every draw for a reason unrelated to sampling.
+        bound = {
+            name: "sha256:" + digest
+            for name, digest in draws[0]["adapter"]["request"][
+                "input_digests"
+            ].items()
+        }
+        (path / "record.json").write_text(
+            json.dumps({
+                "steps": [{"id": "s"}],
+                "extras": {
+                    "freeze": {"digests": bound, "drifted": False},
+                    "receipt": {"bound": {"inputs": bound}},
+                },
+            }),
+            encoding="utf-8",
+        )
+        for index, outer in enumerate(draws):
+            attempt = path / "steps" / "s" / "attempts" / str(index)
+            attempt.mkdir()
+            (attempt / "stdout.bin").write_text(
+                json.dumps(outer), encoding="utf-8"
+            )
+        return path
+
+    def test_every_draw_of_a_sampled_subject_is_read(self) -> None:
+        # The inversion. `load_source` read attempts/0 and stopped, so a
+        # subject whose second draw violated the contract compared clean --
+        # which is the exact failure `sample` exists to prevent.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                good = self.outer(subject, passed=True)
+                draws = [good, json.loads(json.dumps(good))]
+                if subject == "codex":
+                    draws[1]["adapter"]["capture"]["stdout"]["sha256"] = "forged"
+                paths.append(self.sampled_run_dir(root, subject, draws))
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assertIn("codex draw 1 stdout digest disagrees", result["errors"])
+        self.assertEqual(result["subjects"]["codex"]["draws"], 2)
+
+    def test_draw_counts_are_reported_rather_than_reduced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                draws = [
+                    self.outer(subject, passed=True),
+                    self.outer(subject, passed=subject != "hermes"),
+                    self.outer(subject, passed=True),
+                ]
+                paths.append(self.sampled_run_dir(root, subject, draws))
+            result = comparator.compare(paths)
+        # The contract holds on every draw; what the model did varied. Those
+        # are different questions and only the second one has a count.
+        self.assertTrue(result["contract_passed"])
+        self.assertEqual(result["subjects"]["hermes"]["draws"], 3)
+        self.assertEqual(result["subjects"]["hermes"]["outcome_passed"], 2)
+        self.assertEqual(result["subjects"]["claude"]["outcome_passed"], 3)
 
     def test_contract_rejects_forged_raw_capture_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -46,7 +46,7 @@ status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 44 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 46 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
@@ -79,10 +79,12 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run claude.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run codex.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run deepseek.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run hermes.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run pi.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run repair_claude.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run repair_codex.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run repair_deepseek.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run repair_hermes.json
+PYTHONPATH=../../src python3.11 -m harness_workbench run repair_pi.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run faults.json
 ```
 
@@ -95,9 +97,52 @@ python3.11 compare.py \
   runs/<hermes-id> runs/<pi-id>
 ```
 
-`contract_passed` means the records satisfy the shared evidence contract. It
-does not require every harness to finish the task. Inspect each subject's
-`adapter_passed`, `outcome_passed`, and `timed_out` values separately.
+`contract_passed` means the records satisfy the shared evidence contract, on
+**every** draw — the shape of the evidence is not what is allowed to vary
+between draws. It does not require any harness to finish the task. Each
+subject reports `draws` alongside `adapter_passed`, `outcome_passed` and
+`timed_out` as counts over those draws, deliberately not as rates: a rate over
+three draws reads as a probability and is not one, and reduction belongs to
+whoever is asking the question.
+
+## Workbench features on these subjects
+
+The specs run `freeze`, `receipt`, `sample` and `timing`. Attaching the
+Workbench's own instruments to an external harness is the point: an adapter
+that reimplements what a feature already does is a second implementation to
+keep honest, and the tree has been down that road once already.
+
+`sample` runs each subject three times. Its own reason applies here more than
+anywhere it currently ships: *one draw is not a measurement*, and every subject
+in this tree is a nondeterministic agent. Feature order is load-bearing — the
+last-declared wrap ends up outermost, so `[…, sample]` samples the whole step.
+Adding `retry` later means choosing: `[sample, retry]` retries a whole draw
+set, `[retry, sample]` retries within each draw. Those are two different
+experiments, and the composition is the choice, not an accident of ordering.
+
+Sampling multiplies cost by `n`. With `model_selection.json` on a gateway
+profile that is real money; on `local-ollama` it is free. `faults.json` is
+deterministic and gets `timing` only — sampling a deterministic step buys
+nothing and triples its runtime.
+
+**`redact` is deliberately NOT attached, and that is a finding rather than an
+omission.** It is the right tool for the job — a run store outlives the reason
+it existed, and this one can contain provider keys. Two things stop it:
+
+1. Its `patterns` come from spec config, and a spec is a committed file. A
+   literal credential can never go there. *Shape* patterns are safe and would
+   work, so this half is a constraint, not a wall.
+2. It is a `wrap`, and a wrap has no declared channel into the record. It
+   scrubs **silently**. The only way to report what it did is `report: true`,
+   which its own docstring calls a knowingly-recorded breach.
+
+So "the Workbench's redaction tool works on external subjects" and "positive
+receipts, never absence-of-error" cannot both hold at the seam where `redact`
+sits. Attaching it would give this tree a control that cannot say it fired,
+which is the exact failure mode the adapter's own redaction was built to avoid.
+The adapter continues to redact by value, before serialization, where it can
+report a `redaction_count`. Recorded here rather than worked around, because
+the honest version is the one that fails the check.
 
 ## Safety and limits
 
