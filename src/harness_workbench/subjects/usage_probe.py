@@ -159,7 +159,7 @@ def delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
             out[window] = {"points": None, "note": "window missing from a reading"}
             continue
         points = end["percent"] - start["percent"]
-        if points < 0 or start.get("resets_at") != end.get("resets_at"):
+        if points < 0 or not _same_window(start, end):
             out[window] = {
                 "points": None,
                 "note": "window reset between readings; delta is not measurable",
@@ -167,6 +167,28 @@ def delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         else:
             out[window] = {"points": points}
     return out
+
+
+# The server recomputes `resetsAt` per request, so its sub-second component
+# drifts on every call: 00:00:00.335Z, then .914Z, then .410Z for the same
+# window. Comparing the strings called every delta unmeasurable, which is how
+# the first real calibration run reported nothing. Same window means the same
+# reset INSTANT to the second, not the same string.
+_WINDOW_TOLERANCE_SECONDS = 90.0
+
+
+def _same_window(start: dict[str, Any], end: dict[str, Any]) -> bool:
+    first, second = start.get("resets_at"), end.get("resets_at")
+    if not first or not second:
+        # Nothing to compare. The percent check still guards the reset case,
+        # so this stays permissive rather than voiding a real measurement.
+        return True
+    try:
+        a = datetime.datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+        b = datetime.datetime.fromisoformat(str(second).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return abs((b - a).total_seconds()) <= _WINDOW_TOLERANCE_SECONDS
 
 
 def gate(reading: dict[str, Any], limits: dict[str, int]) -> tuple[bool, list[str]]:

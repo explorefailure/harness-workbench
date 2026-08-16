@@ -819,11 +819,21 @@ class UsageGateTests(unittest.TestCase):
         self.assertEqual(1, points["weekly"]["points"])
         self.assertEqual(0, points["monthly"]["points"])
 
+    def test_a_drifting_reset_timestamp_does_not_void_the_measurement(self) -> None:
+        # The server recomputes resetsAt per request, so its sub-second part
+        # differs on every call for the SAME window. Comparing the strings
+        # reported every delta as unmeasurable -- which is exactly what the
+        # first real calibration run did, and why this test exists.
+        before = self.reading(0, 2, 1, resets="2026-08-17T00:00:00.335Z")
+        after = self.reading(0, 3, 1, resets="2026-08-17T00:00:00.914Z")
+        points = usage_probe.delta(before, after)
+        self.assertEqual(1, points["weekly"]["points"])
+
     def test_a_window_that_reset_mid_run_is_not_reported_as_negative_use(self) -> None:
         # Usage going down is not something a run can do. Reporting -2 points
         # would invite a reader to average it into a cost estimate.
-        before = self.reading(0, 90, 1, resets="T1")
-        after = self.reading(0, 1, 1, resets="T2")
+        before = self.reading(0, 90, 1, resets="2026-08-17T00:00:00Z")
+        after = self.reading(0, 1, 1, resets="2026-08-24T00:00:00Z")
         points = usage_probe.delta(before, after)
         self.assertIsNone(points["weekly"]["points"])
         self.assertIn("reset between readings", points["weekly"]["note"])

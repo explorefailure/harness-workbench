@@ -58,7 +58,7 @@ status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 61 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 62 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
@@ -189,6 +189,33 @@ line, `1` a window has reached its line, `2` nothing could be run, **`3` the
 counters could not be read**. Three matters most — an unreadable counter is an
 *unknown*, not a pass, and a budget check that fails open is only a delay
 before the same overspend.
+
+#### Measured cost, 2026-08-16, `opencode-go` / `kimi-k3`
+
+Four write-workload invocations across the three gateway-billed subjects moved
+the **rolling** window from 0% to 2%. Claude and Codex authenticate to their
+own first-party services and cost nothing here.
+
+| subject | wall clock | tool calls | rolling delta |
+| --- | --- | --- | --- |
+| pi | 16 s | 1 | 0 pts |
+| deepseek | 14 s | 2 | +1 pt |
+| hermes | 27 s | 2 | +1 pt |
+
+That is roughly **half a rolling point per invocation**, so a 10-arm matrix at
+`sample.n=3` (30 invocations) lands near 15% of one 5-hour window, and its
+`retry`-worst case of 60 invocations near 30%. Both fit inside a single window
+with room to spare.
+
+Two things this does **not** establish. The write workload is one small tool
+call; a *denied* tool call may cost more, because a model that is refused tends
+to reason again and try another route — which is the entire point of the guard
+experiment. And the repair workload is multi-turn and materially dearer. Treat
+these figures as a floor for guard arms, not a forecast.
+
+Note also that `rolling` is the sensitive counter — it moved 2 points while
+weekly and monthly barely registered — which is what the published $12 / $30 /
+$60 denominators predict, and is why it is the one worth gating on.
 
 **`redact` is deliberately NOT attached, and that is a finding rather than an
 omission.** It is the right tool for the job — a run store outlives the reason
