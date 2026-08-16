@@ -12,7 +12,13 @@ from harness_workbench.capture import capture_bytes, credential_values, run_boun
 
 
 def main() -> int:
-    secret = "hwb-synthetic-credential-value"
+    # Deliberately non-ASCII. With an ASCII secret this whole check passes
+    # whether or not redaction works on the form most likely to appear:
+    # `json.dumps` escapes non-ASCII BY DEFAULT, so a secret containing one
+    # reaches the serialized capture as `\uXXXX`, and a plain `secret not in
+    # serialized` is then trivially true. The control could not fail for the
+    # case it exists to catch.
+    secret = "hwb-synthétic-credential-valué"
     environment = os.environ.copy()
     environment["HWB_TEST_SECRET"] = secret
     redactions = credential_values(environment)
@@ -22,9 +28,15 @@ def main() -> int:
             [
                 sys.executable,
                 "-c",
-                "from pathlib import Path; import os,sys,time; "
+                # Two DIFFERENT emissions on purpose, because the two paths
+                # fail independently. stderr echoes the raw value, which is
+                # what a careless script does. stdout emits it inside JSON the
+                # way every subject in this tree emits its transcript -- and
+                # `json.dumps` escapes non-ASCII by default, so this is the
+                # form a raw-only scrubber silently misses.
+                "from pathlib import Path; import json,os,sys,time; "
                 "Path('partial.txt').write_text('partial'); "
-                "print(os.environ['HWB_TEST_SECRET'], flush=True); "
+                "print(json.dumps({'token': os.environ['HWB_TEST_SECRET']}), flush=True); "
                 "print(os.environ['HWB_TEST_SECRET'], file=sys.stderr, flush=True); "
                 "time.sleep(10)",
             ],
@@ -65,8 +77,12 @@ def main() -> int:
         serialized_captures = json.dumps(
             {"stdout": stdout_capture, "stderr": stderr_capture}, sort_keys=True
         )
+        # Both forms, because the serialized blob is where the escaped one
+        # lives. Checking only the raw value is what made this pass vacuously.
+        escaped_secret = json.dumps(secret)[1:-1]
         redaction_passed = (
             secret not in serialized_captures
+            and escaped_secret not in serialized_captures
             and stdout_capture["redaction_count"] == 1
             and stderr_capture["redaction_count"] == 1
         )
