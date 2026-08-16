@@ -211,18 +211,40 @@ what it cost:
   structured redactor and should not.
 
 **The gap the migration cannot close is provenance, not API.** `freeze` digests
-the files a spec declares in `inputs`, which are files beside the spec. A
-primitive imported from the installed package can never be one of them, so an
-upgraded `harness_workbench` changes how a run was measured without moving any
-declared digest. This is the same standing exposure as
-`features_root: harness_workbench:builtin` — the measurement apparatus has
-always arrived by name — but capture is far more load-bearing than a feature.
+the files a spec declares in `inputs`, which are files beside the spec. After
+`hwb subjects --into <dir>` a primitive imported from site-packages cannot be
+one of them, so an upgraded `harness_workbench` changes how a run was measured
+without moving any declared digest.
 
-It is narrowed in two places and closed in neither: every adapter record now
-carries an `apparatus` block naming the package version and the digest of
-`capture.py` as it actually ran, and `compare.py` rejects a comparison whose
-four subjects were not captured by the same apparatus. Recording makes an
-upgrade *visible* in the record; it does not make `freeze` detect it. Pinning
-the primitive the way subjects are pinned would mean bumping a lock on every
-core change, which trades a real hazard for a guaranteed nuisance — so it was
-not done, and the exposure is written down here instead.
+Two corrections to how that was first argued here, both found by auditing the
+claim rather than the code:
+
+- **It is not the same exposure as `features_root`.** That defence was wrong.
+  `features.py` digests every feature's source tree into `features[].digest`,
+  records its version, and the runner copies the feature's bytes into the run
+  directory beside the record — a feature is identified three ways. The capture
+  primitive is identified by a block the adapter writes into its own stdout.
+  The cases are not equivalent and the primitive is the weaker one.
+- **`inputs` has no containment guard.** `spec.py` validates it as a list of
+  strings and `freeze` joins each entry to `spec.dir`, so `../capture.py`
+  resolves and digests correctly from the in-repo tree. The gap is specific to
+  a *materialized* tree — and there it is worse than unavailable, because an
+  unresolvable relative path is recorded as the string `missing` with
+  `drifted: false`: a stable, silent non-observation.
+
+What exists today is disclosure. Every adapter record carries an `apparatus`
+block naming the package version and the digests of **both** `capture` and
+`canon` — the second because `capture.digest_file` wraps `canon.digest_file`
+and `digest_obj` is imported straight from `canon`, so a change there moves
+every digest in the record while `capture.py` stays byte-identical. `compare.py`
+rejects a comparison whose subjects were not captured by the same apparatus.
+
+**That check catches divergence between subjects in one comparison; it does not
+catch a uniform upgrade across all of them, which is the likelier shape** — one
+machine, one `pip install -U`, five runs. Detection across *time* needs a
+baseline, and the shape that fits is a manifest written beside the tree at
+materialize time: it is data rather than code, so it survives copying to an
+arbitrary directory, and being a file beside the spec it is something `inputs`
+can declare and `freeze` can digest. Pinning instead — refusing to run on a
+mismatch — would mean bumping a lock on every core commit including docstring
+edits, which trades a real hazard for a guaranteed nuisance.

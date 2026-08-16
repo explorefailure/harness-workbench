@@ -1,13 +1,9 @@
 # Cross-harness adapter experiment
 
 This experiment runs an exact file-write task and a red → edit → green repair
-task through Claude Code, Codex CLI, DeepSeek Harness, and Hermes Agent, then
-projects their
-different evidence surfaces into the
-candidate contract in
-[`SHARED_ADAPTER_CONTRACT.md`](SHARED_ADAPTER_CONTRACT.md). Pi remains the
-reference integration; these are the independent harnesses used to find what is
-actually shared.
+task through Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent, and Pi,
+then projects their different evidence surfaces into the candidate contract in
+[`SHARED_ADAPTER_CONTRACT.md`](SHARED_ADAPTER_CONTRACT.md).
 
 The common workload creates `shared.txt` containing exactly
 `cross-harness control\n`. The adapter captures the subject lifecycle and raw
@@ -37,11 +33,20 @@ credential redaction, manifests and digests from `harness_workbench.capture`
 rather than carrying a second copy of them. Installing the package (which is
 how you got `hwb subjects`) is enough; from a source checkout, prefix each
 command below with `PYTHONPATH=../../src`. Every adapter record names the
-version and digest of the primitive that produced it, under `apparatus`,
+version and digests of the primitive that produced it, under `apparatus`,
 because `freeze` binds the files beside the spec and cannot bind that one.
 
+`runner.py` uses the Workbench's own exit codes, one level down. **0 means
+the subject was measured validly, whatever it did about the task** -- the
+same rule as "a harness that worked exits 0, whatever the steps did". 1
+means the measurement is not trustworthy; 2 means nothing could be run at
+all; 3 is a refusal, for a run interrupted partway. Whether the subject did
+the task is `outcome.passed` in the record and is deliberately not in the
+status, so a wrap like `retry` cannot mistake a declined task for a broken
+measurement and re-run it at full cost.
+
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 38 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 44 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
@@ -55,11 +60,17 @@ python3.11 runner.py --subject pi --workload repair
 python3.11 fault_runner.py
 ```
 
-Pi is the reference integration and was deliberately excluded while this
-contract was derived, so that the shared envelope could not simply inherit Pi's
-shape. It is included here as a fifth subject to *test* the envelope rather than
-to inform it: what Pi cannot express through the shared contract is a finding
-about the contract. Pi's own richer schema stays in `experiments/pi_coding_agent`.
+Pi was excluded while this contract was *derived*, so the shared envelope
+could not simply inherit the shape of the reference integration. That exclusion
+has done its job and is over: Pi is a subject on the same terms as the other
+four, binds the byte-identical input set, and is required in the comparison.
+Leaving it out of `compare.py` after it had become a peer everywhere else meant
+the tree produced a conforming Pi envelope that the comparator would not read.
+
+Pi's own richer schema stays in `experiments/pi_coding_agent`, and that is not
+Pi being held apart — it is a different artifact answering a different
+question. What Pi can express there and cannot express here is a finding about
+this contract, and merging the two would delete the ability to ask.
 
 Run each as a frozen, receipted Workbench discovery record:
 
@@ -75,12 +86,13 @@ PYTHONPATH=../../src python3.11 -m harness_workbench run repair_hermes.json
 PYTHONPATH=../../src python3.11 -m harness_workbench run faults.json
 ```
 
-Compare either four saved outer-envelope JSON files or four Workbench run
+Compare either five saved outer-envelope JSON files or five Workbench run
 directories:
 
 ```sh
 python3.11 compare.py \
-  runs/<claude-id> runs/<codex-id> runs/<deepseek-id> runs/<hermes-id>
+  runs/<claude-id> runs/<codex-id> runs/<deepseek-id> \
+  runs/<hermes-id> runs/<pi-id>
 ```
 
 `contract_passed` means the records satisfy the shared evidence contract. It
@@ -131,7 +143,7 @@ confirmation runs.
 ## GitHub release readiness
 
 The DeepSeek adapter is ready to include as experiment-local discovery work:
-both final four-subject comparisons pass, all eight records verify, and
+both final five-subject comparisons pass, all eight records verify, and
 DeepSeek passes the exact-write workload. Its repair adapter conforms, but two
 final-source samples did not complete the repair, so the pinned local model is
 not a stable repair subject. Promotion of the shared adapter contract into

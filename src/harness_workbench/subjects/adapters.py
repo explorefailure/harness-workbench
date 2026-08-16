@@ -7,12 +7,12 @@ import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import tempfile
 from typing import Any
 from urllib.request import urlopen
 
 import harness_workbench
+from harness_workbench import canon as canon_module
 from harness_workbench import capture as capture_module
 from harness_workbench.canon import digest_obj
 from harness_workbench.capture import (
@@ -119,18 +119,42 @@ def _executable(name: str) -> Path:
 
 
 def _command_text(argv: list[str]) -> str:
-    result = subprocess.run(
+    """Read one short line from a pinned executable, under the same bounds.
+
+    This was `subprocess.run(..., timeout=15)`, which looks harmless for a
+    version probe and is not: its timeout kills the process and not the group,
+    so a launcher that forks leaks exactly the orphan this adapter later
+    reports as clean. Three of the five probes here run launchers -- `claude`,
+    `codex` and `hermes` are wrappers -- and one runs `git`. The purpose stays
+    adapter-local; the mechanism is the primitive's, so it uses the primitive.
+    """
+    result = run_bounded(
         argv,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        cwd=HERE,
+        env=dict(os.environ),
         timeout=15,
-        text=True,
+        stdout_limit=64 * 1024,
+        stderr_limit=64 * 1024,
+        termination_grace=1.0,
     )
-    if result.returncode != 0:
-        raise AdapterError(f"identity command failed: {argv[0]}")
-    return result.stdout.strip()
+    if result.returncode != 0 or result.termination_reason is not None:
+        raise AdapterError(
+            f"identity command failed: {argv[0]} exited {result.returncode}"
+            f" ({result.termination_reason or 'no bound fired'})"
+        )
+    try:
+        text = result.stdout.decode("utf-8", errors="strict").strip()
+        # The previous call merged stderr into stdout, so a tool that announces
+        # its version on stderr kept working. Falling back rather than
+        # concatenating preserves that tolerance without interleaving two
+        # streams into a string the callers then split by position.
+        if not text:
+            text = result.stderr.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError as error:
+        raise AdapterError(
+            f"identity command output is not UTF-8: {argv[0]}: {error}"
+        ) from error
+    return text
 
 
 def _normalized_argv(argv: list[str], root: Path, workspace: Path) -> list[str]:
@@ -1023,12 +1047,22 @@ def _apparatus() -> dict[str, Any]:
     *visible* in the record instead of silently changing what a run measured --
     it does not make freeze detect it.
     """
-    module = Path(capture_module.__file__).resolve()
+    # Both modules, not just the obvious one. `capture.digest_file` is a thin
+    # wrapper over `canon.digest_file`, and `digest_obj` is imported straight
+    # from `canon`, so a change to the canonical-JSON or file-digest rule moves
+    # every digest in this record while `capture.py` stays byte-identical.
+    # Naming only the file you thought of is how provenance gets a blind spot.
+    modules = {
+        "capture": Path(capture_module.__file__).resolve(),
+        "canon": Path(canon_module.__file__).resolve(),
+    }
     return {
         "package": "harness_workbench",
         "version": harness_workbench.__version__,
-        "capture_module": module.name,
-        "capture_sha256": digest_file(module),
+        "modules": {
+            name: {"file": path.name, "sha256": digest_file(path)}
+            for name, path in sorted(modules.items())
+        },
     }
 
 
@@ -1137,6 +1171,12 @@ def capture(
                 encoding="utf-8",
             )
             evidence_path = root / "hermes-hooks.jsonl"
+            # Created empty before Hermes starts, so absence and emptiness stop
+            # meaning the same thing. Absent afterwards means the sidecar was
+            # never wired up -- a measurement fault. Present and empty means
+            # Hermes made no tool calls -- a fact about the subject, which
+            # belongs to the outcome verdict and must not fail the adapter.
+            evidence_path.touch()
             evidence_kind = "shell_hook_jsonl"
             environment["HERMES_HOME"] = str(hermes_home)
             environment["HWB_HERMES_HOOK_EVIDENCE"] = str(evidence_path)
@@ -1257,8 +1297,9 @@ def capture(
             errors.append("stdout capture limit exceeded")
         if result.stderr_overflow:
             errors.append("stderr capture limit exceeded")
-        if evidence_overflow:
-            errors.append("sidecar evidence capture limit exceeded")
+        # No second complaint for the sidecar: `capture_file` already put the
+        # refusal in `sidecar["errors"]`, with the size and the limit in it,
+        # and that list was extended into `errors` above. One fact, one error.
         if result.termination_reason is not None:
             # Named separately from the exit status, because a bound that fired
             # leaves a signal-derived return code that says how the subject died
@@ -1380,6 +1421,13 @@ def capture(
                     "alive_before_cleanup": result.group_alive_before_cleanup,
                     "alive_after_cleanup": result.group_alive_after_cleanup,
                 },
+                # An operator abort is not a subject behaviour, and a record
+                # that cannot tell the two apart invites a conclusion about a
+                # harness that was never allowed to finish. The reason field
+                # does not cover this: a forwarded signal that kills the child
+                # promptly breaks the read loop before `signalled` is ever set,
+                # so the signal itself has to be carried.
+                "forwarded_signals": list(result.forwarded_signals),
                 "redacted_environment_names": sensitive_environment_names,
             },
             "lifecycle": lifecycle,

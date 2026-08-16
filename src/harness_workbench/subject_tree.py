@@ -21,19 +21,30 @@ undeclared variable deciding the work, which is the failure the digest rule
 exists to prevent.
 
 The adapters are what that rule protects, and they are still copied. It does
-NOT follow that the tree imports nothing: `features_root` has always named
-`harness_workbench:builtin`, and the adapters now import
+NOT follow that the tree imports nothing: the adapters now import
 `harness_workbench.capture` rather than carrying a second implementation of it.
-Both are measurement apparatus, which arrives by name and by version; the
-adapters decide what the subject is asked to do, which arrives by digest. The
-line is between deciding the work and measuring it, not between core and tree.
+The adapters decide what the subject is asked to do and arrive by digest; the
+primitive measures it and arrives by import. The line is between deciding the
+work and measuring it, not between core and tree.
 
-That line has a cost and it is not hidden: `freeze` cannot cover a module
-imported from site-packages, so an upgraded primitive changes how a run was
-measured without moving a declared digest. Each adapter record therefore names
-the primitive's version and digest as it actually ran, and the cross-subject
-comparison refuses four runs that were not captured by the same one. That makes
-the change visible; it does not make `freeze` detect it. See
+DO NOT DEFEND THAT LINE BY POINTING AT `features_root`, which is where this
+docstring first went wrong. A feature is not merely named: `features.py`
+digests every feature's source tree into `features[].digest`, records its
+version, and the runner copies the feature's actual bytes into the run
+directory beside the record. A feature is identified three ways. The capture
+primitive is identified by an `apparatus` block the adapter writes into its own
+stdout -- not digested by `freeze`, not bound by `receipt`, not preserved
+anywhere. The cases are not equivalent, and the primitive is the weaker one.
+
+So the cost is real and unmitigated by analogy: `freeze` digests the files a
+spec declares in `inputs`, which are files beside the spec, and after
+materialization a module imported from site-packages cannot be one of them. An
+upgraded primitive changes how a run was measured without moving a declared
+digest. What exists today is disclosure -- the `apparatus` block names the
+version and the digests of `capture` and `canon` as they actually ran, and the
+cross-subject comparison refuses runs that were not captured by the same one.
+That catches divergence BETWEEN subjects in one comparison. It does not catch a
+uniform upgrade across all of them, which is the likelier shape. See
 `docs/adapter-primitive-extraction.md`.
 
 NOT A STABLE API. Every subject is pinned to an exact third-party release, one

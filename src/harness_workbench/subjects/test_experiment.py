@@ -13,6 +13,7 @@ import unittest
 
 import adapters
 import compare as comparator
+import runner as subject_runner
 from harness_workbench.capture import (
     Bounded,
     capture_bytes,
@@ -59,7 +60,7 @@ class CommonTests(unittest.TestCase):
             self.assertFalse(outcome(before, manifest(root))["passed"])
 
     def test_specs_bind_the_same_complete_input_set(self) -> None:
-        for subject in ("claude", "codex", "deepseek", "hermes"):
+        for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
             spec = json.loads(
                 (adapters.HERE / f"{subject}.json").read_text(encoding="utf-8")
             )
@@ -70,7 +71,7 @@ class CommonTests(unittest.TestCase):
             )
 
     def test_repair_specs_bind_the_same_complete_input_set(self) -> None:
-        for subject in ("claude", "codex", "deepseek", "hermes"):
+        for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
             spec = json.loads(
                 (adapters.HERE / f"repair_{subject}.json").read_text(
                     encoding="utf-8"
@@ -689,19 +690,56 @@ class PinTests(unittest.TestCase):
         )
 
 
+class ExitStatusTests(unittest.TestCase):
+    """The status follows `hwb`'s own convention, one level down.
+
+    `cli.py`: "a harness that worked exits 0, whatever the steps did." An
+    adapter is a harness over a subject, so the subject's own success cannot
+    reach this number -- it is recorded data, per the README.
+    """
+
+    def test_a_declined_task_is_still_a_valid_measurement(self) -> None:
+        # The inversion that matters. Before the split this returned 1, and
+        # `retry` -- which can only see `exit == 0` -- re-ran a harness that had
+        # captured perfectly and simply declined the task, at full gateway cost.
+        self.assertEqual(subject_runner.exit_status(True, False), 0)
+
+    def test_a_broken_measurement_is_one(self) -> None:
+        self.assertEqual(subject_runner.exit_status(False, False), 1)
+
+    def test_an_interrupted_run_refuses_rather_than_failing(self) -> None:
+        # 3 is `hwb diff`'s refusal code: "a script must never be able to read
+        # a refusal as a difference." An operator's Ctrl-C is not a verdict
+        # about a harness, and must not be readable as one -- in either
+        # direction, which is why it outranks a passing adapter verdict too.
+        self.assertEqual(subject_runner.exit_status(True, True), 3)
+        self.assertEqual(subject_runner.exit_status(False, True), 3)
+
+    def test_the_status_set_is_exactly_the_workbench_convention(self) -> None:
+        produced = {
+            subject_runner.exit_status(adapter, interrupted)
+            for adapter in (True, False)
+            for interrupted in (True, False)
+        }
+        self.assertEqual(produced, {0, 1, 3})
+
+
 class ContractComparisonTests(unittest.TestCase):
+    @staticmethod
+    def stream() -> dict:
+        return {
+            "bytes": 0,
+            "source_bytes": 0,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "base64": "",
+            "text": "",
+            "redaction_count": 0,
+        }
+
     def outer(self, subject: str, *, passed: bool) -> dict:
         empty_sha = hashlib.sha256(b"").hexdigest()
         capture = {
-            name: {
-                "bytes": 0,
-                "source_bytes": 0,
-                "sha256": empty_sha,
-                "base64": "",
-                "text": "",
-                "redaction_count": 0,
-            }
-            for name in ("stdout", "stderr", "sidecar")
+            name: self.stream() for name in ("stdout", "stderr", "sidecar")
         }
         capture.update({
             "limits": {
@@ -728,8 +766,10 @@ class ContractComparisonTests(unittest.TestCase):
             "apparatus": {
                 "package": "harness_workbench",
                 "version": "0.0.0-test",
-                "capture_module": "capture.py",
-                "capture_sha256": empty_sha,
+                "modules": {
+                    "canon": {"file": "canon.py", "sha256": empty_sha},
+                    "capture": {"file": "capture.py", "sha256": empty_sha},
+                },
             },
             "capabilities": {},
             "invocation": {},
@@ -766,6 +806,72 @@ class ContractComparisonTests(unittest.TestCase):
         self.assertTrue(result["subjects"]["hermes"]["timed_out"])
         self.assertFalse(result["subjects"]["hermes"]["outcome_passed"])
 
+    def test_refused_sidecar_is_reported_as_a_refusal_not_as_corruption(
+        self,
+    ) -> None:
+        # capture_file stores nothing for evidence it refuses, so the envelope
+        # carries `base64: None` and the reason in `errors`. The comparator
+        # used to decode the None, catch the TypeError, and report "not valid
+        # base64" -- naming the symptom and hiding the cause.
+        errors: list[str] = []
+        comparator.verify_capture(
+            "deepseek",
+            {
+                "stdout": self.stream(), "stderr": self.stream(),
+                "sidecar": dict(
+                    self.stream(),
+                    base64=None,
+                    text=None,
+                    exists=True,
+                    errors=["evidence exceeds 524288-byte capture limit: 900000 bytes"],
+                ),
+                "limits": {
+                    "stdout_bytes": 1024, "stderr_bytes": 1024,
+                    "sidecar_bytes": 524288,
+                },
+                "overflow": {"stdout": False, "stderr": False, "sidecar": True},
+                "returncode": 0,
+                "termination_reason": None,
+                "timed_out": False,
+            },
+            errors,
+        )
+        self.assertIn(
+            "deepseek sidecar: evidence exceeds 524288-byte capture limit:"
+            " 900000 bytes",
+            errors,
+        )
+        self.assertNotIn("deepseek sidecar is not valid base64", errors)
+
+    def test_missing_required_sidecar_is_visible_to_the_comparator(self) -> None:
+        # The harder half: a required sidecar that was never created stores
+        # empty bytes, and empty bytes digest perfectly well. Every structural
+        # check passed and the comparator reported nothing at all.
+        errors: list[str] = []
+        comparator.verify_capture(
+            "hermes",
+            {
+                "stdout": self.stream(), "stderr": self.stream(),
+                "sidecar": dict(
+                    self.stream(),
+                    exists=False,
+                    errors=["required evidence file was not created"],
+                ),
+                "limits": {
+                    "stdout_bytes": 1024, "stderr_bytes": 1024,
+                    "sidecar_bytes": 1024,
+                },
+                "overflow": {"stdout": False, "stderr": False, "sidecar": False},
+                "returncode": 0,
+                "termination_reason": None,
+                "timed_out": False,
+            },
+            errors,
+        )
+        self.assertIn(
+            "hermes sidecar: required evidence file was not created", errors
+        )
+
     def test_contract_rejects_mixed_capture_apparatus(self) -> None:
         # The inversion of the apparatus check. Every other input to a run is
         # bound by the spec and would be caught by freeze; the capture
@@ -776,7 +882,9 @@ class ContractComparisonTests(unittest.TestCase):
             for subject in sorted(comparator.SUBJECTS):
                 outer = self.outer(subject, passed=True)
                 if subject == "deepseek":
-                    outer["adapter"]["apparatus"]["capture_sha256"] = "other"
+                    outer["adapter"]["apparatus"]["modules"]["canon"] = {
+                        "file": "canon.py", "sha256": "other",
+                    }
                 path = Path(directory) / f"{subject}.json"
                 path.write_text(json.dumps(outer), encoding="utf-8")
                 paths.append(path)

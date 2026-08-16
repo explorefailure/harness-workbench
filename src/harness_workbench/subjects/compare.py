@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and compare four shared-contract candidate envelopes."""
+"""Validate and compare the five shared-contract candidate envelopes."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUBJECTS = {"claude", "codex", "deepseek", "hermes"}
+SUBJECTS = {"claude", "codex", "deepseek", "hermes", "pi"}
 
 
 def load_source(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -31,8 +31,25 @@ def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> No
         if not isinstance(item, dict):
             errors.append(f"{label} has no {stream} capture")
             continue
+        # Whatever the capture itself complained about, reported as its own
+        # cause. These used to be invisible here: a sidecar refused for being
+        # oversize stores no bytes, so the only error this function produced
+        # was "not valid base64" -- which names the symptom and hides the
+        # reason -- and a required sidecar that was never created produced no
+        # error at all, because empty bytes digest perfectly well.
+        for complaint in item.get("errors") or []:
+            errors.append(f"{label} {stream}: {complaint}")
+        if item.get("exists") is False and item.get("errors"):
+            # Already stated by the capture, and there are no bytes to check.
+            continue
+        encoded = item.get("base64")
+        if encoded is None:
+            # Deliberate absence, not corruption: the capture declined to store
+            # these bytes and said why above. Checking a digest against nothing
+            # would add a second, misleading complaint.
+            continue
         try:
-            raw = base64.b64decode(item.get("base64", ""), validate=True)
+            raw = base64.b64decode(encoded, validate=True)
         except (ValueError, TypeError):
             errors.append(f"{label} {stream} is not valid base64")
             continue
@@ -145,7 +162,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
 
     if set(by_subject) != SUBJECTS:
         errors.append(
-            "comparison requires exactly Claude, Codex, DeepSeek, and Hermes"
+            "comparison requires exactly Claude, Codex, DeepSeek, Hermes, and Pi"
         )
 
     if by_subject:
@@ -173,7 +190,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
             errors.append("subjects did not use the same outcome oracle")
         if len(apparatus) != 1:
             # The capture primitive is imported from the installed package, so
-            # it is the one input a spec's `inputs` cannot bind. Four runs
+            # it is the one input a spec's `inputs` cannot bind. Runs
             # measured by different builds of it are not a comparison, and
             # without this check nothing else in the pipeline would say so.
             errors.append("subjects were not captured by the same apparatus")
@@ -200,7 +217,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("sources", nargs=4, type=Path)
+    parser.add_argument("sources", nargs=len(SUBJECTS), type=Path)
     args = parser.parse_args()
     try:
         result = compare(args.sources)

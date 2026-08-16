@@ -3711,16 +3711,57 @@ class TestPackageIdentity(unittest.TestCase):
         package = os.path.join(ROOT, "src", "harness_workbench")
         subjects = os.path.join(package, "subjects")
         reserved = set(capture.__all__)
+        # Names are the weak half of this check and were once the whole of it.
+        # Of the deleted common.py's ten primitive members only six collided
+        # with `__all__`; `ProcessResult`, `canonical_digest`, `file_digest`
+        # and `normalized_path` would all have sailed through, and so would a
+        # PRIVATE variant -- which is precisely what gets pasted back in.
+        #
+        # So the modules a reimplementation cannot avoid importing are the
+        # other half. Bounded capture needs `selectors` and `signal`; owning a
+        # process group needs them too. Nothing in this tree may import them:
+        # the primitive does that, once, on everyone's behalf. `subprocess` is
+        # allowed only where a process is genuinely not being measured.
+        #
+        # WHAT THIS STILL MISSES, verified by trying it: a private helper that
+        # reimplements bounded FILE reading -- the deleted `_bounded_evidence`
+        # -- collides with no reserved name and imports nothing forbidden, and
+        # passes. Static checks over names and imports cannot see it. Saying so
+        # here rather than implying the guard is total, because a control
+        # trusted past its range is worse than one known to be partial.
+        forbidden_imports = {"selectors": (), "signal": (),
+                             "subprocess": ("test_experiment.py", "hook.py")}
         for entry in sorted(os.listdir(subjects)):
             if not entry.endswith(".py"):
                 continue
             tree = ast.parse(read_text(os.path.join(subjects, entry)))
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            # ast.walk, not tree.body: a method or a nested def is still a
+            # reimplementation, and module-level rebinding is the cheapest one.
+            for node in ast.walk(tree):
+                name = None
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                    name = node.name
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    name = node.id
+                if name is not None:
                     self.assertNotIn(
-                        node.name, reserved,
+                        name, reserved,
                         "%s defines %s, which the capture primitive already "
-                        "exports" % (entry, node.name))
+                        "exports" % (entry, name))
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    module = (node.module if isinstance(node, ast.ImportFrom)
+                              else None)
+                    names = ([module] if module else
+                             [a.name for a in node.names])
+                    for imported in names:
+                        root_module = (imported or "").split(".")[0]
+                        allowed = forbidden_imports.get(root_module)
+                        if allowed is not None and entry not in allowed:
+                            self.fail(
+                                "%s imports %s; bounded capture and process "
+                                "ownership belong to harness_workbench.capture"
+                                % (entry, root_module))
 
     def test_subject_tree_materializes_without_clobbering(self):
         from harness_workbench import subject_tree
