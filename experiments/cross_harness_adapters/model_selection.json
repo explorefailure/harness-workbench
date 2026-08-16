@@ -1,0 +1,56 @@
+{
+  "schema": "cross-harness-model-selection/v0.1",
+  "active": "opencode-go",
+  "comment": [
+    "Model selection is declared here so 'which model' is one frozen experiment",
+    "input rather than a value buried in three different harness config files.",
+    "Switching the active profile changes model identity STRENGTH as well as the",
+    "model: a local model is content-addressed by digest, while a gateway model is",
+    "only a label the gateway promises to honour and may silently reroute.",
+    "Record the strength; do not pretend a gateway label is a digest."
+  ],
+  "profiles": {
+    "local-ollama": {
+      "kind": "local",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "api_key_env": "HWB_OLLAMA_KEY",
+      "api_key_placeholder": "ollama-local-placeholder",
+      "identity_strength": "local_content_digest",
+      "verify_digest": true,
+      "models": {
+        "deepseek": "gpt-oss:20b",
+        "hermes": "gpt-oss:20b",
+        "pi": "gpt-oss:20b"
+      },
+      "subject_key_env": {
+        "deepseek": "HWB_OLLAMA_KEY",
+        "hermes": "OPENAI_API_KEY",
+        "pi": "HWB_OLLAMA_KEY"
+      }
+    },
+    "opencode-go": {
+      "kind": "gateway",
+      "comment": [
+        "OpenCode Go serves OpenAI-compatible models at /chat/completions;",
+        "MiniMax and Qwen are Anthropic-compatible (/messages) and Grok and",
+        "GPT 5.6 Luna use /responses, so only the /chat/completions family is",
+        "usable by both DeepSeek Harness and Hermes without new provider code.",
+        "Hermes's 'custom' provider authenticates from OPENAI_API_KEY, while DeepSeek's llm-pi-ai reads the apiKeyEnv named in its patch. subject_key_env records that difference instead of hiding it in adapter code."
+      ],
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "HWB_OPENCODE_KEY",
+      "identity_strength": "gateway_model_label",
+      "verify_digest": false,
+      "models": {
+        "deepseek": "kimi-k3",
+        "hermes": "kimi-k3",
+        "pi": "kimi-k3"
+      },
+      "subject_key_env": {
+        "deepseek": "HWB_OPENCODE_KEY",
+        "hermes": "OPENAI_API_KEY",
+        "pi": "HWB_OPENCODE_KEY"
+      }
+    }
+  }
+}

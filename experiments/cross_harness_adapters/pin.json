@@ -23,7 +23,14 @@
     "launcher_sha256": "0057be9722fce11f8a9af62f2042ec543bad1f520c5426efdb4cecb2e9b125be"
   },
   "ollama": {
-    "model": "qwen3.5:9b",
-    "model_digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7"
+    "model": "gpt-oss:20b",
+    "model_digest": "17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7",
+    "comment": "Superseded as the model authority by model_selection.json; retained as the local profile's content pin. qwen3.5:9b was replaced after it failed the repair workload in every harness tested."
+  },
+  "pi_coding_agent": {
+    "version": "0.84.1",
+    "executable_sha256": "840d1e8e689ed9e4937bcb00b9a810e02a8567d9afb10a47097f11ca93ea1521",
+    "node_version": "22.22.3",
+    "npm_package": "@earendil-works/pi-coding-agent"
   }
 }

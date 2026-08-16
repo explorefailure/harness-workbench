@@ -75,7 +75,7 @@ can report `isError: false` while its first-party result text ends with
 
 | Harness | Acquisition | Strongest terminal evidence | Tool evidence | Observed limitation |
 | --- | --- | --- | --- | --- |
-| Pi `0.84.1` | Native JSON stream | Native session lifecycle | Correlated native calls and results | Pi-specific extension and provider events must remain local. |
+| Pi `0.84.1` | Native JSON stream | Native `agent_settled` | Correlated `tool_execution_start` / `_end` | Pi-specific extension, provider, and summary events must remain local. Its failing-command evidence is `isError`, not an exit status, so red/green detection cannot assume an exit code. |
 | Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
 | DeepSeek Harness `0.1.0-rc.6` | Native persisted JSONL plus process | Native `turn/end` | Correlated `tool/call` / `tool/result`, plus projected bash exit marker | The supported headless stdout contains final text only; the developer-preview session format has no compatibility promise, and `tool/result.isError` is not a child-process exit verdict. |

@@ -42,8 +42,16 @@ python3.11 runner.py --subject claude --workload repair
 python3.11 runner.py --subject codex --workload repair
 python3.11 runner.py --subject deepseek --workload repair
 python3.11 runner.py --subject hermes --workload repair
+python3.11 runner.py --subject pi
+python3.11 runner.py --subject pi --workload repair
 python3.11 fault_runner.py
 ```
+
+Pi is the reference integration and was deliberately excluded while this
+contract was derived, so that the shared envelope could not simply inherit Pi's
+shape. It is included here as a fifth subject to *test* the envelope rather than
+to inform it: what Pi cannot express through the shared contract is a finding
+about the contract. Pi's own richer schema stays in `experiments/pi_coding_agent`.
 
 Run each as a frozen, receipted Workbench discovery record:
 

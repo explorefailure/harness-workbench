@@ -12,6 +12,7 @@ SUBJECT_TIMEOUT_SECONDS = {
     "codex": 120,
     "deepseek": 240,
     "hermes": 120,
+    "pi": 240,
 }
 
 
@@ -20,7 +21,7 @@ def main() -> int:
     parser.add_argument(
         "--subject",
         required=True,
-        choices=("claude", "codex", "deepseek", "hermes"),
+        choices=("claude", "codex", "deepseek", "hermes", "pi"),
     )
     parser.add_argument("--workload", default="write", choices=tuple(adapters.WORKLOADS))
     args = parser.parse_args()

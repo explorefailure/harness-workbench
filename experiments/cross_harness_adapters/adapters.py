@@ -51,6 +51,7 @@ WRITE_INPUTS = (
     "adapters.py",
     "common.py",
     "pin.json",
+    "model_selection.json",
     "task.md",
     "hook.py",
     "hermes_config.yaml",
@@ -62,6 +63,7 @@ REPAIR_INPUTS = (
     "adapters.py",
     "common.py",
     "pin.json",
+    "model_selection.json",
     "repair_task.md",
     "repair_fixture/slugger.py",
     "repair_fixture/test_slugger.py",
@@ -80,6 +82,12 @@ INPUTS = WRITE_INPUTS
 
 class AdapterError(RuntimeError):
     pass
+
+
+# Subjects whose model is chosen by model_selection.json rather than by the
+# vendor's own account. Claude and Codex authenticate to their first-party
+# services, so their model stays a pin, not a profile choice.
+CONFIGURABLE_MODEL_SUBJECTS = frozenset({"deepseek", "hermes", "pi"})
 
 
 def _pins() -> dict[str, Any]:
@@ -124,15 +132,15 @@ def _normalized_argv(argv: list[str], root: Path, workspace: Path) -> list[str]:
 
 def _capabilities(subject: str) -> dict[str, Any]:
     return {
-        "native_event_stream": subject in {"claude", "codex"},
+        "native_event_stream": subject in {"claude", "codex", "pi"},
         "hook_event_stream": subject == "hermes",
         "native_persisted_event_log": subject == "deepseek",
-        "native_terminal_event": subject in {"claude", "codex", "deepseek"},
+        "native_terminal_event": subject in {"claude", "codex", "deepseek", "pi"},
         "correlated_tool_calls": True,
         "tool_result_status": True,
         "model_identity": (
-            "local_content_digest"
-            if subject in {"deepseek", "hermes"}
+            _resolve_model(subject)["model_identity_strength"]
+            if subject in CONFIGURABLE_MODEL_SUBJECTS
             else "hosted_model_label"
         ),
     }
@@ -174,6 +182,14 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         expected = pins["deepseek_harness"]
         version = _command_text([str(executable), "--version"]).split()[0]
         digest_key = "executable_sha256"
+    elif subject == "pi":
+        executable = _executable("pi")
+        expected = pins["pi_coding_agent"]
+        version = _command_text([str(executable), "--version"]).split()[0]
+        digest_key = "executable_sha256"
+        node_version = _command_text(["node", "--version"]).lstrip("v")
+        if node_version != expected["node_version"]:
+            raise AdapterError("Node version does not match pin.json")
     else:
         raise AdapterError(f"unknown subject: {subject}")
     if version != expected["version"]:
@@ -197,6 +213,83 @@ def _verify_identity(subject: str) -> dict[str, Any]:
             else {}
         ),
     }
+
+
+def _model_selection() -> dict[str, Any]:
+    return json.loads((HERE / "model_selection.json").read_text(encoding="utf-8"))
+
+
+def _active_profile() -> tuple[str, dict[str, Any]]:
+    selection = _model_selection()
+    name = str(selection["active"])
+    try:
+        return name, selection["profiles"][name]
+    except KeyError:
+        raise AdapterError(f"model_selection.json has no profile {name!r}") from None
+
+
+def _resolve_model(subject: str) -> dict[str, str]:
+    """Resolve the model for a configurable subject and say how strong its identity is.
+
+    A local model is content-addressed, so its digest is verified against the
+    live Ollama inventory. A gateway model is only a label: the service promises
+    to route it, and nothing here can prove which weights answered. The two must
+    never be reported as the same strength.
+    """
+    name, profile = _active_profile()
+    try:
+        model = str(profile["models"][subject])
+    except KeyError:
+        raise AdapterError(
+            f"profile {name!r} declares no model for subject {subject!r}"
+        ) from None
+    resolved = {
+        "model": model,
+        "model_profile": name,
+        "model_identity_strength": str(profile["identity_strength"]),
+        "model_base_url": str(profile["base_url"]),
+        "model_api_key_env": str(profile["api_key_env"]),
+        # Each harness authenticates from the variable IT looks for: DeepSeek
+        # reads the apiKeyEnv named in its patch, Hermes's custom provider reads
+        # OPENAI_API_KEY. Recording that per subject keeps the difference in the
+        # declaration rather than buried in a branch.
+        "model_subject_key_env": str(
+            profile.get("subject_key_env", {}).get(subject, profile["api_key_env"])
+        ),
+    }
+    if profile.get("verify_digest"):
+        resolved["model_digest"] = _verify_ollama_digest(model)
+    return resolved
+
+
+def _verify_ollama_digest(model: str) -> str:
+    with urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as response:
+        payload = json.load(response)
+    for item in payload.get("models", []):
+        if item.get("name") == model:
+            return str(item.get("digest"))
+    raise AdapterError(f"Ollama does not have the selected model {model!r}")
+
+
+def _apply_model_profile(text: str, subject: str, secret: str | None = None) -> str:
+    """Rewrite a harness config's provider block for the active profile.
+
+    The checked-in configs are the local-ollama defaults, so the local profile
+    substitutes each value with itself and the bytes are unchanged.
+    """
+    _, profile = _active_profile()
+    resolved = _resolve_model(subject)
+    replacements = {
+        "http://127.0.0.1:11434/v1": resolved["model_base_url"],
+        "HWB_OLLAMA_KEY": resolved["model_api_key_env"],
+        "gpt-oss:20b": resolved["model"],
+        "qwen3.5:9b": resolved["model"],
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    if secret is not None:
+        text = text.replace("__HWB_PROVIDER_KEY__", secret)
+    return text
 
 
 def _verify_ollama() -> dict[str, str]:
@@ -284,9 +377,59 @@ def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
     ]
 
 
+def _pi_command(identity: dict[str, Any], workload: str) -> list[str]:
+    # Pi reads the task from an @file reference resolved against its cwd, which
+    # the supervisor already pins to the disposable workspace.
+    tools = "write" if workload == "write" else "read,edit,bash"
+    task = "task.md" if workload == "write" else "repair_task.md"
+    return [
+        str(_executable("pi")),
+        "--mode", "json",
+        "--print",
+        "--no-session",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+        "--no-approve",
+        "--tools", tools,
+        "--provider", "workbench-gateway",
+        "--model", str(identity["model"]),
+        "@" + task,
+    ]
+
+
+def _pi_models_json(identity: dict[str, Any], secret: str) -> str:
+    """Declare one custom OpenAI-compatible provider for Pi.
+
+    Pi resolves custom providers from models.json in its config directory, so an
+    isolated directory per run is what keeps the host's real provider catalogue
+    and credentials out of the experiment.
+    """
+    return json.dumps({
+        "providers": {
+            "workbench-gateway": {
+                "baseUrl": str(identity["model_base_url"]),
+                "api": "openai-completions",
+                "apiKey": secret,
+                "compat": {
+                    "supportsDeveloperRole": False,
+                    "supportsReasoningEffort": False,
+                },
+                "models": [{"id": str(identity["model"])}],
+            }
+        }
+    }, indent=2)
+
+
 def _deepseek_command(root: Path, workload: str) -> list[str]:
     patch = root / "dsh_patch.yml"
-    shutil.copy2(HERE / "dsh_patch.yml", patch)
+    patch.write_text(
+        _apply_model_profile(
+            (HERE / "dsh_patch.yml").read_text(encoding="utf-8"), "deepseek"
+        ),
+        encoding="utf-8",
+    )
     return [
         str(_executable("dsh")),
         "--profile", "headless",
@@ -483,6 +626,27 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
     }, errors
 
 
+def _hermes_result_exit_code(result: Any) -> int | None:
+    """Project the child exit status Hermes reports inside its post-hook result.
+
+    Hermes's post_tool_call payload carries the terminal tool's own
+    ``exit_code`` as JSON-encoded text. That is a separate fact from the hook's
+    ``status``: a command can run to completion (status ok) and still exit
+    nonzero, which is exactly what an intentionally red test suite does. Keep
+    both rather than collapsing them, the same way DeepSeek's bash exit marker
+    stays separate from its ``isError`` flag.
+    """
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(result, dict):
+        return None
+    code = result.get("exit_code")
+    return code if isinstance(code, int) else None
+
+
 def _normalize_hermes(
     raw: bytes,
     hook_raw: bytes,
@@ -506,6 +670,7 @@ def _normalize_hermes(
             "operation": arguments.get("operation"),
             "outside_workspace": outside,
             "status": extra.get("status"),
+            "operation_exit_code": _hermes_result_exit_code(extra.get("result")),
             "acquisition": "shell_hook",
         })
     calls: dict[str, dict[str, dict[str, Any]]] = {}
@@ -558,6 +723,7 @@ def _normalize_hermes(
             "reported_error": (
                 None if post.get("status") is None else post.get("status") != "ok"
             ),
+            "operation_exit_code": post.get("operation_exit_code"),
             "result_stage": "hook_observer",
             "acquisition": "shell_hook",
         })
@@ -568,6 +734,106 @@ def _normalize_hermes(
         "tool_executions": executions,
         "terminal": {"status": "process_exit", "returncode": returncode},
     }, errors
+
+
+def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
+    """Project Pi's native JSON event stream into the shared envelope.
+
+    Pi is the reference integration and was deliberately excluded while the
+    contract was derived, so this lane is a test of the envelope rather than a
+    source for it. Pi's own richer summary schema stays in its own experiment;
+    only what the shared contract can represent is projected here.
+    """
+    events, errors = parse_jsonl(raw)
+    if not events or events[0].get("type") != "session":
+        errors.append("Pi stream does not start with a session event")
+    if sum(event.get("type") == "session" for event in events) != 1:
+        errors.append("Pi stream does not contain exactly one session event")
+
+    open_tools: dict[str, dict[str, Any]] = {}
+    seen_call_ids: set[str] = set()
+    executions: list[dict[str, Any]] = []
+    settled = 0
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "agent_settled":
+            settled += 1
+        elif event_type == "tool_execution_start":
+            call_id = event.get("toolCallId")
+            if not isinstance(call_id, str) or not call_id:
+                errors.append("Pi tool_execution_start has no tool call id")
+                continue
+            if call_id in seen_call_ids:
+                errors.append(f"duplicate Pi tool call id: {call_id}")
+                continue
+            seen_call_ids.add(call_id)
+            open_tools[call_id] = event
+        elif event_type == "tool_execution_end":
+            call_id = event.get("toolCallId")
+            start = open_tools.pop(call_id, None) if isinstance(call_id, str) else None
+            if start is None:
+                errors.append("Pi tool_execution_end has no matching start")
+                continue
+            if event.get("toolName") != start.get("toolName"):
+                errors.append(f"Pi tool name changed during execution: {call_id}")
+            is_error = event.get("isError")
+            if not isinstance(is_error, bool):
+                errors.append(f"Pi tool isError is not boolean: {call_id}")
+                is_error = None
+            arguments, effect_kind, outside = _argument_projection(
+                start.get("toolName"), start.get("args") or {}, workspace
+            )
+            if outside:
+                errors.append(
+                    f"Pi proposed an operation outside the disposable workspace: {call_id}"
+                )
+            executions.append({
+                "call_id": call_id,
+                "tool_name": start.get("toolName"),
+                "effect_kind": effect_kind,
+                "operation": arguments.get("operation"),
+                "operation_exit_code": _pi_result_exit_code(event),
+                "arguments_sha256": canonical_digest(arguments),
+                "arguments_stage": "subject_event",
+                "reported_error": is_error,
+                "result_stage": "subject_reported",
+                "acquisition": "native_jsonl",
+            })
+    for call_id in sorted(open_tools):
+        errors.append(f"Pi tool_execution_start has no matching end: {call_id}")
+    if settled != 1:
+        errors.append(f"expected exactly one Pi agent_settled, saw {settled}")
+
+    return {
+        "acquisition": "native_jsonl",
+        "completeness": "native_event_stream",
+        "event_types": [
+            event.get("type") for event in events if isinstance(event.get("type"), str)
+        ],
+        "tool_executions": executions,
+        "terminal": {"status": "agent_settled", "settled": settled},
+    }, errors
+
+
+def _pi_result_exit_code(event: dict[str, Any]) -> int | None:
+    """Best-effort child exit status from a Pi tool_execution_end.
+
+    Pi reports tool failure as ``isError``; a numeric exit status is only
+    sometimes present. Absent is recorded as absent rather than inferred from
+    the error flag, because a command can exit nonzero without Pi treating the
+    tool call as failed.
+    """
+    for key in ("exitCode", "exit_code"):
+        value = event.get(key)
+        if isinstance(value, int):
+            return value
+    result = event.get("result")
+    if isinstance(result, dict):
+        for key in ("exitCode", "exit_code"):
+            value = result.get(key)
+            if isinstance(value, int):
+                return value
+    return None
 
 
 def _normalize_deepseek(
@@ -757,10 +1023,8 @@ def capture(
     if evidence_limit <= 0:
         raise AdapterError("evidence limit must be positive")
     identity = _verify_identity(subject)
-    if subject in {"deepseek", "hermes"}:
-        local = _verify_ollama()
-        identity["model"] = local["model"]
-        identity["model_digest"] = local["model_digest"]
+    if subject in CONFIGURABLE_MODEL_SUBJECTS:
+        identity.update(_resolve_model(subject))
 
     with tempfile.TemporaryDirectory(prefix=f".hwb-{subject}-", dir=HERE) as temp:
         root = Path(temp)
@@ -770,12 +1034,28 @@ def capture(
         environment = os.environ.copy()
         environment["PWD"] = str(workspace)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        if subject == "deepseek":
+        if subject in CONFIGURABLE_MODEL_SUBJECTS:
             # The generic OpenAI-compatible provider requires a key-shaped value
             # even though the pinned Ollama endpoint does not authenticate it.
             # Add it before deriving the redaction set so it cannot leak into a
             # sealed record if a future dsh version starts echoing provider config.
-            environment["HWB_OLLAMA_KEY"] = "ollama-local-placeholder"
+            # A gateway profile supplies a real key the same way, so it is
+            # redacted by the same machinery rather than a special case.
+            _, profile = _active_profile()
+            key_name = str(profile["api_key_env"])
+            placeholder = profile.get("api_key_placeholder")
+            if placeholder is not None:
+                secret = str(placeholder)
+            elif os.environ.get(key_name):
+                secret = os.environ[key_name]
+            else:
+                raise AdapterError(
+                    f"profile requires {key_name} to be set in the environment"
+                )
+            # Publish under both the profile's own name and whichever variable
+            # this subject's provider actually reads.
+            for name in {key_name, str(identity["model_subject_key_env"])}:
+                environment[name] = secret
         redactions = credential_values(environment)
         sensitive_environment_names = sorted(
             name for name, value in environment.items() if value in redactions
@@ -800,9 +1080,30 @@ def capture(
         elif subject == "hermes":
             for name in sensitive_environment_names:
                 environment.pop(name, None)
+            # Hermes gets no unrelated host credentials, but it still needs the
+            # provider key for the active profile, which the sweep above removes
+            # precisely because it looks like a credential. Restore only that one.
+            _, hermes_profile = _active_profile()
+            provider_key = str(hermes_profile["api_key_env"])
+            placeholder = hermes_profile.get("api_key_placeholder")
+            secret = (
+                str(placeholder)
+                if placeholder is not None
+                else os.environ.get(provider_key, "")
+            )
+            if secret:
+                for name in {provider_key, str(identity["model_subject_key_env"])}:
+                    environment[name] = secret
             hermes_home = root / "hermes-home"
             hermes_home.mkdir()
-            shutil.copy2(HERE / "hermes_config.yaml", hermes_home / "config.yaml")
+            (hermes_home / "config.yaml").write_text(
+                _apply_model_profile(
+                    (HERE / "hermes_config.yaml").read_text(encoding="utf-8"),
+                    "hermes",
+                    secret,
+                ),
+                encoding="utf-8",
+            )
             evidence_path = root / "hermes-hooks.jsonl"
             evidence_kind = "shell_hook_jsonl"
             environment["HERMES_HOME"] = str(hermes_home)
@@ -812,9 +1113,35 @@ def capture(
             environment["TERMINAL_CWD"] = str(workspace)
             environment["HERMES_WRITE_SAFE_ROOT"] = str(workspace)
             argv = _hermes_command(identity, workload)
-        else:
+        elif subject == "pi":
+            # Pi gets no host credentials at all: its provider key travels in an
+            # isolated models.json inside a per-run config directory, so nothing
+            # credential-shaped needs to survive in the environment.
             for name in sensitive_environment_names:
-                if name != "HWB_OLLAMA_KEY":
+                environment.pop(name, None)
+            pi_home = root / "pi-home"
+            pi_config = pi_home / "agent"
+            pi_config.mkdir(parents=True)
+            (pi_config / "models.json").write_text(
+                _pi_models_json(identity, secret), encoding="utf-8"
+            )
+            environment["HOME"] = str(pi_home)
+            environment["PI_CODING_AGENT_DIR"] = str(pi_config)
+            argv = _pi_command(identity, workload)
+        else:
+            # Strip every credential the subject has no business seeing, except
+            # the provider key for the active profile -- which is itself
+            # credential-shaped and would otherwise be swept out from under the
+            # harness it authenticates.
+            #
+            # Pi is handled in its own branch above: it receives the key through
+            # an isolated models.json rather than the environment.
+            keep = {
+                str(_active_profile()[1]["api_key_env"]),
+                str(identity["model_subject_key_env"]),
+            }
+            for name in sensitive_environment_names:
+                if name not in keep:
                     environment.pop(name, None)
             dsh_home = root / "dsh-home"
             dsh_home.mkdir()
@@ -857,6 +1184,8 @@ def capture(
             lifecycle, errors = _normalize_hermes(
                 normalized_stdout, normalized_evidence, workspace, result.returncode
             )
+        elif subject == "pi":
+            lifecycle, errors = _normalize_pi(normalized_stdout, workspace)
         else:
             lifecycle, errors = _normalize_deepseek(
                 normalized_evidence,
@@ -929,6 +1258,8 @@ def capture(
                     "ambient_authenticated_client"
                     if subject in {"claude", "codex"}
                     else "none_loopback_model"
+                    if _active_profile()[1].get("kind") == "local"
+                    else "experiment_scoped_gateway_key"
                 ),
             },
             "isolation": {
@@ -938,10 +1269,17 @@ def capture(
                     "codex": "ignored user config and rules; ephemeral session",
                     "hermes": "temporary HERMES_HOME plus ignored rules",
                     "deepseek": "temporary DSH_HOME plus experiment patch",
+                    "pi": "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
+                          "resources, sessions, skills, or context files",
                 }[subject],
+                # The network claim has to follow the active profile. A gateway
+                # profile reaches a remote service, and describing that as
+                # loopback would be a false isolation disclosure.
                 "network": "first-party Claude service" if subject == "claude"
                     else "first-party Codex service" if subject == "codex"
-                    else "loopback Ollama only",
+                    else "loopback Ollama only"
+                    if _active_profile()[1].get("kind") == "local"
+                    else f"remote gateway {_active_profile()[1]['base_url']}",
             },
             "capture": {
                 "limits": {
