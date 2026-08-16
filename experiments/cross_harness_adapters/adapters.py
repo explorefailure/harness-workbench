@@ -1,10 +1,11 @@
-"""Three subject adapters projected into one evidence envelope."""
+"""Four subject adapters projected into one evidence envelope."""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,16 +33,17 @@ from common import (
 HERE = Path(__file__).resolve().parent
 WRITE_PROMPT = (
     "Create shared.txt in the current workspace. Its complete contents must be "
-    "the 21 ASCII bytes in the following fenced block plus one final newline:\n"
-    "```text\ncross-harness control\n```\n"
-    "Do not include the fence or punctuation. Use an available file tool, verify "
-    "the requested bytes, then reply done."
+    "exactly the 22 ASCII bytes represented by the JSON string "
+    '"cross-harness control\\n": 21 visible characters followed by one LF byte. '
+    "The backslash-n denotes that single LF byte, not two literal characters. "
+    "Use an available file tool, verify the total is 22 bytes, then reply done."
 )
 REPAIR_PROMPT = (
     "Open repair_task.md in the current workspace and follow every numbered "
     "requirement. Work only inside the current workspace. You must run the "
-    "specified test command before and after editing, edit only slugger.py, "
-    "and finish with done."
+    "specified test command once before editing; its initial failure is expected, "
+    "so proceed directly to editing slugger.py rather than retrying it unchanged. "
+    "Run the same command after the edit and finish with done."
 )
 WRITE_INPUTS = (
     "run_subject.sh",
@@ -52,6 +54,7 @@ WRITE_INPUTS = (
     "task.md",
     "hook.py",
     "hermes_config.yaml",
+    "dsh_patch.yml",
 )
 REPAIR_INPUTS = (
     "run_subject.sh",
@@ -64,6 +67,7 @@ REPAIR_INPUTS = (
     "repair_fixture/test_slugger.py",
     "hook.py",
     "hermes_config.yaml",
+    "dsh_patch.yml",
 )
 WORKLOADS = {
     "write": {"prompt": WRITE_PROMPT, "inputs": WRITE_INPUTS},
@@ -122,11 +126,14 @@ def _capabilities(subject: str) -> dict[str, Any]:
     return {
         "native_event_stream": subject in {"claude", "codex"},
         "hook_event_stream": subject == "hermes",
-        "native_terminal_event": subject in {"claude", "codex"},
+        "native_persisted_event_log": subject == "deepseek",
+        "native_terminal_event": subject in {"claude", "codex", "deepseek"},
         "correlated_tool_calls": True,
         "tool_result_status": True,
         "model_identity": (
-            "local_content_digest" if subject == "hermes" else "hosted_model_label"
+            "local_content_digest"
+            if subject in {"deepseek", "hermes"}
+            else "hosted_model_label"
         ),
     }
 
@@ -162,6 +169,11 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         commit = _command_text(["git", "-C", str(source_root), "rev-parse", "HEAD"])
         if commit != expected["source_commit"]:
             raise AdapterError("Hermes source commit does not match pin.json")
+    elif subject == "deepseek":
+        executable = _executable("dsh")
+        expected = pins["deepseek_harness"]
+        version = _command_text([str(executable), "--version"]).split()[0]
+        digest_key = "executable_sha256"
     else:
         raise AdapterError(f"unknown subject: {subject}")
     if version != expected["version"]:
@@ -174,6 +186,11 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         "version": version,
         "executable_sha256": digest,
         "model": expected.get("model"),
+        **(
+            {"provider": expected["provider"]}
+            if subject == "deepseek"
+            else {}
+        ),
         **(
             {"source_commit": expected["source_commit"]}
             if subject == "hermes"
@@ -264,6 +281,17 @@ def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
         "--yolo",
         "--max-turns", "6",
         "--source", "tool",
+    ]
+
+
+def _deepseek_command(root: Path, workload: str) -> list[str]:
+    patch = root / "dsh_patch.yml"
+    shutil.copy2(HERE / "dsh_patch.yml", patch)
+    return [
+        str(_executable("dsh")),
+        "--profile", "headless",
+        "--patch", str(patch),
+        WORKLOADS[workload]["prompt"],
     ]
 
 
@@ -542,6 +570,161 @@ def _normalize_hermes(
     }, errors
 
 
+def _normalize_deepseek(
+    raw: bytes,
+    workspace: Path,
+    returncode: int,
+    expected_provider: str,
+    expected_model: str,
+) -> tuple[dict[str, Any], list[str]]:
+    records, errors = parse_jsonl(raw)
+    headers = [record for record in records if record.get("type") == "session"]
+    events = [record for record in records if record.get("type") != "session"]
+    types = [event.get("type") for event in events]
+    if len(headers) != 1 or records[:1] != headers[:1]:
+        errors.append("DeepSeek log does not start with exactly one session header")
+    elif headers[0].get("version") != 0:
+        errors.append("DeepSeek session header has an unexpected format version")
+    elif normalized_path(headers[0].get("cwd"), workspace) != ".":
+        errors.append("DeepSeek session header has the wrong workspace")
+
+    for index, event in enumerate(events):
+        if event.get("seq") != index:
+            errors.append(f"DeepSeek event sequence is not contiguous at index {index}")
+            break
+    turn_starts = [index for index, kind in enumerate(types) if kind == "turn/start"]
+    turn_ends = [index for index, kind in enumerate(types) if kind == "turn/end"]
+    turn_window_valid = (
+        len(turn_starts) == 1
+        and len(turn_ends) == 1
+        and turn_starts[0] < turn_ends[0]
+        and turn_ends[0] == len(types) - 1
+    )
+    if not turn_window_valid:
+        errors.append("DeepSeek log does not contain one complete ordered turn")
+
+    contexts = [event for event in events if event.get("type") == "request/context"]
+    if not contexts:
+        errors.append("DeepSeek log has no provider/model context")
+    for event in contexts:
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if (
+            data.get("provider") != expected_provider
+            or data.get("model") != expected_model
+        ):
+            errors.append("DeepSeek provider/model context disagrees with the pin")
+
+    calls: dict[str, tuple[int, dict[str, Any]]] = {}
+    results: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, event in enumerate(events):
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if event.get("type") == "tool/call":
+            call_id = data.get("callId")
+            if not isinstance(call_id, str) or not call_id:
+                errors.append("DeepSeek tool call has no id")
+            elif call_id in calls:
+                errors.append(f"duplicate DeepSeek tool call: {call_id}")
+            else:
+                calls[call_id] = (index, data)
+                if turn_window_valid and not (
+                    turn_starts[0] < index < turn_ends[0]
+                ):
+                    errors.append(f"DeepSeek tool call is outside its turn: {call_id}")
+        elif event.get("type") == "tool/result":
+            message = data.get("message") if isinstance(data.get("message"), dict) else {}
+            content = message.get("content") if isinstance(message.get("content"), list) else []
+            tool_results = [
+                item for item in content
+                if isinstance(item, dict) and item.get("type") == "tool-result"
+            ]
+            call_ids = {
+                item.get("toolCallId") for item in tool_results
+                if isinstance(item.get("toolCallId"), str) and item.get("toolCallId")
+            }
+            if len(tool_results) != 1 or len(call_ids) != 1:
+                errors.append("DeepSeek tool result does not identify exactly one call")
+                continue
+            call_id = next(iter(call_ids))
+            if call_id in results:
+                errors.append(f"duplicate DeepSeek tool result: {call_id}")
+            else:
+                results[call_id] = (index, tool_results[0])
+                if not isinstance(tool_results[0].get("isError"), bool):
+                    errors.append(f"DeepSeek tool result has no boolean status: {call_id}")
+                if turn_window_valid and not (
+                    turn_starts[0] < index < turn_ends[0]
+                ):
+                    errors.append(f"DeepSeek tool result is outside its turn: {call_id}")
+
+    for call_id in results:
+        if call_id not in calls:
+            errors.append(f"DeepSeek tool result has no call: {call_id}")
+    executions = []
+    for call_id, (call_index, call) in calls.items():
+        result = results.get(call_id)
+        if result is None:
+            errors.append(f"DeepSeek tool call has no result: {call_id}")
+        elif call_index >= result[0]:
+            errors.append(f"DeepSeek tool result precedes its call: {call_id}")
+        raw_arguments = call.get("arguments")
+        try:
+            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
+        except json.JSONDecodeError:
+            arguments = None
+        if not isinstance(arguments, dict):
+            errors.append(f"DeepSeek tool call arguments are not an object: {call_id}")
+            arguments = {}
+        normalized, effect_kind, outside = _argument_projection(
+            call.get("name"), arguments, workspace
+        )
+        if outside:
+            errors.append(f"DeepSeek proposed an operation outside workspace: {call_id}")
+        operation_exit_code = None
+        if result and effect_kind == "command":
+            result_content = result[1].get("content")
+            blocks = result_content if isinstance(result_content, list) else []
+            texts = [
+                block.get("text") for block in blocks
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ]
+            if texts:
+                match = re.search(r"(?:^|\n)\[exit code: (-?\d+)\]\s*$", texts[-1])
+                if match:
+                    operation_exit_code = int(match.group(1))
+        executions.append({
+            "call_id": call_id,
+            "tool_name": str(call.get("name", "")).lower(),
+            "effect_kind": effect_kind,
+            "operation": normalized.get("operation"),
+            "arguments_sha256": canonical_digest(normalized),
+            "arguments_stage": "subject_event",
+            "reported_error": result[1].get("isError") if result else None,
+            "operation_exit_code": operation_exit_code,
+            "result_stage": "subject_reported",
+            "acquisition": "native_persisted_jsonl",
+        })
+
+    terminal = events[-1] if events else {}
+    terminal_data = (
+        terminal.get("data") if isinstance(terminal.get("data"), dict) else {}
+    )
+    reason = (
+        terminal_data.get("reason")
+        if isinstance(terminal_data.get("reason"), dict)
+        else {}
+    )
+    terminal_kind = reason.get("kind")
+    if returncode != 0 or terminal_kind != "completed":
+        errors.append("DeepSeek persisted turn is not a successful terminal")
+    return {
+        "acquisition": "native_persisted_jsonl_plus_process",
+        "completeness": "native_terminal_event",
+        "event_types": types,
+        "tool_executions": executions,
+        "terminal": {"status": terminal_kind, "returncode": returncode},
+    }, errors
+
+
 def _bounded_evidence(path: Path, limit: int) -> tuple[bytes, int, bool]:
     if not path.exists():
         return b"", 0, False
@@ -549,6 +732,15 @@ def _bounded_evidence(path: Path, limit: int) -> tuple[bytes, int, bool]:
     with path.open("rb") as stream:
         raw = stream.read(limit)
     return raw, size, size > limit
+
+
+def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
+    paths = sorted((dsh_home / "sessions").glob("**/session.jsonl"))
+    if len(paths) != 1:
+        return None, [
+            f"DeepSeek produced {len(paths)} raw top-level session candidates; expected one"
+        ]
+    return paths[0], []
 
 
 def capture(
@@ -565,7 +757,7 @@ def capture(
     if evidence_limit <= 0:
         raise AdapterError("evidence limit must be positive")
     identity = _verify_identity(subject)
-    if subject == "hermes":
+    if subject in {"deepseek", "hermes"}:
         local = _verify_ollama()
         identity["model"] = local["model"]
         identity["model_digest"] = local["model_digest"]
@@ -578,6 +770,12 @@ def capture(
         environment = os.environ.copy()
         environment["PWD"] = str(workspace)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        if subject == "deepseek":
+            # The generic OpenAI-compatible provider requires a key-shaped value
+            # even though the pinned Ollama endpoint does not authenticate it.
+            # Add it before deriving the redaction set so it cannot leak into a
+            # sealed record if a future dsh version starts echoing provider config.
+            environment["HWB_OLLAMA_KEY"] = "ollama-local-placeholder"
         redactions = credential_values(environment)
         sensitive_environment_names = sorted(
             name for name, value in environment.items() if value in redactions
@@ -593,24 +791,44 @@ def capture(
                 stderr_limit=stderr_limit,
             )
         before = manifest(workspace)
-        hook_path = root / "hermes-hooks.jsonl"
+        evidence_path: Path | None = None
+        evidence_kind = "none"
         if subject == "claude":
             argv = _claude_command(identity, workload)
         elif subject == "codex":
             argv = _codex_command(identity, workspace, workload)
-        else:
+        elif subject == "hermes":
             for name in sensitive_environment_names:
                 environment.pop(name, None)
             hermes_home = root / "hermes-home"
             hermes_home.mkdir()
             shutil.copy2(HERE / "hermes_config.yaml", hermes_home / "config.yaml")
+            evidence_path = root / "hermes-hooks.jsonl"
+            evidence_kind = "shell_hook_jsonl"
             environment["HERMES_HOME"] = str(hermes_home)
-            environment["HWB_HERMES_HOOK_EVIDENCE"] = str(hook_path)
+            environment["HWB_HERMES_HOOK_EVIDENCE"] = str(evidence_path)
             environment["HWB_HERMES_HOOK_MAX_BYTES"] = str(evidence_limit)
             environment["HWB_REDACT_VALUES_JSON"] = "[]"
             environment["TERMINAL_CWD"] = str(workspace)
             environment["HERMES_WRITE_SAFE_ROOT"] = str(workspace)
             argv = _hermes_command(identity, workload)
+        else:
+            for name in sensitive_environment_names:
+                if name != "HWB_OLLAMA_KEY":
+                    environment.pop(name, None)
+            dsh_home = root / "dsh-home"
+            dsh_home.mkdir()
+            environment["HOME"] = str(dsh_home)
+            environment["DSH_HOME"] = str(dsh_home)
+            environment["DSH_PERMISSION_MODE"] = "workspace-write"
+            environment["DSH_TELEMETRY_MODE"] = "DISABLED"
+            environment["NO_COLOR"] = "1"
+            for name in ("CONFIG", "CACHE", "DATA", "STATE"):
+                path = dsh_home / f"xdg-{name.lower()}"
+                path.mkdir()
+                environment[f"XDG_{name}_HOME"] = str(path)
+            evidence_kind = "native_persisted_session_jsonl"
+            argv = _deepseek_command(root, workload)
         result = run_bounded(
             argv,
             cwd=workspace,
@@ -620,25 +838,40 @@ def capture(
             stderr_limit=stderr_limit,
         )
         after = manifest(workspace)
-        hook_raw, hook_source_bytes, hook_overflow = _bounded_evidence(
-            hook_path, evidence_limit
-        )
+        evidence_errors: list[str] = []
+        if subject == "deepseek":
+            evidence_path, evidence_errors = _deepseek_session_log(dsh_home)
+        if evidence_path is None:
+            evidence_raw, evidence_source_bytes, evidence_overflow = b"", 0, False
+        else:
+            evidence_raw, evidence_source_bytes, evidence_overflow = _bounded_evidence(
+                evidence_path, evidence_limit
+            )
         normalized_stdout, _ = redact_bytes(result.stdout, redactions)
-        normalized_hook, _ = redact_bytes(hook_raw, redactions)
+        normalized_evidence, _ = redact_bytes(evidence_raw, redactions)
         if subject == "claude":
             lifecycle, errors = _normalize_claude(normalized_stdout, workspace)
         elif subject == "codex":
             lifecycle, errors = _normalize_codex(normalized_stdout, workspace)
-        else:
+        elif subject == "hermes":
             lifecycle, errors = _normalize_hermes(
-                normalized_stdout, normalized_hook, workspace, result.returncode
+                normalized_stdout, normalized_evidence, workspace, result.returncode
             )
+        else:
+            lifecycle, errors = _normalize_deepseek(
+                normalized_evidence,
+                workspace,
+                result.returncode,
+                str(identity["provider"]),
+                str(identity["model"]),
+            )
+        errors.extend(evidence_errors)
         if result.stdout_overflow:
             errors.append("stdout capture limit exceeded")
         if result.stderr_overflow:
             errors.append("stderr capture limit exceeded")
-        if hook_overflow:
-            errors.append("hook evidence capture limit exceeded")
+        if evidence_overflow:
+            errors.append("sidecar evidence capture limit exceeded")
         if result.returncode != 0:
             errors.append(f"{subject} exited with status {result.returncode}")
         adapter_verdict = {"passed": not errors, "errors": errors}
@@ -704,6 +937,7 @@ def capture(
                     "claude": "safe-mode plus empty setting sources",
                     "codex": "ignored user config and rules; ephemeral session",
                     "hermes": "temporary HERMES_HOME plus ignored rules",
+                    "deepseek": "temporary DSH_HOME plus experiment patch",
                 }[subject],
                 "network": "first-party Claude service" if subject == "claude"
                     else "first-party Codex service" if subject == "codex"
@@ -726,17 +960,18 @@ def capture(
                     source_bytes=result.stderr_source_bytes,
                 ),
                 "hook_evidence": capture_bytes(
-                    hook_raw,
+                    evidence_raw,
                     redactions=redactions,
-                    source_bytes=hook_source_bytes,
+                    source_bytes=evidence_source_bytes,
                 ),
+                "sidecar_kind": evidence_kind,
                 "returncode": result.returncode,
                 "termination_reason": result.termination_reason,
                 "timed_out": result.termination_reason == "timeout",
                 "overflow": {
                     "stdout": result.stdout_overflow,
                     "stderr": result.stderr_overflow,
-                    "hook_evidence": hook_overflow,
+                    "hook_evidence": evidence_overflow,
                 },
                 "redacted_environment_names": sensitive_environment_names,
             },

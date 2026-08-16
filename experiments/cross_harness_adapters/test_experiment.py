@@ -38,7 +38,7 @@ class CommonTests(unittest.TestCase):
     def test_expected_effect_is_unambiguous(self) -> None:
         self.assertEqual(EXPECTED_CONTENT, b"cross-harness control\n")
         self.assertEqual(len(EXPECTED_CONTENT), 22)
-        self.assertIn("21 ASCII bytes", adapters.PROMPT)
+        self.assertIn("exactly the 22 ASCII bytes", adapters.PROMPT)
 
     def test_jsonl_rejects_non_object_and_malformed_line(self) -> None:
         events, errors = parse_jsonl(b'{"ok":true}\n[]\nnot-json\n')
@@ -57,7 +57,7 @@ class CommonTests(unittest.TestCase):
             self.assertFalse(outcome(before, manifest(root))["passed"])
 
     def test_specs_bind_the_same_complete_input_set(self) -> None:
-        for subject in ("claude", "codex", "hermes"):
+        for subject in ("claude", "codex", "deepseek", "hermes"):
             spec = json.loads(
                 (adapters.HERE / f"{subject}.json").read_text(encoding="utf-8")
             )
@@ -68,7 +68,7 @@ class CommonTests(unittest.TestCase):
             )
 
     def test_repair_specs_bind_the_same_complete_input_set(self) -> None:
-        for subject in ("claude", "codex", "hermes"):
+        for subject in ("claude", "codex", "deepseek", "hermes"):
             spec = json.loads(
                 (adapters.HERE / f"repair_{subject}.json").read_text(
                     encoding="utf-8"
@@ -391,6 +391,209 @@ class HermesNormalizerTests(unittest.TestCase):
         self.assertTrue(lifecycle["tool_executions"][0]["reported_error"])
 
 
+class DeepSeekNormalizerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workspace = Path("/workspace")
+        self.header = {
+            "type": "session",
+            "version": 0,
+            "id": "session-1",
+            "createdAt": 0,
+            "cwd": "/workspace",
+            "delegationDepth": 0,
+        }
+        self.turn_start = {
+            "type": "turn/start",
+            "seq": 0,
+            "time": 0,
+            "data": {"turn": 1},
+        }
+        self.context = {
+            "type": "request/context",
+            "seq": 1,
+            "time": 0,
+            "data": {
+                "provider": "workbench-ollama",
+                "model": "qwen3.5:9b",
+            },
+        }
+        self.call = {
+            "type": "tool/call",
+            "seq": 2,
+            "time": 0,
+            "data": {
+                "turn": 1,
+                "step": 1,
+                "callId": "call-1",
+                "name": "write",
+                "arguments": json.dumps({
+                    "file_path": "/workspace/shared.txt",
+                    "content": EXPECTED_CONTENT.decode("utf-8"),
+                }),
+            },
+        }
+        self.result = {
+            "type": "tool/result",
+            "seq": 3,
+            "time": 0,
+            "data": {
+                "turn": 1,
+                "step": 1,
+                "message": {
+                    "content": [{
+                        "type": "tool-result",
+                        "toolCallId": "call-1",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "isError": False,
+                    }],
+                },
+            },
+        }
+        self.terminal = {
+            "type": "turn/end",
+            "seq": 4,
+            "time": 0,
+            "data": {"turn": 1, "reason": {"kind": "completed"}},
+        }
+
+    def stream(self, *events: dict) -> bytes:
+        return jsonl(self.header, *events)
+
+    def normalize(self, raw: bytes) -> tuple[dict, list[str]]:
+        return adapters._normalize_deepseek(
+            raw,
+            self.workspace,
+            0,
+            "workbench-ollama",
+            "qwen3.5:9b",
+        )
+
+    def test_valid_persisted_lifecycle(self) -> None:
+        lifecycle, errors = self.normalize(self.stream(
+            self.turn_start, self.context, self.call, self.result, self.terminal
+        ))
+        self.assertEqual(errors, [])
+        self.assertEqual(lifecycle["terminal"]["status"], "completed")
+        self.assertFalse(lifecycle["tool_executions"][0]["reported_error"])
+        self.assertEqual(
+            lifecycle["tool_executions"][0]["acquisition"],
+            "native_persisted_jsonl",
+        )
+
+    def test_log_scoped_permission_prelude_is_allowed(self) -> None:
+        prelude = {
+            "type": "permission/preset",
+            "seq": 0,
+            "time": 0,
+            "data": {"preset": "workbench"},
+        }
+        events = [
+            json.loads(json.dumps(event))
+            for event in (
+                self.turn_start,
+                self.context,
+                self.call,
+                self.result,
+                self.terminal,
+            )
+        ]
+        for event in events:
+            event["seq"] += 1
+        _, errors = self.normalize(self.stream(prelude, *events))
+        self.assertEqual(errors, [])
+
+    def test_duplicate_terminal_is_rejected(self) -> None:
+        first = json.loads(json.dumps(self.terminal))
+        first["seq"] = 4
+        second = json.loads(json.dumps(self.terminal))
+        second["seq"] = 5
+        _, errors = self.normalize(self.stream(
+            self.turn_start, self.context, self.call, self.result, first, second
+        ))
+        self.assertIn(
+            "DeepSeek log does not contain one complete ordered turn", errors
+        )
+
+    def test_noncontiguous_sequence_is_rejected(self) -> None:
+        context = json.loads(json.dumps(self.context))
+        context["seq"] = 9
+        _, errors = self.normalize(self.stream(
+            self.turn_start, context, self.call, self.result, self.terminal
+        ))
+        self.assertTrue(any("not contiguous" in error for error in errors))
+
+    def test_orphan_result_is_rejected(self) -> None:
+        result = json.loads(json.dumps(self.result))
+        result["seq"] = 2
+        terminal = json.loads(json.dumps(self.terminal))
+        terminal["seq"] = 3
+        _, errors = self.normalize(self.stream(
+            self.turn_start, self.context, result, terminal
+        ))
+        self.assertIn("DeepSeek tool result has no call: call-1", errors)
+
+    def test_result_before_call_is_rejected(self) -> None:
+        result = json.loads(json.dumps(self.result))
+        result["seq"] = 2
+        call = json.loads(json.dumps(self.call))
+        call["seq"] = 3
+        _, errors = self.normalize(self.stream(
+            self.turn_start, self.context, result, call, self.terminal
+        ))
+        self.assertIn("DeepSeek tool result precedes its call: call-1", errors)
+
+    def test_malformed_arguments_are_rejected(self) -> None:
+        call = json.loads(json.dumps(self.call))
+        call["data"]["arguments"] = "not-json"
+        _, errors = self.normalize(self.stream(
+            self.turn_start, self.context, call, self.result, self.terminal
+        ))
+        self.assertIn(
+            "DeepSeek tool call arguments are not an object: call-1", errors
+        )
+
+    def test_outside_workspace_proposal_is_rejected(self) -> None:
+        call = json.loads(json.dumps(self.call))
+        arguments = json.loads(call["data"]["arguments"])
+        arguments["file_path"] = "/outside/shared.txt"
+        call["data"]["arguments"] = json.dumps(arguments)
+        _, errors = self.normalize(self.stream(
+            self.turn_start, self.context, call, self.result, self.terminal
+        ))
+        self.assertIn(
+            "DeepSeek proposed an operation outside workspace: call-1", errors
+        )
+
+    def test_provider_model_mismatch_is_rejected(self) -> None:
+        context = json.loads(json.dumps(self.context))
+        context["data"]["model"] = "different-model"
+        _, errors = self.normalize(self.stream(
+            self.turn_start, context, self.call, self.result, self.terminal
+        ))
+        self.assertIn(
+            "DeepSeek provider/model context disagrees with the pin", errors
+        )
+
+    def test_shell_exit_code_is_projected_separately_from_tool_error(self) -> None:
+        call = json.loads(json.dumps(self.call))
+        call["data"]["name"] = "bash"
+        call["data"]["arguments"] = json.dumps({
+            "command": "python3.11 -m unittest -v",
+        })
+        result = json.loads(json.dumps(self.result))
+        result["data"]["message"]["content"][0]["content"] = [{
+            "type": "text",
+            "text": "FAILED\n[exit code: 1]",
+        }]
+        lifecycle, errors = self.normalize(self.stream(
+            self.turn_start, self.context, call, result, self.terminal
+        ))
+        self.assertEqual(errors, [])
+        execution = lifecycle["tool_executions"][0]
+        self.assertFalse(execution["reported_error"])
+        self.assertEqual(execution["operation_exit_code"], 1)
+
+
 class RepairOutcomeTests(unittest.TestCase):
     @staticmethod
     def process(returncode: int) -> ProcessResult:
@@ -419,13 +622,15 @@ class RepairOutcomeTests(unittest.TestCase):
             {
                 "effect_kind": "command",
                 "operation": "python_unittest_v",
-                "reported_error": True,
+                "reported_error": False,
+                "operation_exit_code": 1,
             },
             {"effect_kind": "write", "reported_error": False},
             {
                 "effect_kind": "command",
                 "operation": "python_unittest_v",
                 "reported_error": False,
+                "operation_exit_code": 0,
             },
         ]
         result = repair_outcome(

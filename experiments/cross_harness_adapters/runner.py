@@ -7,14 +7,29 @@ import json
 
 import adapters
 
+SUBJECT_TIMEOUT_SECONDS = {
+    "claude": 120,
+    "codex": 120,
+    "deepseek": 240,
+    "hermes": 120,
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--subject", required=True, choices=("claude", "codex", "hermes"))
+    parser.add_argument(
+        "--subject",
+        required=True,
+        choices=("claude", "codex", "deepseek", "hermes"),
+    )
     parser.add_argument("--workload", default="write", choices=tuple(adapters.WORKLOADS))
     args = parser.parse_args()
     try:
-        capture = adapters.capture(args.subject, args.workload)
+        capture = adapters.capture(
+            args.subject,
+            args.workload,
+            timeout=SUBJECT_TIMEOUT_SECONDS[args.subject],
+        )
     except (adapters.AdapterError, OSError, TypeError, ValueError) as error:
         print(json.dumps({
             "schema": "cross-harness-experiment-run/v0.1",

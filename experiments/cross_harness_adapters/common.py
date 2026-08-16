@@ -305,11 +305,19 @@ def repair_outcome(
         kind = execution.get("effect_kind")
         reported_error = execution.get("reported_error")
         operation = execution.get("operation")
+        operation_exit_code = execution.get("operation_exit_code")
+        command_failed = reported_error is True or (
+            isinstance(operation_exit_code, int) and operation_exit_code != 0
+        )
+        command_passed = (
+            operation_exit_code == 0
+            or (operation_exit_code is None and reported_error is False)
+        )
         if (
             failed_command is None
             and kind == "command"
             and operation == "python_unittest_v"
-            and reported_error is True
+            and command_failed
         ):
             failed_command = index
         elif (
@@ -323,7 +331,7 @@ def repair_outcome(
             mutation is not None
             and kind == "command"
             and operation == "python_unittest_v"
-            and reported_error is False
+            and command_passed
         ):
             passing_command = index
             break

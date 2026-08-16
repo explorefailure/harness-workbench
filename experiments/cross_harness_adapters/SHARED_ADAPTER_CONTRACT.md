@@ -12,7 +12,7 @@ success, a tool failure, a timeout after a successful effect, and malformed
 subject evidence without confusing those outcomes.
 
 The contract specifies common evidence responsibilities. It does not require
-Claude, Codex, Hermes, and Pi to emit the same native events.
+Claude, Codex, DeepSeek Harness, Hermes, and Pi to emit the same native events.
 
 ## Required envelope
 
@@ -45,11 +45,12 @@ Each available attempt has:
   "tool_name": "subject tool family",
   "effect_kind": "read | write | command | other",
   "operation": "recognized semantic operation or null",
+  "operation_exit_code": "optional child exit status when recoverable",
   "arguments_sha256": "sha256:...",
   "arguments_stage": "subject_proposal | subject_event | pre_tool_call_hook",
   "reported_error": false,
   "result_stage": "subject_reported | hook_observer",
-  "acquisition": "native_jsonl | shell_hook"
+  "acquisition": "native_jsonl | native_persisted_jsonl | shell_hook"
 }
 ```
 
@@ -64,6 +65,12 @@ orphaned native tool completions, incomplete hook pairs, and post-before-pre
 hook ordering. A reported tool error remains a valid measured attempt; it does
 not make the adapter structurally invalid by itself.
 
+`reported_error` preserves the harness's own tool-result status. It is not
+silently rewritten from a shell exit code. DeepSeek's bash tool, for example,
+can report `isError: false` while its first-party result text ends with
+`[exit code: 1]`; the adapter projects that separate fact as
+`operation_exit_code: 1`, and workload oracles may use both fields.
+
 ## Capability observations
 
 | Harness | Acquisition | Strongest terminal evidence | Tool evidence | Observed limitation |
@@ -71,6 +78,7 @@ not make the adapter structurally invalid by itself.
 | Pi `0.84.1` | Native JSON stream | Native session lifecycle | Correlated native calls and results | Pi-specific extension and provider events must remain local. |
 | Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
+| DeepSeek Harness `0.1.0-rc.6` | Native persisted JSONL plus process | Native `turn/end` | Correlated `tool/call` / `tool/result`, plus projected bash exit marker | The supported headless stdout contains final text only; the developer-preview session format has no compatibility promise, and `tool/result.isError` is not a child-process exit verdict. |
 | Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs when a call occurs | The final repair run terminated cleanly after one read but never attempted red/edit/green; earlier probes also timed out or proposed outside-workspace paths. |
 
 Claude documents noninteractive `-p` operation and streamed JSON output, while
@@ -81,6 +89,11 @@ its hooks expose lifecycle and tool boundaries:
 Codex documents `codex exec` as its noninteractive surface, with JSONL output,
 ephemeral runs, ignored config/rules, and selectable sandbox policy:
 <https://developers.openai.com/codex/cli/reference>.
+
+DeepSeek documents `dsh --profile headless` as a one-task persisted session that
+prints final assistant text and exits. The official repository labels the
+harness a developer preview with breaking changes:
+<https://github.com/deepseek-ai/deepseek-harness>.
 
 Hermes documents shell hooks as JSON pre/post observers that may block a call;
 the CLI process remains the terminal boundary when no native event stream is
@@ -94,14 +107,14 @@ available:
   security boundary.
 - No assumption that process exit zero proves the requested task succeeded.
 - No assumption that a durable effect proves the harness finished cleanly.
-- No extraction into Workbench core until Hermes completes a second workload
-  and the remaining containment/redaction edge cases are tested.
+- No extraction into Workbench core until Hermes completes the live workload
+  matrix and the remaining containment/redaction edge cases are tested.
 
 ## Promotion gate
 
 Promote this shape only after:
 
-1. the three sealed discovery records compare successfully at the contract
+1. the four sealed discovery records compare successfully at the contract
    layer, even when a subject or outcome verdict is negative;
 2. mutation tests make each normalizer reject false-success lifecycle records;
 3. each harness completes at least one second workload through the same adapter;
@@ -109,7 +122,9 @@ Promote this shape only after:
    terminal event; and
 5. credential redaction and bounded raw-capture limits are implemented.
 
-Current status: gates 1, 2, 4, and 5 have passing sealed evidence. Gate 3 is
-complete for Claude and Codex. Hermes produced valid adapter evidence on the
-second workload but stopped after one read without performing the repair, so
-promotion remains blocked.
+Current status: gates 1, 2, 4, and 5 have passing evidence. Final four-subject
+write and repair comparisons both return `contract_passed: true`. Gate 3 is
+complete for Claude and Codex. DeepSeek completed one earlier repair probe but
+did not repeat it in two final-source samples; Hermes produced valid adapter
+evidence on the repair workload but stopped after one read. Promotion remains
+blocked.

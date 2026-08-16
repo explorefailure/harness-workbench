@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and compare three shared-contract candidate envelopes."""
+"""Validate and compare four shared-contract candidate envelopes."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUBJECTS = {"claude", "codex", "hermes"}
+SUBJECTS = {"claude", "codex", "deepseek", "hermes"}
 
 
 def load_source(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -143,7 +143,9 @@ def compare(paths: list[Path]) -> dict[str, Any]:
                 errors.append(f"{subject} adapter is missing {field}")
 
     if set(by_subject) != SUBJECTS:
-        errors.append("comparison requires exactly Claude, Codex, and Hermes")
+        errors.append(
+            "comparison requires exactly Claude, Codex, DeepSeek, and Hermes"
+        )
 
     if by_subject:
         prompts = {
@@ -187,7 +189,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("sources", nargs=3, type=Path)
+    parser.add_argument("sources", nargs=4, type=Path)
     args = parser.parse_args()
     try:
         result = compare(args.sources)

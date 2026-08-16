@@ -195,3 +195,78 @@ number an unbounded process would eventually have emitted.
 **Next.** Add adversarial encoding mutations and an actual escaped-session
 containment mechanism before treating the redaction and process boundary as
 security controls.
+
+## E05 — DeepSeek Harness native persisted lifecycle
+
+**Question.** Can the official DeepSeek Harness join the candidate adapter
+without treating final-text stdout as tool evidence or pretending its event
+surface matches another harness?
+
+**Expectation.** The adapter pins the installed developer-preview CLI, runs one
+isolated headless profile, preserves the native session log, correlates
+`tool/call` with `tool/result`, requires one ordered native `turn/end`, and keeps
+adapter and workload verdicts separate from model behavior.
+
+**Setup.** DeepSeek Harness `0.1.0-rc.6` with exact launcher digest and npm
+integrity routes content-pinned local Ollama `qwen3.5:9b` through the harness's
+generic `llm-pi-ai` plugin. Each run receives temporary `HOME`, `DSH_HOME`, and
+XDG directories, uncompressed one-event-per-line persistence, the
+`workspace-write` sandbox, a named noninteractive approval preset, a reduced
+tool catalog, disabled title generation and runtime-context injection,
+reasoning effort `off`, and an 8,192-token per-step cap. No external API key is
+required.
+
+**Evidence.** The deterministic suite passes 37 tests. DeepSeek mutations cover
+duplicate terminals, noncontiguous sequence numbers, orphaned and reordered
+results, malformed arguments, outside-workspace proposals, provider/model
+mismatch, valid log-scoped permission preludes, and a shell exit code that
+differs from the harness's tool-error boolean. Final sealed write run
+`20260816T062928Z-7705d2-5400` and repair run
+`20260816T063251Z-a59787-c36a` both conform. The final write and repair
+four-subject comparisons each return `contract_passed: true` with matching
+nine- and eleven-input freeze, receipt, and adapter maps. All eight selected
+records verify as complete and conforming.
+
+**Result.** DeepSeek passes the write workload. It ends with native
+`turn/end { kind: "completed" }`, three correlated tool attempts, 252 events,
+53,646 raw sidecar bytes, and the exact 22-byte effect. The final repair sample
+also has a valid completed native lifecycle—176 events, three correlated reads,
+and 41,595 sidecar bytes—but makes no mutation, leaves the external suite red,
+and correctly fails only the outcome. An immediate unchanged-input repeat
+`20260816T063511Z-a59787-fe5d` stops after one read with the same outcome. One
+earlier pre-hardening probe completed the six-attempt red → edit → green path,
+showing the route can work but is not repeatable with this local model.
+
+Several exploratory runs were also useful negatives. Inheriting global homes
+loaded unrelated skills; title generation contended with the serial local
+model; runtime-context injection looked like a second task; ambiguous byte
+wording produced 21 bytes; and long reasoning streams hit `max-tokens`. Native
+isolation plus provider reasoning `off`, suppressed runtime context, a smaller
+step cap, and procedural fixtures produced the final stable configuration.
+
+**Learned.** A supported CLI need not stream machine-readable events to expose
+strong lifecycle evidence; first-party durable session logs can be the
+acquisition surface. Log-scoped permission events legitimately precede the
+single task turn, so “turn starts at event zero” is a false invariant. A
+tool-result error flag is not universally a child-process exit verdict:
+DeepSeek bash uses `isError: false` for a command that ran and places its exit
+status in the first-party result text. The two facts must stay separate.
+
+**Code consequence.** **Candidate for reuse.** DeepSeek is a fourth live subject
+with persisted-JSONL normalization, frozen write/repair specs, local content
+identity, and separate `reported_error` / `operation_exit_code` fields. Keep
+`sidecar_kind` explicit and rename the legacy `hook_evidence` slot only in a
+future schema revision. Do not promote the shared adapter into Workbench core
+until DeepSeek and Hermes complete repeatable repair workloads and the expanded
+matrix gains steadiness evidence.
+
+**Limits.** The pinned launcher digest plus npm integrity does not content-bind
+every imported dependency. The upstream developer preview explicitly permits
+breaking changes. Local model bytes are pinned, but sampling remains
+nondeterministic. Workspace-write and temporary homes reduce exposure; they are
+not global containment proofs. The bash exit-code projection depends on the
+current first-party `[exit code: N]` result format.
+
+**Next.** Repeat or steady the final four-subject matrix, finish the Hermes
+repair diagnosis, then decide whether a schema revision and core adapter
+interface are justified.

@@ -10,6 +10,13 @@
     "model": "gpt-5.6-luna",
     "executable_sha256": "29915529b97697def1a957b0505e770aa6a45744435d62fc263e98d7619e167a"
   },
+  "deepseek_harness": {
+    "version": "0.1.0-rc.6",
+    "provider": "workbench-ollama",
+    "model": "qwen3.5:9b",
+    "executable_sha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62",
+    "npm_integrity": "sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg=="
+  },
   "hermes_agent": {
     "version": "0.16.0",
     "source_commit": "33b1d144590a211100f42aa911fd7f91ba031507",
