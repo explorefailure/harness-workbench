@@ -103,11 +103,25 @@ class CaptureSoakTests(unittest.TestCase):
         self.assertEqual(capture.TIMEOUT, item["termination_reason"])
         self.assertTrue(item["exit_was_signal"])
 
-    def test_orphan_child_does_not_extend_the_run(self):
-        """The grandchild holds the pipe; the run ends at child exit anyway."""
+    def test_orphan_child_is_detected_and_then_cleaned_up(self):
+        """The grandchild holds the pipe; the run ends at child exit anyway.
+
+        The `before` assertion is the one that matters: it proves the orphan
+        was seen. Without it this scenario would pass against an
+        implementation that never checked the group at all.
+        """
         item = self.projection("orphan_child")
         self.assertEqual(0, item["returncode"])
         self.assertIsNone(item["termination_reason"])
+        self.assertTrue(item["group_alive_before_cleanup"])
+
+    def test_only_the_orphan_scenario_leaves_anything_before_cleanup(self):
+        for name, entry in self.report["scenarios"].items():
+            with self.subTest(scenario=name):
+                self.assertEqual(
+                    name == "orphan_child",
+                    entry["projection"]["group_alive_before_cleanup"],
+                )
 
     def test_evidence_corruption_keeps_the_records_that_parsed(self):
         sidecar = self.projection("evidence_corruption")["sidecar"]

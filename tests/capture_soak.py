@@ -125,8 +125,11 @@ def stable_projection(name: str, result: capture.Bounded, sidecar: Any) -> dict[
         "stderr_sha256": capture.digest_bytes(result.stderr),
         "stdout_bytes": len(result.stdout),
         "stderr_bytes": len(result.stderr),
-        # The whole point of the cleanup contract: whatever the subject did,
-        # nothing of it is left behind. This must hold in every scenario.
+        # Both halves of the cleanup contract. `before` is the positive receipt
+        # that an orphan was *detected* -- without it the orphan scenario would
+        # pass just as happily against code that never looked. `after` is the
+        # promise that nothing was left behind, and must hold in every scenario.
+        "group_alive_before_cleanup": result.group_alive_before_cleanup,
         "group_alive_after_cleanup": result.group_alive_after_cleanup,
         "forwarded_signals": list(result.forwarded_signals),
     }
