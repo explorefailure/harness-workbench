@@ -10,10 +10,21 @@ contained, whether an inverted decision changed downstream behavior, whether
 a detector observed an input mutation, and whether verdict engines reject a
 known record violation.
 
+It is built for two jobs:
+
+- **Test your own harness ideas.** Write a feature, attach it to a step, then
+  invert it and check that something noticed. See
+  [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md).
+- **Test somebody else's harness.** `hwb subjects --into ./subjects` copies a
+  ready-made tree that runs Claude Code, Codex CLI, DeepSeek Harness, Hermes
+  Agent, and Pi as measured subjects, projecting five different native
+  evidence surfaces into one envelope. See
+  [Measuring another harness](#measuring-another-harness).
+
 Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
 with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 327 tests.
+runtime dependencies, Python 3.11+, 329 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -207,6 +218,43 @@ quality labels.
 Full guide: [`docs/measuring.md`](docs/measuring.md), including a section on
 what the instrument **cannot** see.
 
+## Measuring another harness
+
+A *feature* is a control you own and can invert. A *subject* is a harness you
+run from the outside and measure. The shipped subject tree covers five:
+
+```console
+$ hwb subjects --into ./subjects
+```
+
+`hwb subjects` with no destination lists what ships instead of copying it.
+Once the tree is yours, its own suite runs with no network and no third-party
+client installed; the subject runs need that subject present:
+
+```sh
+cd subjects
+python3 -m unittest test_experiment.py            # 37 tests, offline
+python3 runner.py --subject claude --workload repair
+```
+
+The tree is copied out rather than run in place, and that is the point: each
+spec declares its adapter sources in `inputs`, so `freeze` and `receipt`
+digest the exact bytes that ran. An adapter imported from the installed
+package would instead make "which adapter ran" a property of whichever
+version happened to be installed.
+
+**It is not a stable API.** Every subject is pinned to an exact third-party
+release, and one of them is a developer preview that documents breaking
+changes as expected. The tree ships so the workbench can demonstrate itself
+against real harnesses; `src/` imports nothing from it, and the pins are
+yours to update.
+
+Each subject exposes a different interception surface — some can deny a tool
+call, fewer can rewrite its input, fewer still can rewrite its result. Those
+differences are the interesting part, and
+[`SHARED_ADAPTER_CONTRACT.md`](src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md)
+records them per harness.
+
 ## Commands
 
 Two kinds, and mixing them up is the most common first mistake:
@@ -214,6 +262,7 @@ Two kinds, and mixing them up is the most common first mistake:
 - **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy`
 - **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
   `replay` `interfere` `order`
+- **take neither** — `ls`, and `subjects` (copies the shipped subject tree)
 
 Use `hwb --help` or `hwb <command> --help` for the registered command and
 option reference.

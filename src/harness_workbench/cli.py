@@ -66,6 +66,38 @@ def cmd_run(args) -> int:
     return 0          # a harness that worked exits 0, whatever the steps did
 
 
+def cmd_subjects(args) -> int:
+    from . import subject_tree
+
+    if args.into is None:
+        files = subject_tree.subject_files()
+        if not files:
+            return _fail("no subject tree is installed with this package")
+        for name in files:
+            print(name)
+        return 0
+
+    try:
+        written, skipped = subject_tree.materialize(args.into, force=args.force)
+    except FileNotFoundError as error:
+        return _fail(str(error))
+
+    for name in written:
+        print("wrote %s" % os.path.join(args.into, name))
+    if skipped:
+        # Loud, because a partial copy that looks complete is how someone ends
+        # up measuring a mixture of their edits and the shipped defaults.
+        print("skipped %d existing file(s); re-run with --force to overwrite:"
+              % len(skipped))
+        for name in skipped:
+            print("  %s" % name)
+    if written:
+        print("\nRead %s, then run a subject:"
+              % os.path.join(args.into, "README.md"))
+        print("  cd %s && python3 -m unittest test_experiment.py" % args.into)
+    return 0
+
+
 def _run_dirs(root: str) -> List[str]:
     if not os.path.isdir(root):
         return []
@@ -781,6 +813,17 @@ def build_parser() -> argparse.ArgumentParser:
     r = command("run")
     r.add_argument("spec", help="path to a spec JSON file")
     r.set_defaults(func=cmd_run)
+
+    sj = command("subjects")
+    # No positional: every id-taking positional has to be visible to the
+    # misplaced-spec guard, and a bare verb would be invisible to it while
+    # looking exactly like a path someone typed in the wrong slot.
+    sj.add_argument("--into", default=None,
+                    help="copy the tree into this directory (without it, list "
+                         "what ships)")
+    sj.add_argument("--force", action="store_true",
+                    help="overwrite files that already exist in the destination")
+    sj.set_defaults(func=cmd_subjects)
 
     l = command("ls")
     l.set_defaults(func=cmd_ls)

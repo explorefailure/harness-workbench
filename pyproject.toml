@@ -61,7 +61,21 @@ package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-harness_workbench = ["builtin/*/*.py", "builtin/*/FEATURE.json"]
+# The subject tree ships for the same reason the builtin features do: so an
+# install can demonstrate itself against real harnesses. It is DATA, never
+# imported -- `hwb subjects init` copies it into a directory the user owns,
+# where each spec's `inputs` digest covers the exact adapter bytes that ran.
+harness_workbench = [
+    "builtin/*/*.py",
+    "builtin/*/FEATURE.json",
+    "subjects/*.py",
+    "subjects/*.json",
+    "subjects/*.md",
+    "subjects/*.sh",
+    "subjects/*.yml",
+    "subjects/*.yaml",
+    "subjects/repair_fixture/*.py",
+]
 
 [tool.setuptools.dynamic]
 # A literal assignment lets setuptools read the value without importing the

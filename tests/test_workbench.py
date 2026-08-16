@@ -3657,14 +3657,70 @@ class TestPackageIdentity(unittest.TestCase):
         project = read_text(os.path.join(ROOT, "pyproject.toml"))
         self.assertIn('name = "harness-workbench"', project)
         self.assertIn('hwb = "harness_workbench.cli:main"', project)
-        self.assertIn('harness_workbench = ["builtin/*/*.py", '
-                      '"builtin/*/FEATURE.json"]', project)
+        # Structural, not literal: the claim is that package data is declared
+        # under the import namespace and not the legacy one. Pinning the exact
+        # formatting made this fail whenever a shipped tree was added, which is
+        # not what the test is about.
+        import tomllib
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
+            package_data = tomllib.load(fh)["tool"]["setuptools"]["package-data"]
+        self.assertEqual(["harness_workbench"], list(package_data))
+        for glob in ("builtin/*/*.py", "builtin/*/FEATURE.json"):
+            self.assertIn(glob, package_data["harness_workbench"])
         self.assertTrue(os.path.isfile(
             os.path.join(ROOT, "src", "harness_workbench", "__init__.py")))
         self.assertFalse(os.path.exists(os.path.join(ROOT, "src", "hwb")))
 
     def test_builtin_locator_uses_the_import_namespace(self):
         self.assertEqual(features.BUILTIN, "harness_workbench:builtin")
+
+    def test_subject_tree_ships_runnable_and_is_never_imported(self):
+        from harness_workbench import subject_tree
+
+        shipped = subject_tree.subject_files()
+        self.assertTrue(shipped, "no subject tree shipped with the package")
+        # The tree is only useful if a spec, its adapter, and something to run
+        # all arrive together.
+        for required in ("adapters.py", "common.py", "runner.py",
+                         "run_subject.sh", "claude.json", "pin.json",
+                         "model_selection.json", "README.md"):
+            self.assertIn(required, shipped)
+
+        # DATA, NEVER IMPORTED. Core reaching into the subject tree would make
+        # five externally-pinned third-party integrations part of the package's
+        # own import graph, and a broken adapter would then break `import
+        # harness_workbench` rather than one experiment.
+        package = os.path.join(ROOT, "src", "harness_workbench")
+        for entry in sorted(os.listdir(package)):
+            if not entry.endswith(".py"):
+                continue
+            source = read_text(os.path.join(package, entry))
+            self.assertNotIn("from .subjects", source)
+            self.assertNotIn("import subjects\n", source)
+
+    def test_subject_tree_materializes_without_clobbering(self):
+        from harness_workbench import subject_tree
+
+        tmp = tempfile.mkdtemp(prefix="hb-subjects-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        destination = os.path.join(tmp, "materialized")
+        written, skipped = subject_tree.materialize(destination)
+        self.assertEqual(sorted(written), subject_tree.subject_files())
+        self.assertEqual([], skipped)
+
+        target = os.path.join(destination, "adapters.py")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("# edited by whoever owns this copy\n")
+
+        written, skipped = subject_tree.materialize(destination)
+        self.assertEqual([], written)
+        self.assertEqual(sorted(skipped), subject_tree.subject_files())
+        self.assertEqual("# edited by whoever owns this copy\n",
+                         read_text(target))
+
+        written, skipped = subject_tree.materialize(destination, force=True)
+        self.assertEqual([], skipped)
+        self.assertNotIn("edited by whoever", read_text(target))
 
     def test_source_and_project_metadata_have_one_version_authority(self):
         import tomllib
@@ -4165,6 +4221,11 @@ REGISTERED_TRANSCRIPTS = {
     # Exits 1 on purpose: nothing in that spec detects anything, so `caught 0/3`
     # is the honest verdict and a zero exit would be the lie.
     "hwb catch mine.json": {"cwd": _ATTACH, "exit": 1},
+    # The cwd is arbitrary: `subjects` copies out of the installed package and
+    # reads nothing from the working directory. It needs *a* sandbox, not a
+    # fixture, so it reuses one rather than adding an example that exists only
+    # to be a destination.
+    "hwb subjects --into ./subjects": {"cwd": _FLAKY},
     'hwb show "$RUN"': {"cwd": _ATTACH, "run_first": "mine.json"},
     'hwb confine "$RUN"': {"cwd": _ATTACH, "run_first": "mine.json"},
 }

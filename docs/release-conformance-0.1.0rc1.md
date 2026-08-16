@@ -291,6 +291,7 @@ command fails the suite until this record routes it.
 - `hwb --version`
 - `python -m harness_workbench --help`
 - `hwb run --help`
+- `hwb subjects --help`
 - `hwb ls --help`
 - `hwb show --help`
 - `hwb verify --help`

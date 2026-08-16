@@ -1,129 +1,65 @@
-# Cross-harness adapter experiment
+# Cross-harness adapter experiment (research record)
 
-This experiment runs an exact file-write task and a red → edit → green repair
-task through Claude Code, Codex CLI, DeepSeek Harness, and Hermes Agent, then
-projects their
-different evidence surfaces into the
-candidate contract in
-[`SHARED_ADAPTER_CONTRACT.md`](SHARED_ADAPTER_CONTRACT.md). Pi remains the
-reference integration; these are the independent harnesses used to find what is
-actually shared.
+The runnable tree now ships with the package at
+`src/harness_workbench/subjects/`, and `hwb subjects --into <dir>` copies it
+out. This directory keeps the research record only — `LEARNINGS.md` — so that
+the code has exactly one home and cannot drift between two copies.
 
-The common workload creates `shared.txt` containing exactly
-`cross-harness control\n`. The adapter captures the subject lifecycle and raw
-streams. A separate oracle compares before/after manifests and exact bytes.
-Adapter success and outcome success are intentionally independent. The repair
-oracle accepts different valid implementations, but requires only `slugger.py`
-to change, an externally red/green suite, and subject evidence for the exact
-unittest operation ordered around the write.
-
-## Run
-
-The identities in `pin.json` must match the installed clients. Claude and Codex
-use their existing authenticated clients. DeepSeek Harness uses the official
-`dsh` headless profile with temporary `HOME`, `DSH_HOME`, and XDG directories.
-Its generic `llm-pi-ai` plugin routes the content-pinned local
-`qwen3.5:9b` model through Ollama's loopback OpenAI-compatible endpoint, so no
-external API key is required. The experiment supplies only the placeholder
-key-shaped value required by that provider profile and treats it as a redacted
-credential. `dsh_patch.yml` retains workspace confinement while making the run
-noninteractive. Hermes uses the same pinned local Ollama model and a temporary
-`HERMES_HOME`; only its workload toolsets are enabled. The Hermes source
-checkout defaults to `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is
-installed elsewhere.
+To run anything described in `LEARNINGS.md`:
 
 ```sh
-python3.11 -m unittest -v test_experiment.py
-python3.11 runner.py --subject claude
-python3.11 runner.py --subject codex
-python3.11 runner.py --subject deepseek
-python3.11 runner.py --subject hermes
-python3.11 runner.py --subject claude --workload repair
-python3.11 runner.py --subject codex --workload repair
-python3.11 runner.py --subject deepseek --workload repair
-python3.11 runner.py --subject hermes --workload repair
-python3.11 runner.py --subject pi
-python3.11 runner.py --subject pi --workload repair
-python3.11 fault_runner.py
+hwb subjects --into ./subjects
+cd subjects
+python3 -m unittest test_experiment.py
 ```
 
-Pi is the reference integration and was deliberately excluded while this
-contract was derived, so that the shared envelope could not simply inherit Pi's
-shape. It is included here as a fifth subject to *test* the envelope rather than
-to inform it: what Pi cannot express through the shared contract is a finding
-about the contract. Pi's own richer schema stays in `experiments/pi_coding_agent`.
+The contract those runs are judged against is
+[`SHARED_ADAPTER_CONTRACT.md`](../../src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md).
 
-Run each as a frozen, receipted Workbench discovery record:
+## Deferred: the rest of the intervention matrix
 
-```sh
-PYTHONPATH=../../src python3.11 -m harness_workbench run claude.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run codex.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run deepseek.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run hermes.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run repair_claude.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run repair_codex.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run repair_deepseek.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run repair_hermes.json
-PYTHONPATH=../../src python3.11 -m harness_workbench run faults.json
-```
+Five subjects currently run two **observational** workloads — an exact write
+and a red → edit → green repair. Both ask "did the subject do the task," which
+measures the subject, not a control.
 
-Compare either four saved outer-envelope JSON files or four Workbench run
-directories:
+The interesting experiments invert a control the way `efficacy` does for
+features. `experiments/pi_coding_agent/` already has nine such families built
+against Pi's extension API; only the first has been generalized. They do not
+port as implementations — each harness intercepts through a different
+mechanism (Pi extensions, Claude and Codex hook JSON, Hermes shell hooks,
+DeepSeek plugins) — so each cell needs interceptor code written in that
+harness's own form.
 
-```sh
-python3.11 compare.py \
-  runs/<claude-id> runs/<codex-id> runs/<deepseek-id> runs/<hermes-id>
-```
+| Family | Pi spec | Ported | Question |
+|---|---|---|---|
+| tool guard | `allow` / `block` | planned first | does a guard actually stop the call? |
+| interceptor failure | `audit_first` / `throw_first` | no | when an interceptor crashes, does the call proceed? |
+| result-stage failure | `result_audit_first` / `result_throw_first` | no | same, after the tool ran |
+| policy order | `allow_first` / `block_first` | no | when two policies conflict, who wins? |
+| composition order | `guard_first` / `mutate_first` | no | does interceptor order change the effect? |
+| result rewrite | `result_mask_first` / `result_restore_first` | no | can a result be masked, then restored? |
+| branch honesty | `branch_honest` / `branch_falsified` | no | is a rewritten result detectable as a lie? |
+| failure honesty | `failure_honest` / `failure_falsified` | no | is a rewritten failure detectable? |
+| plan vs act | `plan_mode` / `action_mode` | no | does plan mode actually withhold effects? |
 
-`contract_passed` means the records satisfy the shared evidence contract. It
-does not require every harness to finish the task. Inspect each subject's
-`adapter_passed`, `outcome_passed`, and `timed_out` values separately.
+Capability limits already known, from `SHARED_ADAPTER_CONTRACT.md`:
 
-## Safety and limits
+- **deny a call** — all five, so the guard family is the portable one;
+- **rewrite tool input** — Claude yes, Codex unverified, Hermes has no
+  documented mechanism, DeepSeek unknown;
+- **rewrite tool result** — Claude and Pi only;
+- **interceptor ordering** — needs two interceptors with defined order;
+  documented for Pi and Hermes, unclear elsewhere.
 
-The workspace is disposable and repo-local so Hermes does not reject macOS's
-resolved `/private/var` temporary path. The adapter also binds `PWD`,
-`TERMINAL_CWD`, and `HERMES_WRITE_SAFE_ROOT` to that workspace and rejects any
-hook-observed outside-workspace proposal. Hermes runs with `--yolo`, but
-receives only the file toolset and the test directory contains only copied
-fixture inputs. This reduces exposure; it is not containment.
+The holes are findings, not gaps to paper over: a harness that cannot express
+an intervention is evidence about that harness's interception surface.
 
-DeepSeek Harness keeps its `workspace-write` filesystem sandbox. The experiment
-patch replaces interactive approval with a named noninteractive preset and
-disables subagent, workflow, Ralph, background-job, skill, goal, todo, search,
-and web tools. Automatic title generation and the irrelevant dynamic runtime
-context snapshot are disabled; the local provider declares reasoning `off` and
-an 8,192-token per-step cap. Its supported headless stdout is final text only,
-so the adapter collects the first-party uncompressed session log from the
-isolated `DSH_HOME` and normalizes native `tool/call`, `tool/result`, and
-`turn/end` events. The current schema stores those raw sidecar bytes in the
-legacy `hook_evidence` capture slot with
-`sidecar_kind: native_persisted_session_jsonl`.
+Highest value first, because the answers are already known to differ: the
+**interceptor-failure** family. Hermes shell hooks fail *open* while its
+plugin-approve and ACP edit-approval paths fail *closed* (see E-notes). "We
+crashed the policy hook on five agent harnesses; here is which ones let the
+write through" is a safety result, not a capability comparison.
 
-Stdout, stderr, and hook evidence have positive byte limits. Exceeding stdout or
-stderr terminates the owned process group; the Hermes hook refuses a sidecar
-append that would exceed its limit. Credential-looking environment values are
-scrubbed before captured bytes are serialized, and credential variables are not
-passed to the local Hermes process. Stored captures report source byte counts,
-stored digests, redaction counts, overflow state, and termination reason.
-An escaped child can outlive the owned group, but it cannot hold the adapter's
-capture loop open indefinitely.
-
-Do not put secrets in prompts, arguments, or fixtures. Agent behavior remains
-nondeterministic even when local model bytes are pinned, and a hosted model
-label does not content-pin the remote service. These are discovery runs, not
-confirmation runs.
-
-## GitHub release readiness
-
-The DeepSeek adapter is ready to include as experiment-local discovery work:
-both final four-subject comparisons pass, all eight records verify, and
-DeepSeek passes the exact-write workload. Its repair adapter conforms, but two
-final-source samples did not complete the repair, so the pinned local model is
-not a stable repair subject. Promotion of the shared adapter contract into
-Workbench core is still blocked on successful repeatable DeepSeek and Hermes
-repair runs, steadiness evidence for the expanded matrix, and an explicit core
-API/schema review. Before a public GitHub release, rerun the repository's
-existing release procedure and CI from the final commit, review the
-developer-preview DeepSeek version pin, and update the release conformance
-record; do not push or tag from this experiment alone.
+**Open before that work starts:** DeepSeek's interception surface is the one
+unknown. It needs a probe before it can be committed to any intervention
+family.
