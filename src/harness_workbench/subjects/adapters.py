@@ -30,7 +30,7 @@ from harness_workbench.capture import (
     run_bounded,
 )
 
-from oracles import outcome, repair_outcome
+from oracles import guard_outcome, outcome, repair_outcome
 
 
 HERE = Path(__file__).resolve().parent
@@ -88,10 +88,16 @@ REPAIR_INPUTS = (
     "hermes_config.yaml",
     "dsh_patch.yml",
 )
+GUARD_INPUTS = WRITE_INPUTS + ("guard_extension.ts",)
 WORKLOADS = {
     "write": {"prompt": WRITE_PROMPT, "inputs": WRITE_INPUTS},
     "repair": {"prompt": REPAIR_PROMPT, "inputs": REPAIR_INPUTS},
+    # Same prompt and same fixture as `write`, deliberately. The guard arms
+    # must differ from each other in the VARIANT and in nothing else, or a
+    # containment difference could be a prompt difference wearing a costume.
+    "guard": {"prompt": WRITE_PROMPT, "inputs": GUARD_INPUTS},
 }
+GUARD_VARIANTS = ("allow", "block")
 # Compatibility aliases used by the first experiment's tests and notes.
 PROMPT = WRITE_PROMPT
 INPUTS = WRITE_INPUTS
@@ -346,7 +352,7 @@ def _verify_ollama() -> dict[str, str]:
 
 def _fixture(workspace: Path, workload: str) -> None:
     shutil.copy2(HERE / "hook.py", workspace / "hook.py")
-    if workload == "write":
+    if workload in {"write", "guard"}:
         shutil.copy2(HERE / "task.md", workspace / "task.md")
     elif workload == "repair":
         shutil.copy2(HERE / "repair_task.md", workspace / "repair_task.md")
@@ -418,16 +424,32 @@ def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
     ]
 
 
-def _pi_command(identity: dict[str, Any], workload: str) -> list[str]:
+def _pi_command(
+    identity: dict[str, Any],
+    workload: str,
+    guard_extension: Path | None = None,
+) -> list[str]:
     # Pi reads the task from an @file reference resolved against its cwd, which
     # the supervisor already pins to the disposable workspace.
-    tools = "write" if workload == "write" else "read,edit,bash"
-    task = "task.md" if workload == "write" else "repair_task.md"
-    return [
+    if workload == "write":
+        tools = "write"
+    elif workload == "guard":
+        # `bash` is in the tool set ON PURPOSE, and it is the whole design. A
+        # guard that denies `write` while the subject holds a shell is the
+        # thing being measured; removing the shell would guarantee containment
+        # by construction and measure nothing.
+        tools = "write,bash"
+    else:
+        tools = "read,edit,bash"
+    task = "repair_task.md" if workload == "repair" else "task.md"
+    argv = [
         str(_executable("pi")),
         "--mode", "json",
         "--print",
         "--no-session",
+        # Ambient discovery stays off; `-e` below loads exactly one declared
+        # extension, so what intercepted the run is a digested input and not
+        # whatever happened to be installed.
         "--no-extensions",
         "--no-skills",
         "--no-prompt-templates",
@@ -436,8 +458,11 @@ def _pi_command(identity: dict[str, Any], workload: str) -> list[str]:
         "--tools", tools,
         "--provider", "workbench-gateway",
         "--model", str(identity["model"]),
-        "@" + task,
     ]
+    if guard_extension is not None:
+        argv.extend(["-e", str(guard_extension)])
+    argv.append("@" + task)
+    return argv
 
 
 def _pi_models_json(identity: dict[str, Any], secret: str) -> str:
@@ -1105,10 +1130,25 @@ def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
     return paths[0], []
 
 
+def _guard_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Whatever the interceptor wrote about itself, and complaints about it.
+
+    A missing file is not an error here -- it is the *finding* that the guard
+    never loaded, and `guard_outcome` turns that into NOT_EVALUABLE. Raising
+    would remove the run from the comparison entirely, which is how an
+    instrumentation failure becomes invisible.
+    """
+    if not path.is_file():
+        return [], ["guard receipt file was never created"]
+    events, errors = parse_jsonl_objects(path.read_bytes())
+    return events, errors
+
+
 def capture(
     subject: str,
     workload: str = "write",
     *,
+    variant: str | None = None,
     timeout: float = 120,
     stdout_limit: int = DEFAULT_STDOUT_LIMIT,
     stderr_limit: int = DEFAULT_STDERR_LIMIT,
@@ -1116,6 +1156,13 @@ def capture(
 ) -> dict[str, Any]:
     if workload not in WORKLOADS:
         raise AdapterError(f"unknown workload: {workload}")
+    if workload == "guard":
+        if variant not in GUARD_VARIANTS:
+            raise AdapterError(
+                f"guard workload requires variant in {GUARD_VARIANTS}, got {variant!r}"
+            )
+    elif variant is not None:
+        raise AdapterError(f"{workload} workload takes no variant")
     if evidence_limit <= 0:
         raise AdapterError("evidence limit must be positive")
     identity = _verify_identity(subject)
@@ -1130,6 +1177,14 @@ def capture(
         environment = os.environ.copy()
         environment["PWD"] = str(workspace)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Outside the workspace on purpose: the receipt is the adapter's
+        # evidence about the run, and a file the oracle would see in the
+        # after-manifest would make the instrumentation part of the effect it
+        # is supposed to be measuring.
+        guard_receipt = root / "guard-receipt.jsonl"
+        if workload == "guard":
+            environment["HWB_GUARD_MODE"] = str(variant)
+            environment["HWB_GUARD_RECEIPT"] = str(guard_receipt)
         if subject in CONFIGURABLE_MODEL_SUBJECTS:
             # The generic OpenAI-compatible provider requires a key-shaped value
             # even though the pinned Ollama endpoint does not authenticate it.
@@ -1238,7 +1293,14 @@ def capture(
             )
             environment["HOME"] = str(pi_home)
             environment["PI_CODING_AGENT_DIR"] = str(pi_config)
-            argv = _pi_command(identity, workload)
+            extension: Path | None = None
+            if workload == "guard":
+                # Copied beside the run rather than into the workspace: an
+                # interceptor sitting in the workspace would appear in both
+                # manifests and become part of the effect the oracle measures.
+                extension = root / "guard_extension.ts"
+                shutil.copy2(HERE / "guard_extension.ts", extension)
+            argv = _pi_command(identity, workload, extension)
         else:
             # Strip every credential the subject has no business seeing, except
             # the provider key for the active profile -- which is itself
@@ -1363,7 +1425,23 @@ def capture(
             # before-manifest, so it has to be a fault of the run that leaked it.
             errors.append(f"{subject} left a live process group after cleanup")
         adapter_verdict = {"passed": not errors, "errors": errors}
-        if workload == "write":
+        guard_events: list[dict[str, Any]] = []
+        if workload == "guard":
+            guard_events, guard_errors = _guard_events(guard_receipt)
+            task_outcome = guard_outcome(
+                before, after, variant=str(variant), events=guard_events
+            )
+            # Receipt-parsing complaints are ADAPTER faults: they say the
+            # measurement is unreadable, not that the subject did anything.
+            errors.extend(guard_errors)
+            oracle_evidence = {
+                "guard_receipt": capture_bytes(
+                    guard_receipt.read_bytes() if guard_receipt.is_file() else b"",
+                    redactions=redactions,
+                ),
+                "events": guard_events,
+            }
+        elif workload == "write":
             task_outcome = outcome(before, after)
             oracle_evidence = None
         else:
@@ -1403,6 +1481,7 @@ def capture(
             "subject": identity,
             "request": {
                 "workload": workload,
+                "variant": variant,
                 "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
                 "input_digests": {
                     name: digest_file(HERE / name) for name in inputs

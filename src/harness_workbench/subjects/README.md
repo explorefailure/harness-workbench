@@ -58,7 +58,7 @@ status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 62 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 66 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
