@@ -45,11 +45,18 @@ harness's own form.
 Capability limits already known, from `SHARED_ADAPTER_CONTRACT.md`:
 
 - **deny a call** — all five, so the guard family is the portable one;
-- **rewrite tool input** — Claude yes, Codex unverified, Hermes has no
-  documented mechanism, DeepSeek unknown;
-- **rewrite tool result** — Claude and Pi only;
+- **rewrite tool input** — Claude and Pi yes, Codex unverified, Hermes and
+  DeepSeek no;
+- **rewrite tool result** — Claude, Pi, and DeepSeek;
 - **interceptor ordering** — needs two interceptors with defined order;
-  documented for Pi and Hermes, unclear elsewhere.
+  documented for Pi, Hermes, and DeepSeek, unclear for Claude and Codex.
+
+DeepSeek's surface is now probed and is richer than assumed: its `dsh-tools`
+pipeline runs `tools/pre-execute` (allow/deny) → guards → `tools/execute`
+(around-dispatch) → `tools/post-execute` (inspect/replace result) →
+`tools/result` (observe-only). `ToolExecution` is immutable and a wrapper may
+replace only the operational signal, so it can deny and rewrite results but
+cannot rewrite inputs — the mirror image of Codex.
 
 The holes are findings, not gaps to paper over: a harness that cannot express
 an intervention is evidence about that harness's interception surface.

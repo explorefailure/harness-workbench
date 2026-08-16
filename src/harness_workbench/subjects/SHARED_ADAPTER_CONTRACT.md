@@ -100,6 +100,35 @@ the CLI process remains the terminal boundary when no native event stream is
 available:
 <https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md>.
 
+## Interception surfaces
+
+Observation is only half of what an adapter can do. Each harness also exposes
+somewhere to *install a control and invert it*, and those surfaces differ
+enough that an experiment portable to one is not portable to all.
+
+| Harness | Deny a call | Rewrite tool input | Rewrite tool result | Mechanism |
+| --- | --- | --- | --- | --- |
+| Claude Code | yes | yes, full replacement | yes | `PreToolUse` / `PostToolUse` hooks |
+| Codex CLI | yes | `updatedInput`, supported tools **[UNVERIFIED]** | no, observes only | lifecycle hooks |
+| DeepSeek Harness | yes | **no** — `ToolExecution` is immutable and a wrapper may replace only the operational signal | yes | `tools/pre-execute` gate, `tools/post-execute` replace |
+| Hermes Agent | yes | no documented mechanism at the reviewed tag | no, observes only | pre/post shell hooks |
+| Pi | yes | yes | yes | extension API |
+
+Two asymmetries matter more than the totals. DeepSeek and Codex are mirror
+images — Codex can rewrite what a tool is asked to do but not what it reports,
+DeepSeek can rewrite what it reports but not what it was asked. And denial is
+the only intervention all five support, so it is the one family that can be
+run everywhere without a per-harness capability caveat.
+
+Failure semantics are not uniform either, which makes them worth measuring
+rather than assuming: Hermes shell hooks fail *open*, while its plugin-approval
+and ACP edit-approval paths fail *closed*, and DeepSeek's approval seam fails
+closed when no answerer is available.
+
+DeepSeek's pipeline is documented in its `dsh-tools` registry README:
+`tools/pre-execute` → registered guards → `tools/execute` → `tools/post-execute`
+→ `tools/result`.
+
 ## Deliberate non-goals
 
 - No universal assistant-message or token-usage schema.
