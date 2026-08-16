@@ -14,6 +14,7 @@ import unittest
 import adapters
 import compare as comparator
 import runner as subject_runner
+import usage_probe
 from harness_workbench.capture import (
     Bounded,
     capture_bytes,
@@ -749,6 +750,83 @@ class PinTests(unittest.TestCase):
             hashlib.sha256(EXPECTED_CONTENT).hexdigest(),
             "2e8552d04a55edf3110197d2dfdaf76a77c9247b76f1438b0c153cf0245d4d2e",
         )
+
+
+class UsageGateTests(unittest.TestCase):
+    """The budget control, exercised offline against an injected reader.
+
+    Every case here is a refusal case. A gate that has only ever been seen to
+    allow is indistinguishable from no gate, and this one guards spending.
+    """
+
+    @staticmethod
+    def payload(rolling: int, weekly: int, monthly: int, *, resets: str = "T1") -> dict:
+        return {
+            name: {"percent": pct, "status": "ok", "resetsAt": resets}
+            for name, pct in (
+                ("rolling", rolling), ("weekly", weekly), ("monthly", monthly)
+            )
+        }
+
+    def reading(self, rolling: int, weekly: int, monthly: int, **kw) -> dict:
+        return usage_probe.snapshot(
+            reader=lambda: self.payload(rolling, weekly, monthly, **kw)
+        )
+
+    def test_a_window_at_its_line_is_refused_not_rounded_down(self) -> None:
+        # `>=`, deliberately. "You may spend right up to the line" is how a
+        # ceiling becomes an overrun on the run that crosses it.
+        passed, reasons = usage_probe.gate(self.reading(80, 2, 1), {"rolling": 80})
+        self.assertFalse(passed)
+        self.assertIn("rolling: 80% has reached the 80% line", reasons)
+
+    def test_under_the_line_passes(self) -> None:
+        passed, reasons = usage_probe.gate(self.reading(79, 2, 1), {"rolling": 80})
+        self.assertTrue(passed)
+        self.assertEqual([], reasons)
+
+    def test_only_declared_windows_are_gated(self) -> None:
+        # An undeclared limit is not a limit of zero. Enforcing one would stop
+        # runs for a rule nobody stated.
+        passed, _ = usage_probe.gate(self.reading(0, 99, 99), {"rolling": 80})
+        self.assertTrue(passed)
+
+    def test_a_missing_window_is_a_reason_not_a_silent_pass(self) -> None:
+        reading = self.reading(0, 2, 1)
+        del reading["windows"]["rolling"]
+        passed, reasons = usage_probe.gate(reading, {"rolling": 80})
+        self.assertFalse(passed)
+        self.assertIn("rolling: no reading, cannot be gated", reasons)
+
+    def test_an_unreadable_counter_is_unknown_and_never_permission(self) -> None:
+        def explode() -> dict:
+            raise usage_probe.ProbeError("usage endpoint unreachable: boom")
+        with self.assertRaises(usage_probe.ProbeError):
+            usage_probe.snapshot(reader=explode)
+
+    def test_a_malformed_percent_is_refused_rather_than_coerced(self) -> None:
+        with self.assertRaises(usage_probe.ProbeError):
+            usage_probe.snapshot(
+                reader=lambda: {"rolling": {"percent": "0"}, "weekly": {},
+                                "monthly": {}}
+            )
+
+    def test_delta_reports_points_consumed(self) -> None:
+        before = self.reading(0, 2, 1)
+        after = self.reading(7, 3, 1)
+        points = usage_probe.delta(before, after)
+        self.assertEqual(7, points["rolling"]["points"])
+        self.assertEqual(1, points["weekly"]["points"])
+        self.assertEqual(0, points["monthly"]["points"])
+
+    def test_a_window_that_reset_mid_run_is_not_reported_as_negative_use(self) -> None:
+        # Usage going down is not something a run can do. Reporting -2 points
+        # would invite a reader to average it into a cost estimate.
+        before = self.reading(0, 90, 1, resets="T1")
+        after = self.reading(0, 1, 1, resets="T2")
+        points = usage_probe.delta(before, after)
+        self.assertIsNone(points["weekly"]["points"])
+        self.assertIn("reset between readings", points["weekly"]["note"])
 
 
 class ApparatusBaselineTests(unittest.TestCase):

@@ -58,7 +58,7 @@ status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 53 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 61 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
@@ -156,6 +156,39 @@ With `model_selection.json` on a gateway profile this is real money; on
 
 `faults.json` is deterministic and gets `timing` only — sampling a
 deterministic step buys nothing and triples its runtime.
+
+### Reading the gateway's own budget — `usage_probe.py`
+
+The active gateway publishes its consumption at `<base_url>/usage`, undocumented
+and present only on the `/go/` path. `usage_probe.py` reads it, gates on it, and
+reports the delta across a run:
+
+```sh
+export HWB_OPENCODE_KEY=$(cat ~/.config/hwb/opencode.key)
+python3.11 usage_probe.py --save before.json --max rolling=80 --max weekly=90
+python3.11 runner.py --subject pi
+python3.11 usage_probe.py --baseline before.json
+```
+
+It lives here and not in the Workbench because it knows one vendor's URL and
+one vendor's JSON — exactly the knowledge core must not acquire, and exactly
+what the project's own scope note puts in an external adapter. It is not a
+spec `input`: it observes a run, it does not decide what the subject does.
+
+**It reports percentages and deltas of percentages, never dollars.** The Go
+plan prices the windows at $12/5h, $30/week and $60/month, so multiplying is
+tempting — but a 2% weekly reading was observed against $0.21 of actual
+reported spend, where the arithmetic says $0.60 and a $0.21-at-2% window would
+have to be a $10.50 cap rather than the published $30. The percentages and the
+console's dollars do not reconcile. A delta across one run needs no conversion
+and is robust to whatever the absolute scale turns out to mean; a number that
+looks like money and is not is worse than a percentage that admits what it is.
+
+Exit codes follow the same convention as `runner.py`: `0` under every declared
+line, `1` a window has reached its line, `2` nothing could be run, **`3` the
+counters could not be read**. Three matters most — an unreadable counter is an
+*unknown*, not a pass, and a budget check that fails open is only a delay
+before the same overspend.
 
 **`redact` is deliberately NOT attached, and that is a finding rather than an
 omission.** It is the right tool for the job — a run store outlives the reason
