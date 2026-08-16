@@ -255,6 +255,33 @@ differences are the interesting part, and
 [`SHARED_ADAPTER_CONTRACT.md`](src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md)
 records them per harness.
 
+### The capture primitive
+
+Writing adapters twice surfaced one thing that is not about any harness:
+bounding a hostile child process and coming back with evidence you can defend.
+That much is core, in `harness_workbench.capture`:
+
+```python
+from harness_workbench import capture
+
+env = capture.minimal_environment(root, {"MY_HARNESS_OFFLINE": "1"})
+result = capture.run_bounded(argv, cwd=workspace, env=env, timeout=120)
+evidence = capture.capture_bytes(
+    result.stdout, redactions=capture.credential_values(os.environ)
+)
+```
+
+A bound firing is a measurement, not an error: timeouts, byte limits and
+nonzero exits come back in `result`, and `run_bounded` raises only when it
+cannot measure at all. The child leads its own process group and every
+termination signals the group, because a subject holding a shell outlives a
+signal sent to the shell alone — and `group_alive_after_cleanup` reports
+whether anything survived rather than assuming nothing did.
+
+The envelope shape, what it refuses to promote, and why is in
+[`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md).
+The adapters themselves stay out of core, for the reason above.
+
 ## Commands
 
 Two kinds, and mixing them up is the most common first mistake:
@@ -279,6 +306,7 @@ option reference.
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
+| [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
 | [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the source-bundled pre-release conformance record; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) is attached to the GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
