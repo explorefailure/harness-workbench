@@ -74,11 +74,18 @@ class CaptureError(ValueError):
     """
 
 
-def _sha256_hex(data: bytes) -> str:
+def digest_bytes(data: bytes) -> str:
+    """Bare-hex SHA-256 of exactly these bytes.
+
+    Public because every adapter needs it and the alternative is each one
+    importing hashlib and picking its own encoding. `canon` covers canonical
+    JSON and files; raw in-memory bytes are the gap, and an adapter that has to
+    fill a gap itself is how two digest conventions start.
+    """
     return hashlib.sha256(data).hexdigest()
 
 
-def _file_hex(path: Path) -> str:
+def digest_file(path: Path) -> str:
     """Bare hex for a file, computed by `canon` and stripped at the wire edge.
 
     `canon.digest_file` is the project's one file-digest rule and is not
@@ -262,9 +269,8 @@ def run_bounded(
                     # is how a bounded run becomes unbounded.
                     if process.poll() is None:
                         _signal_group(process.pid, signal.SIGKILL)
-                    for key in list(selector.get_map().values()):
-                        selector.unregister(key.fileobj)
                     break
+                read_any = False
                 for key, _ in selector.select(timeout=0.05):
                     stream = key.data
                     try:
@@ -277,6 +283,7 @@ def run_bounded(
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue
+                    read_any = True
                     source[stream] += len(chunk)
                     room = limits[stream] - len(buffers[stream])
                     if room > 0:
@@ -286,21 +293,34 @@ def run_bounded(
                         terminate(
                             STDOUT_LIMIT if stream == "stdout" else STDERR_LIMIT
                         )
+                if process.poll() is not None and not read_any:
+                    # The child is gone and the pipe is drained -- anything
+                    # still holding it is a grandchild that outlived its parent.
+                    # Reading to EOF here would block on a process this run does
+                    # not control, so stop: the orphan is a finding, reported by
+                    # the group check below, not something to wait for.
+                    break
         finally:
             selector.close()
             process.stdout.close()
             process.stderr.close()
     finally:
         if process is not None:
+            # Reap the child *before* sampling the group. The child leads its
+            # own group, so a not-yet-reaped exit status makes the group look
+            # occupied and turns every clean run into a reported orphan.
+            if process.poll() is None:
+                if not _wait_for_group_exit(process.pid, termination_grace):
+                    _signal_group(process.pid, signal.SIGKILL)
+                    if not _wait_for_group_exit(process.pid, termination_grace):
+                        process.kill()
+            process.wait()
             alive_before = _group_alive(process.pid)
             if alive_before:
                 _signal_group(process.pid, signal.SIGTERM)
                 if not _wait_for_group_exit(process.pid, termination_grace):
                     _signal_group(process.pid, signal.SIGKILL)
                     _wait_for_group_exit(process.pid, termination_grace)
-            if process.poll() is None:
-                process.kill()
-            process.wait()
             alive_after = _group_alive(process.pid)
         for signum, handler in previous.items():
             signal.signal(signum, handler)
@@ -389,7 +409,7 @@ def capture_bytes(
     envelope: dict[str, Any] = {
         "bytes": len(stored),
         "source_bytes": len(raw) if source_bytes is None else source_bytes,
-        "sha256": _sha256_hex(stored),
+        "sha256": digest_bytes(stored),
         "base64": base64.b64encode(stored).decode("ascii"),
         "redaction_count": redaction_count,
     }
@@ -493,7 +513,7 @@ def capture_file(
             "format": format_name,
             "size": size,
             "max_bytes": max_bytes,
-            "file_sha256": _file_hex(path) if regular else None,
+            "file_sha256": digest_file(path) if regular else None,
             "jsonl": None,
             "errors": errors,
         }
@@ -529,7 +549,7 @@ def manifest(root: Path) -> list[dict[str, Any]]:
                 "path": path.relative_to(root).as_posix(),
                 "mode": stat.st_mode & 0o777,
                 "size": stat.st_size,
-                "sha256": _file_hex(path),
+                "sha256": digest_file(path),
             }
         )
     return entries
@@ -625,6 +645,8 @@ __all__ = [
     "capture_file",
     "contained_path",
     "credential_values",
+    "digest_bytes",
+    "digest_file",
     "manifest",
     "minimal_environment",
     "parse_jsonl",

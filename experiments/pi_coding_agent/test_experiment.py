@@ -674,11 +674,11 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             pin = {
                 "npm_package": "example-pi",
                 "version": "1.2.3",
-                "package_json_sha256": adapter.sha256_file(root / "package.json"),
-                "npm_shrinkwrap_sha256": adapter.sha256_file(
+                "package_json_sha256": adapter.digest_file(root / "package.json"),
+                "npm_shrinkwrap_sha256": adapter.digest_file(
                     root / "npm-shrinkwrap.json"
                 ),
-                "launcher_sha256": adapter.sha256_file(launcher),
+                "launcher_sha256": adapter.digest_file(launcher),
                 "package_tree_sha256": tree_digest,
             }
             return launcher, pin
@@ -797,7 +797,7 @@ class PiExperimentSurfaceTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdapterError, "not a regular file"):
                 adapter._regular_relative(root, "link.txt", "test")
             with self.assertRaisesRegex(adapter.AdapterError, "stay below"):
-                adapter._evidence_path(root, "nested/../../escape")
+                adapter._contained(root, "nested/../../escape", "evidence path")
 
     def test_input_provenance_rejects_duplicates_and_fixture_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -839,90 +839,15 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ, sensitive, clear=False
         ):
-            env = adapter.minimal_environment(Path(directory), {})
+            env = adapter.pi_environment(Path(directory), {})
         for name in sensitive:
             self.assertNotIn(name, env)
         self.assertEqual("1", env["PI_OFFLINE"])
         self.assertNotEqual(os.environ.get("HOME"), env["HOME"])
 
-    def test_file_manifest_preserves_unicode_nested_path_mode_and_bytes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "nested dir" / "naïve file.txt"
-            path.parent.mkdir()
-            raw = "héllo\r\n".encode("utf-8")
-            path.write_bytes(raw)
-            path.chmod(0o640)
-            manifest = adapter.file_manifest(root)
-        self.assertEqual(
-            [
-                {
-                    "path": "nested dir/naïve file.txt",
-                    "size": len(raw),
-                    "mode": 0o640,
-                    "sha256": hashlib.sha256(raw).hexdigest(),
-                }
-            ],
-            manifest,
-        )
 
-    def test_raw_evidence_boundary_and_digest_pressure(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "evidence.bin"
-            raw = b"abcdefgh"
-            path.write_bytes(raw)
-            exact = adapter.capture_evidence_file(
-                path, required=True, format_name="binary", max_bytes=len(raw)
-            )
-            self.assertEqual(base64.b64encode(raw).decode("ascii"), exact["raw_base64"])
-            self.assertEqual(len(raw), exact["size"])
-            self.assertEqual([], exact["errors"])
 
-            oversized = adapter.capture_evidence_file(
-                path, required=True, format_name="binary", max_bytes=len(raw) - 1
-            )
-            self.assertIsNone(oversized["raw_base64"])
-            self.assertEqual(hashlib.sha256(raw).hexdigest(), oversized["raw_sha256"])
-            self.assertRegex(oversized["errors"][0], "exceeds 7-byte")
 
-    def test_raw_evidence_framing_and_encoding_matrix(self):
-        cases = (
-            ("crlf", b'{"value":1}\r\n{"value":2}\r\n', "jsonl", 0, 2),
-            ("blank", b'{"value":1}\n\n', "jsonl", 1, 1),
-            ("partial", b'{"value":', "jsonl", 1, 0),
-            ("invalid-utf8", b"\xff\xfe", "utf8", 1, None),
-            ("binary", b"\xff\xfe", "binary", 0, None),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "evidence.bin"
-            for name, raw, format_name, error_count, record_count in cases:
-                with self.subTest(name=name):
-                    path.write_bytes(raw)
-                    item = adapter.capture_evidence_file(
-                        path,
-                        required=True,
-                        format_name=format_name,
-                        max_bytes=1024,
-                    )
-                    self.assertEqual(error_count, len(item["errors"]), item)
-                    if record_count is not None:
-                        self.assertEqual(record_count, len(item["jsonl"] or []))
-                    self.assertEqual(raw, base64.b64decode(item["raw_base64"]))
-                    self.assertEqual(hashlib.sha256(raw).hexdigest(), item["raw_sha256"])
-
-    def test_raw_evidence_rejects_non_regular_paths(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            target = root / "target"
-            target.write_bytes(b"secret")
-            link = root / "link"
-            link.symlink_to(target)
-            item = adapter.capture_evidence_file(
-                link, required=True, format_name="binary"
-            )
-            self.assertRegex(item["errors"][0], "not a regular file")
-            self.assertEqual(base64.b64encode(b"").decode("ascii"), item["raw_base64"])
-            self.assertEqual(hashlib.sha256(b"").hexdigest(), item["raw_sha256"])
 
     def test_pi_extension_stderr_is_projected_without_host_paths(self):
         base = Path("/private/example/experiment")
@@ -946,42 +871,7 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("/private/example", json.dumps(records))
 
-    @unittest.skipUnless(os.name == "posix", "capture-limit contract is POSIX-only")
-    def test_output_limit_stops_and_bounds_the_owned_process(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = adapter.run_bounded(
-                [
-                    sys.executable,
-                    "-c",
-                    "import os,time; os.write(1, b'x' * 65536); time.sleep(30)",
-                ],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=5.0,
-                evidence_root=root,
-                stdout_limit=1024,
-                stderr_limit=1024,
-            )
-        self.assertIn("stdout", result["output_limit_exceeded"])
-        self.assertGreater(result["stdout_size"], 1024)
-        self.assertIsNone(result["stdout"])
-        self.assertFalse(result["post_cleanup_group_alive"])
 
-    @unittest.skipUnless(os.name == "posix", "process contract is POSIX-only")
-    def test_nonzero_child_exit_is_captured_without_hanging(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = adapter.run_bounded(
-                [sys.executable, "-c", "raise SystemExit(7)"],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=2.0,
-                evidence_root=root,
-            )
-        self.assertEqual(7, result["returncode"])
-        self.assertFalse(result["timed_out"])
-        self.assertFalse(result["post_cleanup_group_alive"])
 
     @unittest.skipUnless(os.name == "posix", "permission contract is POSIX-only")
     def test_unwritable_workspace_parent_fails_before_pi_launch(self):
@@ -1032,61 +922,14 @@ class PiExperimentSurfaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "decisions.jsonl"
             path.write_bytes(b"not-json\n")
-            evidence = adapter.capture_evidence_file(
+            evidence = adapter.capture_file(
                 path, required=True, format_name="jsonl"
             )
         self.assertEqual([], evidence["jsonl"])
-        self.assertEqual(b"not-json\n", base64.b64decode(evidence["raw_base64"]))
-        self.assertRegex(evidence["errors"][0], "invalid JSONL at line 1")
+        self.assertEqual(b"not-json\n", base64.b64decode(evidence["base64"]))
+        self.assertRegex(evidence["errors"][0], "line 1 is not JSON")
 
-    @unittest.skipUnless(os.name == "posix", "process-group contract is POSIX-only")
-    def test_timeout_kills_the_owned_process_group(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = adapter.run_bounded(
-                [
-                    sys.executable,
-                    "-c",
-                    "import subprocess,sys,time; "
-                    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
-                    "time.sleep(30)",
-                ],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=0.2,
-                evidence_root=root,
-            )
-        self.assertTrue(result["timed_out"])
-        self.assertFalse(result["post_cleanup_group_alive"])
 
-    @unittest.skipUnless(os.name == "posix", "detached-session contract is POSIX-only")
-    def test_detached_descriptor_holder_does_not_hang_capture(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            pid_path = root / "escaped.pid"
-            script = (
-                "import pathlib,subprocess,sys; "
-                "p=subprocess.Popen([sys.executable, '-c', "
-                "'import time; time.sleep(30)'], start_new_session=True); "
-                f"pathlib.Path({str(pid_path)!r}).write_text(str(p.pid))"
-            )
-            started = time.monotonic()
-            result = adapter.run_bounded(
-                [sys.executable, "-c", script],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=2.0,
-                evidence_root=root,
-            )
-            elapsed = time.monotonic() - started
-            escaped_pid = int(pid_path.read_text())
-            try:
-                os.kill(escaped_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        self.assertLess(elapsed, 1.5)
-        self.assertEqual(0, result["returncode"])
-        self.assertFalse(result["post_cleanup_group_alive"])
 
     def test_pinned_pi_runs_both_controls_offline_when_installed(self):
         pi = shutil.which("pi")
@@ -1928,15 +1771,22 @@ class PiExperimentSurfaceTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            # The old marker was the stdout spool file. The promoted primitive
+            # captures in memory, so `pi-config/` -- the adapter's last
+            # filesystem act before it spawns Pi -- is the marker now. The
+            # settle sleep covers the sub-millisecond gap between that mkdir
+            # and run_bounded installing its signal handler; the fault provider
+            # hangs for far longer, so it costs the test nothing.
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 roots = list(workspace_parent.glob("hwb-pi-adapter-*"))
-                if roots and (roots[0] / "pi-stdout.jsonl").exists():
+                if roots and (roots[0] / "pi-config").is_dir():
                     break
                 time.sleep(0.02)
             else:
                 process.kill()
                 self.fail("adapter did not reach its bounded-run phase")
+            time.sleep(0.5)
             process.send_signal(signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=10)
         envelope = json.loads(stdout)

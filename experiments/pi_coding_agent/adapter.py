@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
-import signal
-import stat
-import subprocess
 import sys
 import tempfile
-import time
 from typing import Any
+
+from harness_workbench.capture import (
+    Bounded,
+    CaptureError,
+    capture_bytes,
+    capture_file,
+    contained_path,
+    digest_bytes,
+    digest_file,
+    manifest,
+    minimal_environment,
+    run_bounded,
+)
 
 from normalizer import StreamError, normalize_jsonl
 
@@ -29,62 +36,48 @@ class AdapterError(ValueError):
     """The adapter request cannot be executed without guessing."""
 
 
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
+def command_output(argv: list[str], *, cwd: Path, timeout: float = 5.0) -> str:
+    """Read one short line from a pinned executable, under the same bounds.
 
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def file_manifest(root: Path) -> list[dict[str, Any]]:
-    manifest: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
-            continue
-        data = path.read_bytes()
-        manifest.append(
-            {
-                "path": path.relative_to(root).as_posix(),
-                "size": len(data),
-                "mode": stat.S_IMODE(path.stat().st_mode),
-                "sha256": sha256_bytes(data),
-            }
-        )
-    return manifest
-
-
-def command_output(argv: list[str], *, timeout: float = 5.0) -> str:
-    result = subprocess.run(
+    A version probe looks harmless enough to run with plain `subprocess.run`,
+    which is how it was written first. But `subprocess.run`'s timeout kills the
+    process and not its group, so a launcher that forks leaks exactly the
+    orphan the adapter later reports as clean. The purpose is pin verification,
+    which stays adapter-local; the mechanism is the primitive's, so it uses it.
+    """
+    result = run_bounded(
         argv,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
+        cwd=cwd,
+        env=dict(os.environ),
         timeout=timeout,
+        stdout_limit=64 * 1024,
+        stderr_limit=64 * 1024,
+        termination_grace=1.0,
     )
-    return result.stdout.strip()
+    if result.returncode != 0 or result.termination_reason is not None:
+        raise AdapterError(
+            f"{argv[0]} probe failed: status {result.returncode}"
+            f" ({result.termination_reason or 'no bound fired'})"
+        )
+    try:
+        return result.stdout.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError as error:
+        raise AdapterError(f"{argv[0]} probe output is not UTF-8: {error}") from error
 
 
 def package_tree_digest(root: Path) -> tuple[int, str]:
     """Hash Pi-owned installed files; npm-shrinkwrap binds dependencies."""
-    digest = hashlib.sha256()
+    parts: list[bytes] = []
     count = 0
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
         if "node_modules" in relative.parts or not path.is_file() or path.is_symlink():
             continue
-        digest.update(relative.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(bytes.fromhex(sha256_file(path)))
+        parts.append(relative.as_posix().encode("utf-8"))
+        parts.append(b"\0")
+        parts.append(bytes.fromhex(digest_file(path)))
         count += 1
-    return count, digest.hexdigest()
+    return count, digest_bytes(b"".join(parts))
 
 
 def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
@@ -104,9 +97,9 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         "package_root": str(package_root),
         "package_name": package["name"],
         "package_version": package["version"],
-        "package_json_sha256": sha256_file(package_json_path),
-        "npm_shrinkwrap_sha256": sha256_file(shrinkwrap_path),
-        "launcher_sha256": sha256_file(launcher),
+        "package_json_sha256": digest_file(package_json_path),
+        "npm_shrinkwrap_sha256": digest_file(shrinkwrap_path),
+        "launcher_sha256": digest_file(launcher),
     }
     file_count, tree_digest = package_tree_digest(package_root)
     identities["package_tree_file_count"] = file_count
@@ -124,25 +117,23 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
     return identities
 
 
+def _contained(base: Path, value: Any, label: str) -> Path:
+    """Containment is the primitive's; what kind of file it must be is ours."""
+    try:
+        return contained_path(base, value, label=label)
+    except CaptureError as error:
+        raise AdapterError(str(error)) from error
+
+
 def _regular_relative(base: Path, value: Any, label: str) -> Path:
-    if not isinstance(value, str) or not value:
-        raise AdapterError(f"{label} must be a non-empty relative path")
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise AdapterError(f"{label} must stay below the config directory")
-    path = base / relative
+    path = _contained(base, value, label)
     if not path.is_file() or path.is_symlink():
         raise AdapterError(f"{label} is not a regular file: {value}")
     return path
 
 
 def _directory_relative(base: Path, value: Any, label: str) -> Path:
-    if not isinstance(value, str) or not value:
-        raise AdapterError(f"{label} must be a non-empty relative path")
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise AdapterError(f"{label} must stay below the config directory")
-    path = base / relative
+    path = _contained(base, value, label)
     if not path.is_dir() or path.is_symlink():
         raise AdapterError(f"{label} is not a real directory: {value}")
     return path
@@ -224,242 +215,58 @@ def _fixture_files(base: Path, fixture: Path) -> set[str]:
     return files
 
 
-def minimal_environment(retained_root: Path, overrides: dict[str, str]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for name in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SYSTEMROOT"):
-        value = os.environ.get(name)
-        if value:
-            env[name] = value
-    fake_home = retained_root / "home"
+def pi_environment(retained_root: Path, overrides: dict[str, str]) -> dict[str, str]:
+    """The primitive's allowlist plus the three variables that are Pi's.
+
+    `PI_OFFLINE` and a private `PI_CODING_AGENT_DIR` are exactly the kind of
+    per-subject knowledge that must not live in core: another harness has its
+    own names and its own offline switch, and a shared default would be wrong
+    for every subject but one.
+    """
     config_dir = retained_root / "pi-config"
-    fake_home.mkdir()
     config_dir.mkdir()
-    env.update(
+    return minimal_environment(
+        retained_root,
         {
-            "HOME": str(fake_home),
             "PI_CODING_AGENT_DIR": str(config_dir),
             "PI_OFFLINE": "1",
-        }
+            **overrides,
+        },
     )
-    env.update(overrides)
-    return env
 
 
-def _process_group_exists(process_group_id: int) -> bool:
-    try:
-        os.killpg(process_group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _signal_group(process_group_id: int, signum: int) -> None:
-    try:
-        os.killpg(process_group_id, signum)
-    except ProcessLookupError:
-        pass
-
-
-def _wait_for_group_exit(process_group_id: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while _process_group_exists(process_group_id) and time.monotonic() < deadline:
-        time.sleep(0.02)
-    return not _process_group_exists(process_group_id)
-
-
-def run_bounded(
-    argv: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    timeout: float,
-    evidence_root: Path,
-    stdout_limit: int = 8 * 1024 * 1024,
-    stderr_limit: int = 1024 * 1024,
-) -> dict[str, Any]:
-    stdout_path = evidence_root / "pi-stdout.jsonl"
-    stderr_path = evidence_root / "pi-stderr.bin"
-    timed_out = False
-    output_limit_exceeded: list[str] = []
-    received_signals: list[int] = []
-    pre_cleanup_group_alive = False
-    post_cleanup_group_alive = False
-    process: subprocess.Popen[bytes] | None = None
-    previous_handlers: dict[int, Any] = {}
-
-    def forward_signal(signum: int, _frame: Any) -> None:
-        received_signals.append(signum)
-        if process is not None:
-            _signal_group(process.pid, signal.SIGTERM)
-
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        previous_handlers[signum] = signal.getsignal(signum)
-        signal.signal(signum, forward_signal)
-
-    try:
-        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
-            process = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                env=env,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                start_new_session=True,
-            )
-            deadline = time.monotonic() + timeout
-            while process.poll() is None:
-                exceeded = []
-                if stdout_path.stat().st_size > stdout_limit:
-                    exceeded.append("stdout")
-                if stderr_path.stat().st_size > stderr_limit:
-                    exceeded.append("stderr")
-                if exceeded:
-                    output_limit_exceeded.extend(exceeded)
-                    break
-                if time.monotonic() >= deadline:
-                    timed_out = True
-                    break
-                time.sleep(0.02)
-            if timed_out or output_limit_exceeded:
-                _signal_group(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    _signal_group(process.pid, signal.SIGKILL)
-                    try:
-                        process.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        pass
-    finally:
-        if process is not None:
-            pre_cleanup_group_alive = _process_group_exists(process.pid)
-            if pre_cleanup_group_alive:
-                _signal_group(process.pid, signal.SIGTERM)
-                if not _wait_for_group_exit(process.pid, 1.0):
-                    _signal_group(process.pid, signal.SIGKILL)
-                    _wait_for_group_exit(process.pid, 1.0)
-            post_cleanup_group_alive = _process_group_exists(process.pid)
-            if process.poll() is None:
-                process.kill()
-                try:
-                    process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    pass
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-
-    stdout_size = stdout_path.stat().st_size
-    stderr_size = stderr_path.stat().st_size
-    if stdout_size > stdout_limit:
-        output_limit_exceeded.append("stdout")
-    if stderr_size > stderr_limit:
-        output_limit_exceeded.append("stderr")
-    return {
-        "returncode": process.returncode if process is not None else None,
-        "timed_out": timed_out,
-        "output_limit_exceeded": sorted(set(output_limit_exceeded)),
-        "received_signals": received_signals,
-        "pre_cleanup_group_alive": pre_cleanup_group_alive,
-        "post_cleanup_group_alive": post_cleanup_group_alive,
-        "stdout_size": stdout_size,
-        "stdout_sha256": sha256_file(stdout_path),
-        "stdout": stdout_path.read_bytes() if stdout_size <= stdout_limit else None,
-        "stderr_size": stderr_size,
-        "stderr_sha256": sha256_file(stderr_path),
-        "stderr": stderr_path.read_bytes() if stderr_size <= stderr_limit else None,
-    }
-
-
-def _evidence_path(root: Path, value: Any) -> Path:
-    if not isinstance(value, str) or not value:
-        raise AdapterError("evidence path must be a non-empty relative path")
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise AdapterError("evidence path must stay below the retained root")
-    return root / relative
-
-
-def capture_evidence_file(
-    path: Path, *, required: bool, format_name: str, max_bytes: int = 1024 * 1024
-) -> dict[str, Any]:
-    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
-        raise AdapterError("evidence max_bytes must be a positive integer")
-    errors: list[str] = []
-    if not path.exists():
-        if required:
-            errors.append("required evidence file was not created")
-        raw = b""
-        exists = False
-    elif not path.is_file() or path.is_symlink():
-        errors.append("evidence path is not a regular file")
-        raw = b""
-        exists = True
-    else:
-        exists = True
-        size = path.stat().st_size
-        if size > max_bytes:
-            errors.append(f"evidence exceeds {max_bytes}-byte capture limit: {size} bytes")
-            raw = None
-        else:
-            raw = path.read_bytes()
-    regular = exists and path.is_file() and not path.is_symlink()
-    size = path.stat().st_size if regular else 0
-    raw_sha256 = sha256_file(path) if regular else sha256_bytes(b"")
-    text: str | None = None
-    records: list[Any] | None = None
-    if exists and not errors and raw is not None:
-        try:
-            text = raw.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as error:
-            if format_name in {"utf8", "jsonl"}:
-                errors.append(f"evidence is not UTF-8: {error}")
-        if format_name == "jsonl" and text is not None:
-            records = []
-            for line_number, line in enumerate(text.splitlines(), 1):
-                try:
-                    records.append(json.loads(line))
-                except ValueError as error:
-                    errors.append(f"invalid JSONL at line {line_number}: {error}")
-    return {
-        "exists": exists,
-        "format": format_name,
-        "size": size,
-        "max_bytes": max_bytes,
-        "raw_base64": (
-            base64.b64encode(raw).decode("ascii") if raw is not None else None
-        ),
-        "raw_sha256": raw_sha256,
-        "utf8": text,
-        "jsonl": records,
-        "errors": errors,
-    }
+def _limits_exceeded(process: Bounded) -> list[str]:
+    exceeded = []
+    if process.stdout_overflow:
+        exceeded.append("stdout")
+    if process.stderr_overflow:
+        exceeded.append("stderr")
+    return exceeded
 
 
 def generic_errors(
-    process: dict[str, Any],
+    process: Bounded,
     summary: dict[str, Any] | None,
     normalization_error: str | None,
     evidence: dict[str, dict[str, Any]],
     extension_errors: list[dict[str, str]],
 ) -> list[str]:
     errors: list[str] = []
-    if process["timed_out"]:
+    if process.timed_out:
         errors.append("Pi exceeded the adapter timeout")
-    if process["output_limit_exceeded"]:
+    if _limits_exceeded(process):
         errors.append(
             "Pi exceeded adapter capture limit(s): "
-            + ", ".join(process["output_limit_exceeded"])
+            + ", ".join(_limits_exceeded(process))
         )
-    if process["received_signals"]:
-        errors.append(f"adapter received signals {process['received_signals']}")
-    if process["post_cleanup_group_alive"]:
+    if process.forwarded_signals:
+        errors.append(f"adapter received signals {list(process.forwarded_signals)}")
+    if process.group_alive_after_cleanup:
         errors.append("Pi process group survived bounded cleanup")
-    if process["pre_cleanup_group_alive"] and not process["timed_out"]:
+    if process.group_alive_before_cleanup and not process.timed_out:
         errors.append("Pi left a live process-group member after its parent exited")
-    if process["returncode"] != 0:
-        errors.append(f"Pi exited with status {process['returncode']}")
+    if process.returncode != 0:
+        errors.append(f"Pi exited with status {process.returncode}")
     if normalization_error:
         errors.append(f"normalizer: {normalization_error}")
     elif summary is None:
@@ -538,17 +345,17 @@ def capture(
         raise AdapterError(
             "adapter config omitted consumed input(s): " + ", ".join(missing_inputs)
         )
-    input_digests = {name: sha256_file(path) for name, path in inputs.items()}
+    input_digests = {name: digest_file(path) for name, path in inputs.items()}
     pin = json.loads(pin_path.read_text(encoding="utf-8"))
     pi_resolved = shutil.which(pi_name)
     if pi_resolved is None:
         raise AdapterError("Pi executable not found")
     pi_path = Path(pi_resolved)
     try:
-        pi_version = command_output([str(pi_path), "--version"])
-        node_version = command_output(["node", "--version"]).removeprefix("v")
+        pi_version = command_output([str(pi_path), "--version"], cwd=base)
+        node_version = command_output(["node", "--version"], cwd=base).removeprefix("v")
         install_identity = verify_pi_install(pi_path, pin)
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
+    except (OSError, ValueError, KeyError) as error:
         raise AdapterError(str(error)) from error
     if pi_version != pin["version"]:
         raise AdapterError(
@@ -565,7 +372,7 @@ def capture(
     workspace = retained_root / "workspace"
     shutil.copytree(fixture_path, workspace)
     shutil.copy2(task_path, workspace / task_path.name)
-    before = file_manifest(workspace)
+    before = manifest(workspace)
 
     overrides = dict(environment or {})
     if not all(
@@ -608,7 +415,7 @@ def capture(
         name = raw_spec.get("name")
         if not isinstance(name, str) or not name or name in evidence_specs:
             raise AdapterError("evidence names must be unique non-empty strings")
-        path = _evidence_path(retained_root, raw_spec.get("path"))
+        path = _contained(retained_root, raw_spec.get("path"), "evidence path")
         if path in evidence_paths or path in reserved_evidence_paths:
             raise AdapterError(f"duplicate or reserved evidence path: {path.name}")
         evidence_paths.add(path)
@@ -658,42 +465,61 @@ def capture(
     process = run_bounded(
         pi_argv,
         cwd=workspace,
-        env=minimal_environment(retained_root, overrides),
+        env=pi_environment(retained_root, overrides),
         timeout=timeout,
-        evidence_root=retained_root,
         stdout_limit=config["capture_limits"]["stdout_bytes"],
         stderr_limit=config["capture_limits"]["stderr_bytes"],
     )
-    after = file_manifest(workspace)
+    after = manifest(workspace)
 
     stdout_text: str | None = None
     stderr_text: str | None = None
     summary: dict[str, Any] | None = None
     normalization_error: str | None = None
+    # Overflow, not a None stream, is now the signal that stdout is unusable:
+    # the primitive truncates at the limit and reports how much it discarded,
+    # so a saturated run still yields the prefix that shows what went wrong.
+    stdout_capture = capture_bytes(
+        process.stdout, source_bytes=process.stdout_source_bytes
+    )
+    stderr_capture = capture_bytes(
+        process.stderr, source_bytes=process.stderr_source_bytes
+    )
     try:
-        if process["stdout"] is None:
+        if process.stdout_overflow:
             raise StreamError("stdout exceeded its configured capture limit")
-        stdout_text = process["stdout"].decode("utf-8", errors="strict")
+        if stdout_capture["text"] is None:
+            raise StreamError("stdout is not valid UTF-8")
+        stdout_text = stdout_capture["text"]
         summary = normalize_jsonl(stdout_text)
-    except (UnicodeDecodeError, StreamError) as error:
+    except StreamError as error:
         normalization_error = str(error)
-    try:
-        if process["stderr"] is not None:
-            stderr_text = process["stderr"].decode("utf-8", errors="strict")
-    except UnicodeDecodeError:
-        pass
+    if not process.stderr_overflow:
+        stderr_text = stderr_capture["text"]
     extension_errors = parse_extension_errors(stderr_text, extension_paths, base)
 
     evidence: dict[str, dict[str, Any]] = {}
     for name, spec in evidence_specs.items():
-        item = capture_evidence_file(
+        item = capture_file(
             spec["path"],
             required=spec["required"],
             format_name=spec["format"],
             max_bytes=spec["max_bytes"],
         )
+        # The adapter owns its wire names; the primitive owns the evidence.
+        # `raw_sha256` is null for a file that was never created, where it used
+        # to be the digest of empty bytes -- which made "no evidence" and "empty
+        # evidence" identical, the exact confusion this schema exists to avoid.
         evidence[name] = {
-            **item,
+            "exists": item["exists"],
+            "format": item["format"],
+            "size": item["size"],
+            "max_bytes": item["max_bytes"],
+            "raw_base64": item["base64"],
+            "raw_sha256": item["file_sha256"],
+            "utf8": item["text"],
+            "jsonl": item["jsonl"],
+            "errors": item["errors"],
             "path": spec["relative_path"],
             "environment_variable": spec["environment_variable"],
         }
@@ -710,7 +536,7 @@ def capture(
         "verdict": {"passed": not errors, "errors": errors},
         "configuration": {
             "config": config_path.name,
-            "config_sha256": sha256_file(config_path),
+            "config_sha256": digest_file(config_path),
             "input_digests": input_digests,
             "extension_inputs": [path.relative_to(base).as_posix() for path in extension_paths],
             "environment_names": sorted(overrides),
@@ -742,31 +568,27 @@ def capture(
         "evidence": evidence,
         "pi": {
             "argv": pi_argv,
-            "returncode": process["returncode"],
-            "timed_out": process["timed_out"],
-            "output_limit_exceeded": process["output_limit_exceeded"],
-            "received_signals": process["received_signals"],
-            "pre_cleanup_group_alive": process["pre_cleanup_group_alive"],
-            "post_cleanup_group_alive": process["post_cleanup_group_alive"],
-            "stdout_size": process["stdout_size"],
-            "stdout_base64": (
-                base64.b64encode(process["stdout"]).decode("ascii")
-                if process["stdout"] is not None
-                else None
-            ),
+            "returncode": process.returncode,
+            # The real exit status, never synthesized. `termination_reason`
+            # says which bound fired, so a subject that genuinely exits 124 is
+            # no longer indistinguishable from one the adapter timed out.
+            "termination_reason": process.termination_reason,
+            "timed_out": process.timed_out,
+            "output_limit_exceeded": _limits_exceeded(process),
+            "received_signals": list(process.forwarded_signals),
+            "pre_cleanup_group_alive": process.group_alive_before_cleanup,
+            "post_cleanup_group_alive": process.group_alive_after_cleanup,
+            "stdout_size": process.stdout_source_bytes,
+            "stdout_base64": stdout_capture["base64"],
             "stdout_jsonl": stdout_text,
-            "stdout_sha256": process["stdout_sha256"],
-            "stderr_size": process["stderr_size"],
-            "stderr_base64": (
-                base64.b64encode(process["stderr"]).decode("ascii")
-                if process["stderr"] is not None
-                else None
-            ),
+            "stdout_sha256": stdout_capture["sha256"],
+            "stderr_size": process.stderr_source_bytes,
+            "stderr_base64": stderr_capture["base64"],
             "stderr_utf8": stderr_text,
-            "stderr_sha256": process["stderr_sha256"],
+            "stderr_sha256": stderr_capture["sha256"],
             "extension_errors": extension_errors,
             "summary": summary,
-            "summary_sha256": sha256_bytes(summary_bytes),
+            "summary_sha256": digest_bytes(summary_bytes),
         },
     }
 
