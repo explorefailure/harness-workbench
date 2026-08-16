@@ -21,7 +21,7 @@ consulting the other file. They converged on the same function set. That is
 the whole argument for promotion: not that the code is nice, but that the
 second author could not avoid rewriting the first author's list.
 
-| Concern | `subjects/common.py` | `experiments/pi_coding_agent/adapter.py` |
+| Concern | `subjects/common.py` (since removed) | `experiments/pi_coding_agent/adapter.py` |
 | --- | --- | --- |
 | bounded subprocess | `run_bounded` | `run_bounded` (identical name) |
 | canonical digest | `canonical_digest` | — |
@@ -121,7 +121,7 @@ Stated as rules, because each was learned by having it fail:
 - **A bound firing is not an error.** Timeout, byte-limit, and nonzero exit
   are *measurements*, returned in the envelope. The primitive raises only when
   it cannot measure — bad limits, unspawnable argv.
-- **A synthesized exit code is a lie and is not promoted.** `common.py` maps
+- **A synthesized exit code is a lie and is not promoted.** `common.py` mapped
   timeout to `124` and byte-limit to `125`, which are indistinguishable from a
   subject that genuinely exited `124`. The promoted API keeps the real
   `returncode` and puts the reason in `termination_reason`. This is the one
@@ -176,3 +176,53 @@ exit, malformed output, saturation, timeout, ignored termination, orphan
 child, corrupt evidence — and requires an identical projection digest across
 runs. Steadiness under those eight, not an outcome rate against any model, is
 what gates this.
+
+## What the second consumer found
+
+The Pi adapter was written by the same hand that shaped this API, so its
+consuming it proves little. The five-subject tree is the real test: it carries
+four other harnesses' requirements — a Hermes shell-hook sidecar, a DeepSeek
+session log the harness persists itself, Codex JSONL, Claude stream-json — and
+none of them informed the promotion set. `subjects/common.py` is now gone and
+the tree imports the primitive.
+
+**The API did not widen.** Every call site mapped onto the existing surface.
+Four things are worth naming anyway, because "it fit" is a claim and these are
+what it cost:
+
+- **`parse_jsonl` defaults permissive; the tree needs objects-only at every
+  site.** A bare scalar is a format fact in general and a fault here, because
+  each normalizer indexes the next record by key. The tree binds the flag once
+  in `adapters.parse_jsonl_objects` rather than passing it eleven times. A
+  default, not a gap.
+- **`capture_file` refuses oversize evidence where the tree used to truncate
+  it.** This is a real behaviour change for the two subjects with sidecars: a
+  DeepSeek session log past the limit now yields no parseable records instead
+  of a readable prefix. Refusal is the right rule — half a session log invites
+  conclusions the bytes do not support — but it is a change, not a no-op.
+- **`minimal_environment` is unreachable from this tree, exactly as predicted
+  above.** Claude and Codex authenticate through ambient first-party clients;
+  an allowlisted environment would break them. The tree uses the other half —
+  copy, then scrub by `credential_values` — which is why both halves ship.
+- **`hook.py` keeps its own scrubber and that is not a reimplementation.** It
+  runs as a separate process inside Hermes, redacting *parsed JSON values*
+  before they are ever written. `redact_bytes` scrubs a byte stream after the
+  fact. Different layer, different failure mode; the primitive offers no
+  structured redactor and should not.
+
+**The gap the migration cannot close is provenance, not API.** `freeze` digests
+the files a spec declares in `inputs`, which are files beside the spec. A
+primitive imported from the installed package can never be one of them, so an
+upgraded `harness_workbench` changes how a run was measured without moving any
+declared digest. This is the same standing exposure as
+`features_root: harness_workbench:builtin` — the measurement apparatus has
+always arrived by name — but capture is far more load-bearing than a feature.
+
+It is narrowed in two places and closed in neither: every adapter record now
+carries an `apparatus` block naming the package version and the digest of
+`capture.py` as it actually ran, and `compare.py` rejects a comparison whose
+four subjects were not captured by the same apparatus. Recording makes an
+upgrade *visible* in the record; it does not make `freeze` detect it. Pinning
+the primitive the way subjects are pinned would mean bumping a lock on every
+core change, which trades a real hazard for a guaranteed nuisance — so it was
+not done, and the exposure is written down here instead.

@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from common import capture_bytes, credential_values, run_bounded
+from harness_workbench.capture import capture_bytes, credential_values, run_bounded
 
 
 def main() -> int:
@@ -48,14 +48,17 @@ def main() -> int:
             (root / "partial.txt").exists()
             and (root / "partial.txt").read_bytes() == b"partial"
         )
+        # A bound that fired is read from `termination_reason`, never from the
+        # exit status. The status of a subject the bound killed is a signal
+        # code, and 124/125 are exit codes a subject can also produce on its
+        # own -- checking them cannot tell the two apart, so it is not checked.
         timeout_passed = (
-            timeout.returncode == 124
-            and timeout.termination_reason == "timeout"
+            timeout.termination_reason == "timeout"
+            and timeout.returncode != 0
             and partial_effect
         )
         limit_passed = (
-            limited.returncode == 125
-            and limited.termination_reason == "stdout_limit"
+            limited.termination_reason == "stdout_limit"
             and limited.stdout_overflow
             and len(limited.stdout) == 128
         )

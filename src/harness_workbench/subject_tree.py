@@ -20,6 +20,22 @@ have become a property of whichever version happened to be installed -- an
 undeclared variable deciding the work, which is the failure the digest rule
 exists to prevent.
 
+The adapters are what that rule protects, and they are still copied. It does
+NOT follow that the tree imports nothing: `features_root` has always named
+`harness_workbench:builtin`, and the adapters now import
+`harness_workbench.capture` rather than carrying a second implementation of it.
+Both are measurement apparatus, which arrives by name and by version; the
+adapters decide what the subject is asked to do, which arrives by digest. The
+line is between deciding the work and measuring it, not between core and tree.
+
+That line has a cost and it is not hidden: `freeze` cannot cover a module
+imported from site-packages, so an upgraded primitive changes how a run was
+measured without moving a declared digest. Each adapter record therefore names
+the primitive's version and digest as it actually ran, and the cross-subject
+comparison refuses four runs that were not captured by the same one. That makes
+the change visible; it does not make `freeze` detect it. See
+`docs/adapter-primitive-extraction.md`.
+
 NOT A STABLE API. Every subject is pinned to an exact third-party release, one
 of them a developer preview that documents breaking changes as expected. The
 tree ships so the workbench can demonstrate itself against real harnesses; it

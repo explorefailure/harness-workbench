@@ -13,18 +13,15 @@ import unittest
 
 import adapters
 import compare as comparator
-from common import (
-    EXPECTED_CONTENT,
-    ProcessResult,
+from harness_workbench.capture import (
+    Bounded,
     capture_bytes,
     credential_values,
     manifest,
-    outcome,
-    parse_jsonl,
     redact_bytes,
-    repair_outcome,
     run_bounded,
 )
+from oracles import EXPECTED_CONTENT, outcome, repair_outcome
 
 
 def jsonl(*events: dict) -> bytes:
@@ -41,7 +38,12 @@ class CommonTests(unittest.TestCase):
         self.assertIn("exactly the 22 ASCII bytes", adapters.PROMPT)
 
     def test_jsonl_rejects_non_object_and_malformed_line(self) -> None:
-        events, errors = parse_jsonl(b'{"ok":true}\n[]\nnot-json\n')
+        # Through the tree's binding, not the primitive's permissive default:
+        # objects-only is this experiment's contract, so this is what has to
+        # hold for every normalizer downstream of it.
+        events, errors = adapters.parse_jsonl_objects(
+            b'{"ok":true}\n[]\nnot-json\n'
+        )
         self.assertEqual(events, [{"ok": True}])
         self.assertEqual(len(errors), 2)
 
@@ -88,7 +90,9 @@ class CommonTests(unittest.TestCase):
                 stdout_limit=100,
                 stderr_limit=100,
             )
-        self.assertEqual(result.returncode, 125)
+        # The bound is read by name. An earlier version of this tree asserted
+        # returncode 125, which a subject can also exit with on its own -- the
+        # assertion could not tell a fired bound from an honest exit status.
         self.assertEqual(result.termination_reason, "stdout_limit")
         self.assertTrue(result.stdout_overflow)
         self.assertEqual(len(result.stdout), 100)
@@ -110,9 +114,10 @@ class CommonTests(unittest.TestCase):
                 timeout=0.1,
             )
             self.assertEqual((root / "partial.txt").read_text(), "partial")
-        self.assertEqual(result.returncode, 124)
         self.assertEqual(result.termination_reason, "timeout")
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"started\n")
+        self.assertFalse(result.group_alive_after_cleanup)
 
     def test_escaped_child_pipe_cannot_hold_capture_loop_open(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -131,8 +136,15 @@ class CommonTests(unittest.TestCase):
                 termination_grace=0.05,
             )
             elapsed = time.monotonic() - started
-        self.assertEqual(result.termination_reason, "timeout")
         self.assertLess(elapsed, 0.3)
+        # The old tree escaped this only by burning the whole timeout, and then
+        # recorded a timeout for a child that had already exited cleanly. The
+        # primitive notices the child is gone and the pipe drained, so it
+        # returns the real exit status and claims no bound. The escaped
+        # grandchild is still not waited on -- that is what `elapsed` proves.
+        self.assertIsNone(result.termination_reason)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"parent\n")
 
     def test_credentials_are_redacted_before_serialization(self) -> None:
         secret = 'credential-"quoted"-value'
@@ -596,17 +608,19 @@ class DeepSeekNormalizerTests(unittest.TestCase):
 
 class RepairOutcomeTests(unittest.TestCase):
     @staticmethod
-    def process(returncode: int) -> ProcessResult:
-        return ProcessResult(
-            args=["python3.11", "-m", "unittest", "-v"],
+    def process(returncode: int) -> Bounded:
+        return Bounded(
+            argv=["python3.11", "-m", "unittest", "-v"],
             returncode=returncode,
+            termination_reason=None,
             stdout=b"",
             stderr=b"",
             stdout_source_bytes=0,
             stderr_source_bytes=0,
-            termination_reason=None,
             stdout_overflow=False,
             stderr_overflow=False,
+            group_alive_before_cleanup=False,
+            group_alive_after_cleanup=False,
         )
 
     def test_exact_repair_boundary_and_subject_sequence_pass(self) -> None:
@@ -711,6 +725,12 @@ class ContractComparisonTests(unittest.TestCase):
                 "prompt_sha256": "prompt",
                 "input_digests": {"task.md": "digest"},
             },
+            "apparatus": {
+                "package": "harness_workbench",
+                "version": "0.0.0-test",
+                "capture_module": "capture.py",
+                "capture_sha256": empty_sha,
+            },
             "capabilities": {},
             "invocation": {},
             "isolation": {},
@@ -745,6 +765,26 @@ class ContractComparisonTests(unittest.TestCase):
         self.assertTrue(result["contract_passed"])
         self.assertTrue(result["subjects"]["hermes"]["timed_out"])
         self.assertFalse(result["subjects"]["hermes"]["outcome_passed"])
+
+    def test_contract_rejects_mixed_capture_apparatus(self) -> None:
+        # The inversion of the apparatus check. Every other input to a run is
+        # bound by the spec and would be caught by freeze; the capture
+        # primitive is imported from the installed package and cannot be, so
+        # this comparison is the only place a mismatch can surface at all.
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                outer = self.outer(subject, passed=True)
+                if subject == "deepseek":
+                    outer["adapter"]["apparatus"]["capture_sha256"] = "other"
+                path = Path(directory) / f"{subject}.json"
+                path.write_text(json.dumps(outer), encoding="utf-8")
+                paths.append(path)
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assertIn(
+            "subjects were not captured by the same apparatus", result["errors"]
+        )
 
     def test_contract_rejects_forged_raw_capture_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

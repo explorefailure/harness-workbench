@@ -63,7 +63,7 @@ def verify_capture(label: str, capture: dict[str, Any], errors: list[str]) -> No
         errors.append(f"{label} has invalid overflow evidence")
     overflow_map = overflow if isinstance(overflow, dict) else {}
     if capture.get("termination_reason") not in {
-        None, "timeout", "stdout_limit", "stderr_limit"
+        None, "timeout", "stdout_limit", "stderr_limit", "signalled"
     }:
         errors.append(f"{label} has an invalid termination reason")
     if not isinstance(capture.get("returncode"), int):
@@ -130,6 +130,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
         for field in (
             "subject",
             "request",
+            "apparatus",
             "capabilities",
             "invocation",
             "isolation",
@@ -160,12 +161,22 @@ def compare(paths: list[Path]) -> dict[str, Any]:
             adapter["outcome"].get("expected_sha256")
             for _, adapter in by_subject.values()
         }
+        apparatus = {
+            json.dumps(adapter.get("apparatus"), sort_keys=True)
+            for _, adapter in by_subject.values()
+        }
         if len(prompts) != 1:
             errors.append("subjects did not receive the same prompt bytes")
         if len(inputs) != 1:
             errors.append("subjects did not bind the same experiment inputs")
         if len(expected_effects) != 1:
             errors.append("subjects did not use the same outcome oracle")
+        if len(apparatus) != 1:
+            # The capture primitive is imported from the installed package, so
+            # it is the one input a spec's `inputs` cannot bind. Four runs
+            # measured by different builds of it are not a comparison, and
+            # without this check nothing else in the pipeline would say so.
+            errors.append("subjects were not captured by the same apparatus")
 
     subjects = {}
     for subject, (_, adapter) in sorted(by_subject.items()):

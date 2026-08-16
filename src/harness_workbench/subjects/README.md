@@ -32,8 +32,16 @@ noninteractive. Hermes uses the same pinned local Ollama model and a temporary
 checkout defaults to `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is
 installed elsewhere.
 
+`harness_workbench` must be importable: the adapters take bounded capture,
+credential redaction, manifests and digests from `harness_workbench.capture`
+rather than carrying a second copy of them. Installing the package (which is
+how you got `hwb subjects`) is enough; from a source checkout, prefix each
+command below with `PYTHONPATH=../../src`. Every adapter record names the
+version and digest of the primitive that produced it, under `apparatus`,
+because `freeze` binds the files beside the spec and cannot bind that one.
+
 ```sh
-python3.11 -m unittest -v test_experiment.py
+python3.11 -m unittest -v test_experiment.py     # 38 tests, offline
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek

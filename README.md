@@ -24,7 +24,7 @@ It is built for two jobs:
 Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
 with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 372 tests.
+runtime dependencies, Python 3.11+, 373 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -233,7 +233,7 @@ client installed; the subject runs need that subject present:
 
 ```sh
 cd subjects
-python3 -m unittest test_experiment.py            # 37 tests, offline
+python3 -m unittest test_experiment.py            # 38 tests, offline
 python3 runner.py --subject claude --workload repair
 ```
 

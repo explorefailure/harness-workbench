@@ -3681,7 +3681,7 @@ class TestPackageIdentity(unittest.TestCase):
         self.assertTrue(shipped, "no subject tree shipped with the package")
         # The tree is only useful if a spec, its adapter, and something to run
         # all arrive together.
-        for required in ("adapters.py", "common.py", "runner.py",
+        for required in ("adapters.py", "oracles.py", "runner.py",
                          "run_subject.sh", "claude.json", "pin.json",
                          "model_selection.json", "README.md"):
             self.assertIn(required, shipped)
@@ -3697,6 +3697,30 @@ class TestPackageIdentity(unittest.TestCase):
             source = read_text(os.path.join(package, entry))
             self.assertNotIn("from .subjects", source)
             self.assertNotIn("import subjects\n", source)
+
+    def test_subject_tree_does_not_reimplement_the_capture_primitive(self):
+        # The tree carried a standalone second implementation of `capture` for
+        # as long as it existed, and the two drifted: the copy synthesized exit
+        # code 124 for a timeout, which is indistinguishable from a subject
+        # that genuinely exits 124. Consuming the primitive fixed that once;
+        # this keeps it fixed, because the cheapest way to satisfy a fifth
+        # harness's odd requirement is to paste a private variant back in.
+        import ast
+        from harness_workbench import capture
+
+        package = os.path.join(ROOT, "src", "harness_workbench")
+        subjects = os.path.join(package, "subjects")
+        reserved = set(capture.__all__)
+        for entry in sorted(os.listdir(subjects)):
+            if not entry.endswith(".py"):
+                continue
+            tree = ast.parse(read_text(os.path.join(subjects, entry)))
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    self.assertNotIn(
+                        node.name, reserved,
+                        "%s defines %s, which the capture primitive already "
+                        "exports" % (entry, node.name))
 
     def test_subject_tree_materializes_without_clobbering(self):
         from harness_workbench import subject_tree

@@ -12,25 +12,42 @@ import tempfile
 from typing import Any
 from urllib.request import urlopen
 
-from common import (
-    DEFAULT_EVIDENCE_LIMIT,
+import harness_workbench
+from harness_workbench import capture as capture_module
+from harness_workbench.canon import digest_obj
+from harness_workbench.capture import (
+    DEFAULT_SIDECAR_LIMIT,
     DEFAULT_STDERR_LIMIT,
     DEFAULT_STDOUT_LIMIT,
-    canonical_digest,
     capture_bytes,
+    capture_file,
     credential_values,
-    file_digest,
+    digest_file,
     manifest,
-    normalized_path,
-    outcome,
     parse_jsonl,
     redact_bytes,
-    repair_outcome,
+    relative_to_root,
     run_bounded,
 )
 
+from oracles import outcome, repair_outcome
+
 
 HERE = Path(__file__).resolve().parent
+
+
+def parse_jsonl_objects(raw: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+    """Every subject here emits JSON *objects* per line; a bare scalar is a fault.
+
+    The primitive defaults to permissive because a format fact is not a contract
+    violation in general. For these five it is: each normalizer indexes the
+    record by key on the next line, so a non-object would surface as a
+    TypeError somewhere downstream instead of as the evidence complaint it is.
+    Binding the flag once here keeps that decision in the tree that holds it.
+    """
+    return parse_jsonl(raw, objects_only=True)
+
+
 WRITE_PROMPT = (
     "Create shared.txt in the current workspace. Its complete contents must be "
     "exactly the 22 ASCII bytes represented by the JSON string "
@@ -49,7 +66,7 @@ WRITE_INPUTS = (
     "run_subject.sh",
     "runner.py",
     "adapters.py",
-    "common.py",
+    "oracles.py",
     "pin.json",
     "model_selection.json",
     "task.md",
@@ -61,7 +78,7 @@ REPAIR_INPUTS = (
     "run_subject.sh",
     "runner.py",
     "adapters.py",
-    "common.py",
+    "oracles.py",
     "pin.json",
     "model_selection.json",
     "repair_task.md",
@@ -194,7 +211,7 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         raise AdapterError(f"unknown subject: {subject}")
     if version != expected["version"]:
         raise AdapterError(f"{subject} version {version} does not match pin.json")
-    digest = file_digest(executable)
+    digest = digest_file(executable)
     if digest != expected[digest_key]:
         raise AdapterError(f"{subject} executable digest does not match pin.json")
     return {
@@ -453,7 +470,7 @@ def _argument_projection(
         return projection, "command", False
 
     raw_path = values.get("file_path", values.get("path"))
-    path = normalized_path(raw_path, workspace)
+    path = relative_to_root(raw_path, workspace)
     outside = path == "<outside-workspace>"
     projection: dict[str, Any] = {"path": path}
     for key in ("content", "old_string", "new_string", "patch"):
@@ -474,7 +491,7 @@ def _argument_projection(
 
 
 def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
-    events, errors = parse_jsonl(raw)
+    events, errors = parse_jsonl_objects(raw)
     types = [event.get("type") for event in events]
     init_events = [
         event
@@ -530,7 +547,7 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
             "tool_name": str(call.get("name", "")).lower(),
             "effect_kind": effect_kind,
             "operation": normalized.get("operation"),
-            "arguments_sha256": canonical_digest(normalized),
+            "arguments_sha256": digest_obj(normalized),
             "arguments_stage": "subject_proposal",
             "reported_error": result.get("is_error") if result else None,
             "result_stage": "subject_reported",
@@ -552,7 +569,7 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
 
 
 def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
-    events, errors = parse_jsonl(raw)
+    events, errors = parse_jsonl_objects(raw)
     types = [event.get("type") for event in events]
     if (
         types[:2] != ["thread.started", "turn.started"]
@@ -592,7 +609,7 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
                 errors.append(f"Codex item type changed before completion: {item_id}")
         if item_type == "file_change":
             changes = [{
-                "path": normalized_path(change.get("path"), workspace),
+                "path": relative_to_root(change.get("path"), workspace),
                 "kind": change.get("kind"),
             } for change in item.get("changes", []) if isinstance(change, dict)]
             arguments = {"changes": changes}
@@ -610,7 +627,7 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
             "tool_name": item_type,
             "effect_kind": effect_kind,
             "operation": arguments.get("operation"),
-            "arguments_sha256": canonical_digest(arguments),
+            "arguments_sha256": digest_obj(arguments),
             "arguments_stage": "subject_event",
             "reported_error": item.get("status") != "completed"
                 or (item.get("exit_code") not in (None, 0)),
@@ -653,7 +670,7 @@ def _normalize_hermes(
     workspace: Path,
     returncode: int,
 ) -> tuple[dict[str, Any], list[str]]:
-    hook_events, errors = parse_jsonl(hook_raw)
+    hook_events, errors = parse_jsonl_objects(hook_raw)
     projected = []
     for event in hook_events:
         extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
@@ -665,7 +682,7 @@ def _normalize_hermes(
             "event": event.get("hook_event_name"),
             "tool_name": event.get("tool_name"),
             "call_id": extra.get("tool_call_id"),
-            "arguments_sha256": canonical_digest(arguments),
+            "arguments_sha256": digest_obj(arguments),
             "effect_kind": effect_kind,
             "operation": arguments.get("operation"),
             "outside_workspace": outside,
@@ -744,7 +761,7 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
     source for it. Pi's own richer summary schema stays in its own experiment;
     only what the shared contract can represent is projected here.
     """
-    events, errors = parse_jsonl(raw)
+    events, errors = parse_jsonl_objects(raw)
     if not events or events[0].get("type") != "session":
         errors.append("Pi stream does not start with a session event")
     if sum(event.get("type") == "session" for event in events) != 1:
@@ -793,7 +810,7 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
                 "effect_kind": effect_kind,
                 "operation": arguments.get("operation"),
                 "operation_exit_code": _pi_result_exit_code(event),
-                "arguments_sha256": canonical_digest(arguments),
+                "arguments_sha256": digest_obj(arguments),
                 "arguments_stage": "subject_event",
                 "reported_error": is_error,
                 "result_stage": "subject_reported",
@@ -843,7 +860,7 @@ def _normalize_deepseek(
     expected_provider: str,
     expected_model: str,
 ) -> tuple[dict[str, Any], list[str]]:
-    records, errors = parse_jsonl(raw)
+    records, errors = parse_jsonl_objects(raw)
     headers = [record for record in records if record.get("type") == "session"]
     events = [record for record in records if record.get("type") != "session"]
     types = [event.get("type") for event in events]
@@ -851,7 +868,7 @@ def _normalize_deepseek(
         errors.append("DeepSeek log does not start with exactly one session header")
     elif headers[0].get("version") != 0:
         errors.append("DeepSeek session header has an unexpected format version")
-    elif normalized_path(headers[0].get("cwd"), workspace) != ".":
+    elif relative_to_root(headers[0].get("cwd"), workspace) != ".":
         errors.append("DeepSeek session header has the wrong workspace")
 
     for index, event in enumerate(events):
@@ -962,7 +979,7 @@ def _normalize_deepseek(
             "tool_name": str(call.get("name", "")).lower(),
             "effect_kind": effect_kind,
             "operation": normalized.get("operation"),
-            "arguments_sha256": canonical_digest(normalized),
+            "arguments_sha256": digest_obj(normalized),
             "arguments_stage": "subject_event",
             "reported_error": result[1].get("isError") if result else None,
             "operation_exit_code": operation_exit_code,
@@ -991,13 +1008,28 @@ def _normalize_deepseek(
     }, errors
 
 
-def _bounded_evidence(path: Path, limit: int) -> tuple[bytes, int, bool]:
-    if not path.exists():
-        return b"", 0, False
-    size = path.stat().st_size
-    with path.open("rb") as stream:
-        raw = stream.read(limit)
-    return raw, size, size > limit
+def _apparatus() -> dict[str, Any]:
+    """Identify the capture primitive the way the tree identifies its subjects.
+
+    The five harnesses are pinned by version and executable digest because the
+    record has to say which bytes produced it. `harness_workbench.capture` is
+    now just as load-bearing and arrives from the installed package rather than
+    from the materialized tree, so the same question applies to it and the same
+    answer is recorded.
+
+    This is disclosure, not a pin. `freeze` covers the spec's declared inputs,
+    which are files beside the spec; a module imported from site-packages
+    cannot be one of them. Recording the digest means an upgraded primitive is
+    *visible* in the record instead of silently changing what a run measured --
+    it does not make freeze detect it.
+    """
+    module = Path(capture_module.__file__).resolve()
+    return {
+        "package": "harness_workbench",
+        "version": harness_workbench.__version__,
+        "capture_module": module.name,
+        "capture_sha256": digest_file(module),
+    }
 
 
 def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
@@ -1016,7 +1048,7 @@ def capture(
     timeout: float = 120,
     stdout_limit: int = DEFAULT_STDOUT_LIMIT,
     stderr_limit: int = DEFAULT_STDERR_LIMIT,
-    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
+    evidence_limit: int = DEFAULT_SIDECAR_LIMIT,
 ) -> dict[str, Any]:
     if workload not in WORKLOADS:
         raise AdapterError(f"unknown workload: {workload}")
@@ -1169,13 +1201,39 @@ def capture(
         if subject == "deepseek":
             evidence_path, evidence_errors = _deepseek_session_log(dsh_home)
         if evidence_path is None:
-            evidence_raw, evidence_source_bytes, evidence_overflow = b"", 0, False
+            # Claude, Codex and Pi carry their whole lifecycle on stdout. An
+            # empty envelope keeps the sidecar slot the same shape for every
+            # subject, so a comparison never has to special-case its absence.
+            sidecar = capture_bytes(b"", redactions=redactions)
+            sidecar.update({
+                "exists": False,
+                "format": "bytes",
+                "size": 0,
+                "max_bytes": evidence_limit,
+                "file_sha256": None,
+                "jsonl": None,
+                "errors": [],
+            })
         else:
-            evidence_raw, evidence_source_bytes, evidence_overflow = _bounded_evidence(
-                evidence_path, evidence_limit
+            # `required=True` because reaching this branch means the subject was
+            # instrumented to produce this file. A Hermes run whose hook never
+            # fired used to yield empty evidence indistinguishable from a
+            # subject that made no tool calls; the primitive names it instead.
+            sidecar = capture_file(
+                evidence_path,
+                required=True,
+                format_name="jsonl",
+                max_bytes=evidence_limit,
+                redactions=redactions,
             )
+        # The sidecar arrives already redacted, so the normalizers read the
+        # stored text rather than the file. `text` is None only for evidence the
+        # primitive refused or could not decode, and that is carried in
+        # `sidecar["errors"]` -- an empty parse here is then a recorded state.
+        normalized_evidence = (sidecar["text"] or "").encode("utf-8")
+        evidence_overflow = sidecar["size"] > sidecar["max_bytes"]
+        evidence_errors.extend(sidecar["errors"])
         normalized_stdout, _ = redact_bytes(result.stdout, redactions)
-        normalized_evidence, _ = redact_bytes(evidence_raw, redactions)
         if subject == "claude":
             lifecycle, errors = _normalize_claude(normalized_stdout, workspace)
         elif subject == "codex":
@@ -1201,8 +1259,18 @@ def capture(
             errors.append("stderr capture limit exceeded")
         if evidence_overflow:
             errors.append("sidecar evidence capture limit exceeded")
+        if result.termination_reason is not None:
+            # Named separately from the exit status, because a bound that fired
+            # leaves a signal-derived return code that says how the subject died
+            # and not why. Reporting only the status would record a SIGTERM and
+            # lose which bound sent it.
+            errors.append(f"{subject} run bound fired: {result.termination_reason}")
         if result.returncode != 0:
             errors.append(f"{subject} exited with status {result.returncode}")
+        if result.group_alive_after_cleanup:
+            # A survivor holds the workspace open and corrupts the *next* run's
+            # before-manifest, so it has to be a fault of the run that leaked it.
+            errors.append(f"{subject} left a live process group after cleanup")
         adapter_verdict = {"passed": not errors, "errors": errors}
         if workload == "write":
             task_outcome = outcome(before, after)
@@ -1246,9 +1314,10 @@ def capture(
                 "workload": workload,
                 "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
                 "input_digests": {
-                    name: file_digest(HERE / name) for name in inputs
+                    name: digest_file(HERE / name) for name in inputs
                 },
             },
+            "apparatus": _apparatus(),
             "capabilities": _capabilities(subject),
             "invocation": {
                 "argv": _normalized_argv(argv, root, workspace),
@@ -1297,19 +1366,19 @@ def capture(
                     redactions=redactions,
                     source_bytes=result.stderr_source_bytes,
                 ),
-                "sidecar": capture_bytes(
-                    evidence_raw,
-                    redactions=redactions,
-                    source_bytes=evidence_source_bytes,
-                ),
+                "sidecar": sidecar,
                 "sidecar_kind": evidence_kind,
                 "returncode": result.returncode,
                 "termination_reason": result.termination_reason,
-                "timed_out": result.termination_reason == "timeout",
+                "timed_out": result.timed_out,
                 "overflow": {
                     "stdout": result.stdout_overflow,
                     "stderr": result.stderr_overflow,
                     "sidecar": evidence_overflow,
+                },
+                "process_group": {
+                    "alive_before_cleanup": result.group_alive_before_cleanup,
+                    "alive_after_cleanup": result.group_alive_after_cleanup,
                 },
                 "redacted_environment_names": sensitive_environment_names,
             },
