@@ -44,9 +44,9 @@ import verify_release_tag  # noqa: E402
 
 class TestReleaseVersion(unittest.TestCase):
     def test_candidate_version_and_public_tag_are_exact(self):
-        self.assertEqual("0.1.0rc1", harness_workbench.__version__)
-        self.assertEqual("0.1.0rc1", verify_release_tag.source_version())
-        verify_release_tag.verify("v0.1.0-rc.1", harness_workbench.__version__)
+        self.assertEqual("0.1.0rc2", harness_workbench.__version__)
+        self.assertEqual("0.1.0rc2", verify_release_tag.source_version())
+        verify_release_tag.verify("v0.1.0-rc.2", harness_workbench.__version__)
 
     def test_final_version_and_tag_policy_is_explicit(self):
         self.assertEqual(
@@ -59,10 +59,11 @@ class TestReleaseVersion(unittest.TestCase):
         )
 
     def test_mismatched_or_noncanonical_tags_are_rejected(self):
-        rejected = ("v0.1.0", "0.1.0-rc.1", "v0.1.0rc1", "v0.1.0-rc.01")
+        rejected = ("v0.1.0", "0.1.0-rc.2", "v0.1.0rc2", "v0.1.0-rc.02",
+                    "v0.1.0-rc.1")
         for tag in rejected:
             with self.subTest(tag=tag), self.assertRaises(verify_release_tag.TagError):
-                verify_release_tag.verify(tag, "0.1.0rc1")
+                verify_release_tag.verify(tag, "0.1.0rc2")
 
     def test_cli_reports_the_source_version(self):
         env = os.environ.copy()
@@ -75,7 +76,7 @@ class TestReleaseVersion(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        self.assertEqual("hwb 0.1.0rc1\n", completed.stdout)
+        self.assertEqual("hwb 0.1.0rc2\n", completed.stdout)
 
 
 class TestReleaseChecksums(unittest.TestCase):
@@ -360,7 +361,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         with (ROOT / "pyproject.toml").open("rb") as stream:
             project = tomllib.load(stream)["project"]
         notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
             encoding="utf-8"
         )
 
@@ -402,7 +403,7 @@ class TestReleaseSurfaces(unittest.TestCase):
     def test_candidate_publication_status_is_current(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("public GitHub prerelease", readme)
@@ -601,7 +602,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertIn("--max-archive-depth 2 dist", releasing)
 
     def test_conformance_record_routes_every_release_claim_surface(self):
-        record_path = ROOT / "docs" / "release-conformance-0.1.0rc1.md"
+        record_path = ROOT / "docs" / "release-conformance-0.1.0rc2.md"
         record = record_path.read_text(encoding="utf-8")
 
         # Reader-facing Markdown at the root and under docs, every shipped
@@ -637,6 +638,23 @@ class TestReleaseSurfaces(unittest.TestCase):
                     f"claim-bearing release surface is not routed: {relative}",
                 )
 
+        # A module that declares `__all__` is the author saying "this is public
+        # API". Nothing above discovers it: the CLI manifest only sees what has
+        # a subcommand, and the path manifest only sees Markdown, examples and
+        # GitHub files. `capture` became public and reached a published
+        # candidate routed nowhere, because no check looked at modules at all.
+        for module in sorted((ROOT / "src" / "harness_workbench").glob("*.py")):
+            source = module.read_text(encoding="utf-8")
+            if not re.search(r"^__all__\s*=", source, re.MULTILINE):
+                continue
+            with self.subTest(module=module.stem):
+                self.assertIn(
+                    f"`harness_workbench.{module.stem}`",
+                    record,
+                    "public library module is not routed: "
+                    f"harness_workbench.{module.stem}",
+                )
+
         from harness_workbench import commands
 
         for name in commands.cli_commands():
@@ -649,12 +667,12 @@ class TestReleaseSurfaces(unittest.TestCase):
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        link = "docs/release-conformance-0.1.0rc1.md"
+        link = "docs/release-conformance-0.1.0rc2.md"
         self.assertIn(f"]({link})", readme)
         self.assertIn(f"]({link})", releasing)
 
     def test_conformance_record_pins_standards_and_stays_pre_release(self):
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc1.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
             encoding="utf-8"
         )
         pins = (

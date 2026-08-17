@@ -18,9 +18,16 @@ unittest operation ordered around the write.
 The identities in `pin.json` must match the installed clients. Claude and Codex
 use their existing authenticated clients. DeepSeek Harness uses the official
 `dsh` headless profile with temporary `HOME`, `DSH_HOME`, and XDG directories.
-Its generic `llm-pi-ai` plugin routes the content-pinned local
-`qwen3.5:9b` model through Ollama's loopback OpenAI-compatible endpoint, so no
-external API key is required. The experiment supplies only the placeholder
+Which model runs is declared in `model_selection.json`, which is the model
+authority; `pin.json`'s `ollama` block is the local profile's content pin and
+says so. Under the `local-ollama` profile the generic `llm-pi-ai` plugin routes
+the content-pinned local `gpt-oss:20b` model through Ollama's loopback
+OpenAI-compatible endpoint, so no external API key is required. (`qwen3.5:9b`
+was the earlier pin and was replaced after it failed the repair workload in
+every harness tested; it is no longer the local pin for any subject.) Under the
+`opencode-go` gateway profile the model is a label the gateway promises to
+honour rather than a digest, and `identity_strength` in that file records the
+difference instead of hiding it. The experiment supplies only the placeholder
 key-shaped value required by that provider profile and treats it as a redacted
 credential. `dsh_patch.yml` retains workspace confinement while making the run
 noninteractive. Hermes uses the same pinned local Ollama model and a temporary

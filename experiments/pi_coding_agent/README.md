@@ -6,7 +6,7 @@ Experiment results and code consequences are recorded in
 
 Status: implemented and locally testable, but not shipped. This experiment remains
 outside the Python package and release examples while Harness Workbench is at
-`0.1.0rc1`.
+`0.1.0rc2`.
 
 The reusable layer is `adapter.py`. It accepts a `pi-hwb-adapter-config/v0.1`
 configuration, verifies the pinned Pi installation, creates a disposable workspace,

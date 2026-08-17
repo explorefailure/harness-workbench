@@ -7,7 +7,7 @@ Every repository-local directory under `experiments/` must keep a
 `LEARNINGS.md`. Add one entry for each controlled experiment. Supporting probes
 may share a shorter section when they validate the same adapter boundary rather
 than answer independent questions. Local experiment sources remain outside the
-`0.1.0rc1` distribution; this standard is the shipped description of the
+`0.1.0rc2` distribution; this standard is the shipped description of the
 maintainer workflow.
 
 ## Required distinction

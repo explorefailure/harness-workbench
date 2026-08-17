@@ -21,10 +21,15 @@ It is built for two jobs:
   evidence surfaces into one envelope. See
   [Measuring another harness](#measuring-another-harness).
 
-Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
+Latest published release: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
-with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 379 tests.
+with wheel and source-distribution assets. It is not published to PyPI.
+
+This tree is **ahead of that prerelease**: it prepares candidate `0.1.0rc2`,
+which has no tag, no release, and no assets. The difference that matters to a
+reader is a new public module, `harness_workbench.capture`, which recipients of
+`v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+, 379
+tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -52,7 +57,7 @@ test suite has no network references at all. Start with
 ```console
 $ pip install .           # from a clone
 $ hwb --version
-hwb 0.1.0rc1
+hwb 0.1.0rc2
 ```
 
 **If `hwb` is not found afterwards**, the script went somewhere not on your
@@ -307,7 +312,7 @@ option reference.
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
-| [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the source-bundled pre-release conformance record; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) is attached to the GitHub prerelease |
+| [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md) | the source-bundled pre-release conformance record, covering the **unreleased** `0.1.0rc2` candidate this tree prepares; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) for the published `v0.1.0-rc.1` is attached to that GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,

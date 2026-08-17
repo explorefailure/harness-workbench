@@ -6,8 +6,14 @@ The current candidate policy is:
 
 | Stage | Python package version | Git tag | GitHub release |
 |---|---|---|---|
-| first candidate | `0.1.0rc1` | `v0.1.0-rc.1` | prerelease |
+| first candidate | `0.1.0rc1` | `v0.1.0-rc.1` | prerelease — **published 2026-08-12** |
+| current candidate | `0.1.0rc2` | `v0.1.0-rc.2` | prerelease — not yet created |
 | final promotion | `0.1.0` | `v0.1.0` | full release |
+
+A candidate that has already been published is history: never retarget its tag
+or reuse its number. `0.1.0rc2` exists because the source gained public API
+after `0.1.0rc1` shipped — a new importable module, `harness_workbench.capture`
+— so the published prerelease no longer describes this tree.
 
 Tags are signed, annotated, immutable, and must point at the exact commit whose
 source produced the uploaded files. Never move or reuse a failed tag; fix the
@@ -44,12 +50,12 @@ release-gate actions, not changes this procedure or a local commit can perform.
 
 First turn the preparation branch into a release commit: change the README
 status from "preparing" to an accurate candidate-release statement, change the
-changelog heading to `## 0.1.0rc1 — YYYY-MM-DD`, remove its preparation note,
+changelog heading to `## 0.1.0rc2 — YYYY-MM-DD`, remove its preparation note,
 and review
-[`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md).
+[`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md).
 That record must continue to say that no GitHub prerelease exists yet and must
 not promote preparation self-runs to release evidence. Commit the release-only
-edits. Push that reviewed commit to `release/0.1.0rc1` so a fresh clone can
+edits. Push that reviewed commit to `release/0.1.0rc2` so a fresh clone can
 resolve it, then do the gate from the fresh clone rather than a development
 worktree.
 
@@ -57,7 +63,7 @@ worktree.
 git clone https://github.com/explorefailure/harness-workbench.git hwb-release
 cd hwb-release
 git fetch --tags origin
-RELEASE_COMMIT="$(git rev-parse 'origin/release/0.1.0rc1^{commit}')"
+RELEASE_COMMIT="$(git rev-parse 'origin/release/0.1.0rc2^{commit}')"
 test "${#RELEASE_COMMIT}" -eq 40
 git checkout --detach "$RELEASE_COMMIT"
 test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
@@ -86,11 +92,11 @@ uncertain directory to make this check pass; start another fresh clone.
 
 ## 2. Run the source and artifact gate
 
-For the first candidate, these variables and their agreement check are exact:
+For the current candidate, these variables and their agreement check are exact:
 
 ```sh
-VERSION=0.1.0rc1
-TAG=v0.1.0-rc.1
+VERSION=0.1.0rc2
+TAG=v0.1.0-rc.2
 test "$(python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
@@ -145,7 +151,7 @@ than trusting a branch label:
 
 ```sh
 git fetch origin
-test "$(git rev-parse origin/release/0.1.0rc1)" = "$RELEASE_COMMIT"
+test "$(git rev-parse origin/release/0.1.0rc2)" = "$RELEASE_COMMIT"
 gh run list --commit "$RELEASE_COMMIT" --workflow CI \
   --json headSha,status,conclusion,workflowName,url
 ```
@@ -169,7 +175,7 @@ The tag-triggered CI job repeats tag-to-package agreement with read-only GitHub
 permissions. Wait for every tag run to pass before creating the prerelease. If
 the local tag has not been pushed, delete it locally and fix the source. If it
 has been pushed, do not move it: leave the failed candidate documented, bump to
-`0.1.0rc2` / `v0.1.0-rc.2`, and restart at step 1.
+`0.1.0rc3` / `v0.1.0-rc.3`, and restart at step 1.
 
 ## 5. Create the GitHub prerelease
 
@@ -205,7 +211,7 @@ Stop and mark the release with a clear warning if uploaded bytes or first-run
 behavior differ. Never replace assets silently.
 
 After the downloaded bytes pass, finalize the release copy of
-`docs/release-conformance-0.1.0rc1.md` with the exact release commit, tag and
+`docs/release-conformance-0.1.0rc2.md` with the exact release commit, tag and
 verification, run URLs, setting/route evidence, asset filenames and SHA-256
 values, downloaded-asset result, assessor/approver, and residual limitations.
 Publish that finalized copy beside the assets or in the GitHub release body.

@@ -5,6 +5,28 @@ releases. Python package versions use PEP 440; release-candidate Git tags use
 the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 `v0.1.0-rc.1`).
 
+## 0.1.0rc2 — unreleased
+
+Preparation note: this candidate has no tag, no GitHub release, and no assets.
+Nothing below is published. The heading gains a date only at step 1 of
+[`RELEASING.md`](RELEASING.md).
+
+- **New public module `harness_workbench.capture`.** Bounded subprocess
+  execution with per-stream limits, a deadline, process-group termination and
+  escalation, and a post-cleanup group-liveness observation; capture envelopes
+  carrying stored bytes, source count, digest, overflow and redaction count;
+  file-backed capture with `exists`/`required` semantics; tree manifests;
+  credential discovery and byte redaction; minimal-environment construction;
+  path containment against a declared root; and JSONL decoding. A bound that
+  fires is returned as a measurement, never raised and never encoded as a
+  synthesized exit code.
+- Route the public library surface in the conformance record, and add a
+  mechanical check that fails until every module declaring `__all__` is routed
+  there. `capture` reached the published `0.1.0rc1` candidate unrouted because
+  no check looked at modules.
+- Identify a subject call by its request and its id rather than by its id
+  alone, which is not unique.
+
 ## 0.1.0rc1 — 2026-08-12
 
 This source was published as the public GitHub prerelease

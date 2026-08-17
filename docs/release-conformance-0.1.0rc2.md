@@ -1,4 +1,4 @@
-# Harness Workbench 0.1.0rc1 release conformance record
+# Harness Workbench 0.1.0rc2 release conformance record
 
 > **Frozen candidate record — NOT RELEASED.** This is the repository-owned
 > pre-release record for an intended R2 public release. It records private
@@ -7,6 +7,16 @@
 > asset exists. Rows marked **BLOCKING PUBLICATION** must be closed with
 > release-final evidence before this record can describe a released artefact.
 
+> **This record covers candidate `0.1.0rc2`, which does not exist yet.** The
+> preceding candidate `0.1.0rc1` *was* published, as the public GitHub
+> prerelease `v0.1.0-rc.1` on 2026-08-12; its own release-final record is
+> attached to that prerelease as an asset and is the content-addressed record
+> for those bytes. This file is not that record and does not describe it. The
+> in-tree record always describes the candidate being prepared, so it was
+> renamed from `docs/release-conformance-0.1.0rc1.md` rather than copied:
+> keeping a second in-tree rc1 record would put a stale duplicate beside the
+> published one and let them disagree.
+
 ## Artefact identity and declared reach
 
 | Field | Value |
@@ -14,13 +24,14 @@
 | Artefact | Harness Workbench |
 | Python distribution | `harness-workbench` |
 | Import package / command | `harness_workbench` / `hwb` |
-| Intended version | `0.1.0rc1` |
-| Intended readable tag | `v0.1.0-rc.1` |
+| Intended version | `0.1.0rc2` |
+| Intended readable tag | `v0.1.0-rc.2` |
+| Preceding published candidate | `0.1.0rc1` / `v0.1.0-rc.1`, published 2026-08-12. Its public API did not include `harness_workbench.capture`; see the library-surface row below. |
 | Lifecycle state | `frozen release candidate; unreleased` |
 | Declared reach | **R2 — public**, declared 2026-08-11 for the intended release |
 | Public attribution | Approved 2026-08-12: Garrett Davis is intentionally public as copyright holder, package author, maintainer, and Git identity associated with Explore Failure. The existing GitHub account association in the reviewed history is intentional. |
-| Preparation baseline | Git commit `db8b426366b7a5a0775449369b24971b04f1bb1f` |
-| Preparation hosted CI | All eight Linux/macOS CPython 3.11–3.14 jobs plus the package job passed for the preparation baseline in [private CI run 31625746283](https://github.com/explorefailure/harness-workbench/actions/runs/31625746283). This is not release-final evidence for the containing freeze commit. |
+| Preparation baseline | Git commit `db8b426366b7a5a0775449369b24971b04f1bb1f`. **This baseline predates candidate `0.1.0rc2`.** It was the preparation baseline for `0.1.0rc1`; no hosted evidence of any kind yet exists for the `0.1.0rc2` source. |
+| Preparation hosted CI | All eight Linux/macOS CPython 3.11–3.14 jobs plus the package job passed for the preparation baseline in [private CI run 31625746283](https://github.com/explorefailure/harness-workbench/actions/runs/31625746283). This is not release-final evidence for the containing freeze commit, and it is **not evidence for `0.1.0rc2` at all** — that source did not exist when the run executed. |
 | Preparation CodeQL | [Private run 31625748519](https://github.com/explorefailure/harness-workbench/actions/runs/31625748519) extracted 45/45 Python files, ran its queries, and exported SARIF, but the Analyze step failed when GitHub returned `Resource not accessible by integration` during upload/status access. No CodeQL pass or uploaded result is claimed. |
 | Superseded freeze evidence | Signed commit `bbcb6fbcd0a873eb3589028119e8b9489179fe34` passed all nine jobs in [public CI run 31627092506](https://github.com/explorefailure/harness-workbench/actions/runs/31627092506). [Public CodeQL run 31628103134](https://github.com/explorefailure/harness-workbench/actions/runs/31628103134) uploaded successfully but reported one high-severity clear-text-storage alert on a credential-shaped synthetic test fixture. That commit is preparation evidence only and was superseded by a source-level fixture remediation; no dismissal or scanner exception was used. |
 | Record-preparation revision | The signed freeze commit containing this file; resolve with `git rev-parse HEAD` in the reviewed checkout |
@@ -150,7 +161,7 @@ hwb verify "$RUN_ID"
 
 Expected and observed preparation outcome: installation succeeds; `pip check`
 reports no broken requirements; package, metadata, `hwb --version`, and source
-versions agree at `0.1.0rc1`; the run reports `completed`; `hwb ls` contains its
+versions agree at `0.1.0rc2`; the run reports `completed`; `hwb ls` contains its
 run ID; `show` and `verify` accept the complete record. The disposable local
 wheel and ownership-neutral normalized sdist passed on 2026-08-12. Every member
 of that normalized sdist had `0:0` / `root:root` ownership and the
@@ -165,15 +176,17 @@ an outside artifact check only if the EF-RS-REL separation predicate is met.
 
 ## Claim card
 
-- **Release and tier:** Harness Workbench `0.1.0rc1`; deterministic software
+- **Release and tier:** Harness Workbench `0.1.0rc2`; deterministic software
   and conformance claims are routed at **EF-RS-REL T1**; H/F overlay is not
   triggered because the release has no human-subject, private-person, field,
   or human-effect evidence or claim.
 - **Question:** can the stated package execute a JSON workload, retain the
-  documented evidence, and exercise the documented harness-measurement paths
-  within their named boundaries?
+  documented evidence, exercise the documented harness-measurement paths
+  within their named boundaries, and expose the public library surface
+  routed above — which for this candidate newly includes the capture
+  primitive — with the documented behaviour at its bounds?
 - **Exact system and conditions:** the content-addressed public release
-  identity is pending; package version `0.1.0rc1`, CPython 3.11–3.14 target,
+  identity is pending; package version `0.1.0rc2`, CPython 3.11–3.14 target,
   Linux/macOS target, POSIX command environment, no runtime dependencies.
 - **Preparation observation:** source tests and separate clean installs from a
   locally built wheel and sdist pass on the macOS environment recorded above.
@@ -205,7 +218,7 @@ uncertainty, or assurance meaning requires a new ID or revision.
 
 | Claim ID and bounded claim | Principal source / evidence | Expected and observed result | Public verification state |
 |---|---|---|---|
-| `C-HWB-01` — the distribution/import/CLI are `harness-workbench` / `harness_workbench` / `hwb`, version `0.1.0rc1`, with zero runtime dependencies | `pyproject.toml`, `src/harness_workbench/__init__.py`, built `METADATA`/`PKG-INFO`, `tools/verify_release_artifacts.py`, installed-artifact verifier | Exact identity/version/dependency agreement; passed for local wheel and sdist | Self-run preparation; final assets absent |
+| `C-HWB-01` — the distribution/import/CLI are `harness-workbench` / `harness_workbench` / `hwb`, version `0.1.0rc2`, with zero runtime dependencies | `pyproject.toml`, `src/harness_workbench/__init__.py`, built `METADATA`/`PKG-INFO`, `tools/verify_release_artifacts.py`, installed-artifact verifier | Exact identity/version/dependency agreement; passed for local wheel and sdist | Self-run preparation; final assets absent |
 | `C-HWB-02` — the minimal feature-free POSIX spec runs and leaves a complete verifiable record | README first run, `examples/bare.json`, runner tests, installed-artifact verifier | `run` completed; ID visible to `ls`; `show` and `verify` exit zero; passed locally | Self-run preparation; final assets absent |
 | `C-HWB-03` — run records preserve the documented attempts/spec/feature-source/integrity surfaces, with stated partial-run classifications | `docs/the-record.md`, runner/conformance/interrupt tests, artifact-content checks | Documented keys/layout match generated records and known incomplete/recoverable/complete cases | Reconstructible from source tests; no outside check |
 | `C-HWB-04` — six opt-in builtin features expose the documented powers and seams, and an omitted/mistyped root does not silently load them | README feature table, `docs/writing-a-feature.md`, builtin manifests/source, feature/dispatcher tests | Builtin names, seam table, powers, load failure, source preservation match code | Reconstructible from source tests; no outside check |
@@ -215,8 +228,9 @@ uncertainty, or assurance meaning requires a new ID or revision.
 | `C-HWB-08` — examples demonstrate model-free, model-adjacent, feature-attachment, retry/redaction, and bounded-effects use without making a provider a requirement | exact example inventory below, example transcripts, package-content verifier | Shipped examples are included in sdist; selected transcripts re-run; no runtime dependency or network reference in the unit suite | Partly machine checked; unregistered examples remain inspectable demonstrations |
 | `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Private preparation CI passed all eight Linux/macOS CPython 3.11–3.14 jobs at `db8b426366b7a5a0775449369b24971b04f1bb1f`; the exact freeze-commit matrix is **pending** | Preparation evidence only; not release-final evidence |
 | `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
-| `C-HWB-11` — the candidate source is frozen and has not been tagged, released, or made public | README, `CHANGELOG.md`, tag absence, this record | Source surfaces consistently distinguish freeze from publication | Private state only; tag/release/public state must be verified before publication |
+| `C-HWB-11` — this candidate (`0.1.0rc2`) is frozen and has not been tagged, released, or made public; the preceding candidate `0.1.0rc1` was published as prerelease `v0.1.0-rc.1` and the source surfaces say so | README, `CHANGELOG.md`, absence of a `v0.1.0-rc.2` tag, this record | Source surfaces consistently distinguish this unreleased candidate from the already-published one, and do not let the published prerelease stand as evidence for this source | `v0.1.0-rc.2` tag/release/public state must be verified before publication; the rc1 prerelease is not evidence for rc2 |
 | `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership and a commit-derived timestamp | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
+| `C-HWB-13` — `harness_workbench.capture` is public, importable API whose exported names are the ones listed in the public-library manifest, and a bound that fires is returned as a measurement rather than raised or encoded as a synthesized exit code | `src/harness_workbench/capture.py` and its `__all__`, `docs/adapter-primitive-extraction.md`, the capture unit tests, the determinism soak over success/nonzero/malformed/saturation/timeout/ignored-termination/orphan/corrupt-evidence cases | Exported-name set matches the manifest; timeout, byte-limit and nonzero exit are reported in `termination_reason` with the real `returncode` preserved; the soak holds one projection digest across repeated runs | Self-run source evidence. **Surface added after the published `0.1.0rc1`**; no recipient of that prerelease received this module, and no downloaded-asset evidence exists for it |
 
 ## Complete claim-bearing surface inventory
 
@@ -229,9 +243,10 @@ command fails the suite until this record routes it.
 |---|---|---|
 | Front door | `README.md` | T1: `C-HWB-01` through `C-HWB-12`; purpose, ceiling, evidence state, limits, and routes |
 | Reference and guides | `docs/adapter-primitive-extraction.md`; `docs/campaign-manifests.md`; `docs/experiment-writeups.md`; `docs/measuring-your-own-code.md`; `docs/measuring.md`; `docs/the-record.md`; `docs/the-spec.md`; `docs/writing-a-feature.md` | T1: primarily `C-HWB-02` through `C-HWB-08`; the experiment template constrains interpretation and code-promotion claims rather than adding a performance claim. The extraction memo records an internal code-promotion decision and makes no claim about any third-party harness's behaviour |
-| This conformance/front-door supplement | `docs/release-conformance-0.1.0rc1.md` | T1 claim card, trace, assurance, departures, and current status |
+| This conformance/front-door supplement | `docs/release-conformance-0.1.0rc2.md` | T1 claim card, trace, assurance, departures, and current status |
 | Examples and demonstration code/data | every exact `examples/` path in the manifest below | T1 demonstrations: `C-HWB-02`, `C-HWB-04`, `C-HWB-05`, `C-HWB-08`; no performance/generalization claim |
 | CLI/help and runtime claims | `hwb --help`; `hwb --version`; `python -m harness_workbench --help`; every exact subcommand help surface below; runtime output from those commands | T1: `C-HWB-01` through `C-HWB-07`; source of truth is `src/harness_workbench/commands.py` plus parser/behavior tests |
+| Public library API | every module in the exact public-library manifest below | T1: `C-HWB-13`; importable surface a recipient can depend on without going through `hwb`. `harness_workbench.capture` is **new in `0.1.0rc2`** and was not present in the published `0.1.0rc1`. |
 | Package-index metadata | `pyproject.toml`; generated wheel `METADATA`; generated sdist `PKG-INFO`; README rendered as long description | T1: `C-HWB-01`, `C-HWB-09`, `C-HWB-10`, `C-HWB-12`; no package-index publication is authorized or claimed |
 | Release history/process | `CHANGELOG.md`; `RELEASING.md`; future Git tag; future GitHub release notes; future wheel/sdist/`SHA256SUMS` | T1: `C-HWB-11`, `C-HWB-12`; future surfaces are **pending and must be reviewed before publication** |
 | Licence, continuity, and reporting | `LICENSE`; `NOTICE`; `CONTRIBUTING.md`; `SUPPORT.md`; `SECURITY.md` | Licence routes under EF-SRS-02; policy declarations under `C-HWB-10`; any factual security/result claim routes at T1 under `C-HWB-07` |
@@ -311,6 +326,32 @@ command fails the suite until this record routes it.
 - `hwb replay --help`
 - library verdict surface `harness_workbench.conform` (no top-level command)
 
+### Exact public library-module manifest
+
+A module here is public because it declares its own `__all__` or is routed by
+name as a library surface with no top-level command. Both kinds are claim
+bearing: a recipient can import them, and nothing in the CLI manifest above
+would notice if their surface changed.
+
+- `harness_workbench.capture` — bounded subprocess execution, capture
+  envelopes, tree manifests, credential discovery and byte redaction,
+  minimal-environment construction, path containment, and JSONL decoding.
+  Declares `__all__`. **New in `0.1.0rc2`.**
+- `harness_workbench.conform` — library verdict surface, no top-level command.
+
+`capture` is the module the adapter tree imports instead of carrying a second
+implementation of bounded capture;
+[`docs/adapter-primitive-extraction.md`](adapter-primitive-extraction.md)
+records what was promoted, what was deliberately left adapter-local, and the
+one intended behaviour change (a bound that fires is reported in
+`termination_reason` and no longer synthesized into an exit code). The adapter
+tree itself is opt-in data and is not part of this manifest.
+
+`tests/test_release_engineering.py` discovers every module under
+`src/harness_workbench/` that declares `__all__` and fails until this manifest
+routes it, so the next promotion cannot repeat the omission this candidate
+fixes.
+
 ## EF-RS-REL component status
 
 This is a proportional T1 packet for deterministic software claims. Statuses
@@ -346,6 +387,7 @@ An unresolved MUST remains unmet; recording it does not waive it.
 | `D-07` | Public visibility, read-only Actions tokens, secret scanning, push protection, Dependabot security updates, and successful CodeQL upload were verified on 2026-08-12. The superseded freeze produced alert #1 on a credential-shaped synthetic fixture; the containing source remediates it, but exact-commit CodeQL and ruleset evidence remain pending. | A recipient cannot infer that the remediation is accepted or that required checks and immutable release refs are enforced | Zero open CodeQL alerts on the exact remediated freeze plus dated branch/tag ruleset evidence |
 | `D-08` | The exact governing-standard source bytes are pinned but not shipped or asserted publicly reachable | A recipient without the standards repository can detect a supplied file's equality but cannot independently inspect the complete governing text from this artefact alone | Publish or ship the exact pinned standards, or record a stable public content-addressed location |
 | `D-09` | No final release approver/date/disposition exists | A recipient cannot treat preparation as an authorization to release | Named approver, date, decision, and residual limitations after all blockers close |
+| `D-10` | The retained cross-harness containment matrix was measured against an adapter-tree digest that is no longer `HEAD`: a subject-pairing fix landed after the matrix was cut. This is the apparatus baseline working as designed — the record binds the apparatus that measured it — not an undetected discrepancy, and nothing the matrix reports depended on the later fix. The matrix and its run stores live in an untracked working directory, are excluded from both archives, and are not part of the release surface. | A recipient receives no matrix evidence with the artefact and must not read any adapter-tree claim here as evidence measured by the shipped apparatus | Re-cut the matrix against the release commit's adapter tree if a matrix claim is ever routed into a release surface; otherwise this stays a disclosure rather than a blocker |
 
 ## Mechanical checks
 
@@ -353,6 +395,8 @@ An unresolved MUST remains unmet; recording it does not waive it.
 |---|---|---|---|
 | Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; private preparation matrix passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; nine-job public matrix passed at superseded freeze `bbcb6fbcd0a873eb3589028119e8b9489179fe34`; exact remediated-freeze matrix pending |
 | Conformance surface inventory test | `EF-SRS-08`, `EF-SRS-09`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Prepared and passing locally |
+| Public library-module routing test | `C-HWB-13`, `EF-SRS-08`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Discovers every module under `src/harness_workbench/` declaring `__all__` and fails until this record routes it by name. Verified by inversion: with the `capture` entry removed from the manifest the suite fails, and with it present the suite passes. This check did not exist for `0.1.0rc1`, which is why a new public module reached a published candidate unrouted |
+| Capture primitive unit suite and determinism soak | `C-HWB-13` | `tests/test_capture.py`, `tests/test_capture_soak.py` | Eight failure modes (success, nonzero exit, malformed output, saturation, timeout, ignored termination, orphan child, corrupt evidence) hold one projection digest across repeated runs; passing locally |
 | Standards-pin assertions | exact EF-SRS/EF-RS-REL version, commit, blob, and SHA-256 | `tests/test_release_engineering.py` | Prepared and passing locally |
 | Relative Markdown link/anchor check | navigable front door and docs | `tests/test_workbench.py` | Passing locally |
 | Spec/record/seam/feature/command table drift checks | `C-HWB-03` through `C-HWB-06` | `tests/test_workbench.py` | Passing locally |
