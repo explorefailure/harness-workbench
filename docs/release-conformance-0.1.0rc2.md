@@ -91,7 +91,7 @@ for the actual release even though their repository preparation is in place.
 | `EF-SRS-04` — examples do not narrow the tool | **MET IN PREPARED SOURCE** | The first recommended example is model-free; examples cover shell workloads, local-model adjacency, custom features, failures, retries, redaction, and bounded filesystem effects. README explicitly says Ollama is an example rather than a requirement. |
 | `EF-SRS-05` — documentation separated by reader need | **CONFORMS FOR THE R2 SHOULD** | README routes learning/first-run, doing, reference, feature-authoring, measurement, experiment interpretation, and release/conformance needs to separate pages. |
 | `EF-SRS-06` — contribution/support posture | **MET IN PREPARED SOURCE** | The verbatim posture above links to the actual solo-maintainer process and best-effort support route without promising governance or an SLA. |
-| `EF-SRS-07` — hand-off sufficiency | **MET IN PREPARED SOURCE** | `CONTRIBUTING.md` gives tests; README gives development/build checks; `RELEASING.md` gives clean source, artifact, CI, tag, release, download, and promotion procedures. Its steps 1 and 2 are now **completely executable offline** and were run end to end for this candidate with no step skipped: pristine checkout from the local repository, history scan, full suite, build, normalization, strict Twine, artifact verification, archive scan, separate clean installs, and checksums. Publication moved to step 3, so no candidate is pushed before its own gate has passed it. External release steps remain explicitly pending. |
+| `EF-SRS-07` — hand-off sufficiency | **MET IN PREPARED SOURCE** | `CONTRIBUTING.md` gives tests; README gives development/build checks; `RELEASING.md` gives clean source, artifact, CI, tag, release, download, and promotion procedures. Its steps 1 and 2 are **completely executable offline** and were run verbatim, end to end, from a pristine clone for this candidate, with no step skipped, reordered or adapted: history scan, full suite, build at the pinned backend, normalization, strict Twine, artifact verification, archive scan, separate clean installs, and checksums. They were not executable before this commit, and the record said they were: step 1 ended by installing the project, which runs an in-tree build and leaves a `build/` directory, while step 2's first precondition is that no `build/` exists — so step 2 could never start, and the fresh clone its prose recommended landed in the same state. Step 1 now installs the pinned tools only. Publication moved to step 3, so no candidate is pushed before its own gate has passed it. External release steps remain explicitly pending. |
 | `EF-SRS-09` — mechanical checks | **CONFORMS FOR THE R2 SHOULD IN SOURCE; EXTERNAL CHECKS PENDING** | The table below identifies the machine checks and where each runs. `D-03`, `D-05`, `D-06`, and `D-07` prevent checked-in configuration from being reported as hosted evidence. |
 | `EF-SRS-10` — recorded departure | **MET** | `D-01` through `D-09` name every known unmet predicate, the reason, recipient consequence, and closure evidence. |
 
@@ -120,13 +120,19 @@ for the actual release even though their repository preparation is in place.
 The two received forms tested locally are one wheel and one source distribution
 built from a clean archive of the record-preparation commit:
 
+The environment holds the pinned release toolchain and nothing else: `build`,
+`setuptools` and `twine` at the exact versions the `release` extra declares.
+The project itself is deliberately not installed — installing it runs an
+in-tree build whose `build/` directory the gate refuses to start with, and no
+gate step needs it importable from site-packages.
+
 ```sh
 python3.11 -m unittest discover -s tests -v
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 export SOURCE_DATE_EPOCH
 RAW_SDIST_DIR="$(mktemp -d)"
-python3.11 -m build --wheel --outdir dist
-python3.11 -m build --sdist --outdir "$RAW_SDIST_DIR"
+python3.11 -m build --no-isolation --wheel --outdir dist
+python3.11 -m build --no-isolation --sdist --outdir "$RAW_SDIST_DIR"
 python3.11 tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
 rm -rf -- "$RAW_SDIST_DIR"
 python3.11 -m twine check --strict dist/*.whl dist/*.tar.gz
@@ -166,6 +172,11 @@ run ID; `show` and `verify` accept the complete record. The disposable local
 wheel and ownership-neutral normalized sdist passed on 2026-08-12. Every member
 of that normalized sdist had `0:0` / `root:root` ownership and the
 release-source commit timestamp; a second normalization was byte-identical.
+Every member of both archives carries one of the neutral permission constants,
+and the members marked executable are exactly the files the checkout marks
+executable — three in the wheel (`subjects/hook.py`, `subjects/runner.py` and
+`subjects/run_subject.sh`) and ten in the sdist (those three plus the seven
+executable files under `examples/`).
 This supplies no outside assurance and does not verify a future tagged or
 downloaded byte sequence.
 
@@ -229,8 +240,8 @@ uncertainty, or assurance meaning requires a new ID or revision.
 | `C-HWB-09` — CPython 3.11–3.14 on Linux/macOS is the intended v0.1 support target; Windows is unsupported | README, `pyproject.toml`, CI matrix | Private preparation CI passed all eight Linux/macOS CPython 3.11–3.14 jobs at `db8b426366b7a5a0775449369b24971b04f1bb1f`; the exact freeze-commit matrix is **pending** | Preparation evidence only; not release-final evidence |
 | `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
 | `C-HWB-11` — this candidate (`0.1.0rc2`) is frozen and has not been tagged, released, or made public; the preceding candidate `0.1.0rc1` was published as prerelease `v0.1.0-rc.1` and the source surfaces say so | README, `CHANGELOG.md`, absence of a `v0.1.0-rc.2` tag, this record | Source surfaces consistently distinguish this unreleased candidate from the already-published one, and do not let the published prerelease stand as evidence for this source | `v0.1.0-rc.2` tag/release/public state must be verified before publication; the rc1 prerelease is not evidence for rc2 |
-| `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership and a commit-derived timestamp | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
-| `C-HWB-13` — `harness_workbench.capture` and `harness_workbench.canon` are public, importable API; each declares `__all__`, and each `__all__` is exactly the names listed in that module's public-library manifest entry, in both directions; and a bound that fires is returned as a measurement rather than raised or encoded as a synthesized exit code | `src/harness_workbench/capture.py` and `canon.py` and their `__all__`, `docs/adapter-primitive-extraction.md`, the capture unit tests, the determinism soak over success/nonzero/malformed/saturation/timeout/ignored-termination/orphan/corrupt-evidence cases | Every exported name appears in that module's manifest entry, the entry names nothing outside its `__all__`, and the entry may not name something the module does not define at all — so adding, removing or renaming an export fails the suite, and so does describing an export that was never there; timeout, byte-limit and nonzero exit are reported in `termination_reason` with the real `returncode` preserved; the soak holds one projection digest across repeated runs | Self-run source evidence. **`capture` is a surface added after the published `0.1.0rc1`**; no recipient of that prerelease received this module, and no downloaded-asset evidence exists for it. `canon` shipped in `0.1.0rc1` with no declared surface; its `__all__` is new in `0.1.0rc2` and narrows what `import *` re-exports |
+| `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership, neutral modes, and a commit-derived timestamp, and both archives mark executable exactly the files the checkout marks executable | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, permission bits drawn from a constant set, executable members equal to the source tree's, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
+| `C-HWB-13` — `harness_workbench.capture` and `harness_workbench.canon` are public, importable API; each declares `__all__`, and each `__all__` is exactly the names listed in that module's public-library manifest entry, in both directions; and a bound that fires is returned as a measurement rather than raised or encoded as a synthesized exit code | `src/harness_workbench/capture.py` and `canon.py` and their `__all__`, `docs/adapter-primitive-extraction.md`, the capture unit tests, the determinism soak over success/nonzero/malformed/saturation/timeout/ignored-termination/orphan/corrupt-evidence cases | Every exported name appears in that module's manifest entry, the entry names nothing outside its `__all__`, and the entry may name neither something the module does not define at all nor a sibling module in place of one of its own exports — so adding, removing or renaming an export fails the suite, and so does describing an export that was never there; timeout, byte-limit and nonzero exit are reported in `termination_reason` with the real `returncode` preserved; the soak holds one projection digest across repeated runs | Self-run source evidence. **`capture` is a surface added after the published `0.1.0rc1`**; no recipient of that prerelease received this module, and no downloaded-asset evidence exists for it. `canon` shipped in `0.1.0rc1` with no declared surface; its `__all__` is new in `0.1.0rc2` and narrows what `import *` re-exports |
 
 ## Complete claim-bearing surface inventory
 
@@ -351,8 +362,8 @@ surface changed.
   `canon_bytes`, `digest_file`, `digest_obj`, `digest_tree`, `file_digests`,
   `short`.
   The shipped subject tree imports `digest_obj` from it directly and every
-  adapter record digests this module by name beside `capture`, because
-  `capture.digest_file` wraps `canon.digest_file`: a change to the digest rule
+  adapter record digests this module by name beside `harness_workbench.capture`,
+  because `capture.digest_file` wraps `canon.digest_file`: a change to the digest rule
   moves every digest in a record while `capture.py` stays byte-identical.
   Public by use and now by declaration — until `0.1.0rc2` it declared no
   `__all__`, so the exported-name check skipped the one module whose surface
@@ -373,17 +384,36 @@ tree itself is opt-in data and is not part of this manifest.
 only the entry for the module in question rather than this whole section or the
 whole record: every core module the shipped subject tree imports must be routed
 here; every module declaring `__all__` must be routed here with its exported
-names listed exactly, in both directions, and the manifest may not name
-something the module does not define; and every importable module under
-`src/harness_workbench/` outside the shipped subject tree — at any depth,
-including the `builtin/` feature tree — must be either routed here or named in
-an explicit internal list, so adding a module to the package forces somebody to
-decide which it is. Imports are read as syntax rather than matched as text, so
-`from harness_workbench import a, b`, `import harness_workbench.a`, an aliased
-or function-local import, and a file in a subdirectory of the subject tree are
-all seen. The first two rules only catch modules that advertise themselves —
-`conform` does neither, and that is the shape which reached a published
-candidate unrouted.
+names listed exactly, in both directions, and the manifest may name neither
+something the module does not define nor a sibling module in place of one of
+its own exports; and every importable module under `src/harness_workbench/`
+outside the shipped subject tree — at any depth, including the `builtin/`
+feature tree — must be either routed here or named in an explicit internal
+list, so adding a module to the package forces somebody to decide which it is.
+
+Imports are read as syntax rather than matched as text. `from harness_workbench
+import a, b` (both names, not the first), `import harness_workbench.a`, the
+same aliased, `from harness_workbench.a import name`, a function-local import,
+and a file in a subdirectory of the subject tree are seen. So are the two
+package-relative spellings: `from harness_workbench.builtin.retry import
+feature` names the module `builtin.retry.feature`, and `from
+harness_workbench.builtin import retry` binds a package whose modules the
+importer can then reach — each implicates the modules it can reach, because a
+spelling the rule cannot see reads as coverage and is worse than no rule.
+
+Discovery is every `.py` file under `src/harness_workbench/` outside the
+shipped subject tree, at any depth, including dunder-named files and
+directories; only `__pycache__` is skipped, being a build product rather than
+source. That reaches `__init__.py` and `__main__.py`, which are decided rather
+than excused: both are named in the internal list, because `__init__` holds one
+public name — `__version__`, routed as package identity under `C-HWB-01` — and
+`__main__` is the `python -m harness_workbench` entry point already routed in
+the CLI/help manifest above. Neither is a library surface, and if either ever
+declares `__all__` the routing rule fails until somebody moves it here.
+
+The first two rules only catch modules that advertise themselves — `conform`
+does neither, and that is the shape which reached a published candidate
+unrouted.
 
 ## EF-RS-REL component status
 
@@ -455,8 +485,8 @@ the package version was unchanged.
 |---|---|---|---|
 | Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; private preparation matrix passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; nine-job public matrix passed at superseded freeze `bbcb6fbcd0a873eb3589028119e8b9489179fe34`; exact remediated-freeze matrix pending |
 | Conformance surface inventory test | `EF-SRS-08`, `EF-SRS-09`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Prepared and passing locally |
-| Public library-module routing test | `C-HWB-13`, `EF-SRS-08`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Reads the routed module's own manifest entry, not the whole section and not the whole record, so neither an incidental mention elsewhere nor another module's entry can satisfy it. Enforces three rules: shipped-tree imports must be routed, `__all__` modules must be routed, and every importable module at any depth outside the shipped subject tree must be routed or explicitly internal. Imports are read from the syntax tree, so comma-separated, dotted, aliased, function-local and subdirectory imports are all seen. Verified by inversion in eight directions — removing a routed entry, adding a new `__all__`-declaring module, adding an unclassified module, adding one under `builtin/`, importing an internal module by each of the three import spellings, and importing from a subdirectory of the subject tree each fail the suite. This check did not exist for `0.1.0rc1`, which is why a new public module reached a published candidate unrouted |
-| Exported-name agreement test | `C-HWB-13` | `tests/test_release_engineering.py` in every full suite | For every module declaring `__all__` — `capture` and `canon` — compares its exports against the names written in its own manifest entry in both directions, and additionally requires every name the entry writes to be something the module actually defines, so the manifest cannot promise an export that does not exist. Adding, removing or renaming an export fails until the manifest is updated. Verified by inversion: appending a name to `__all__`, renaming an export, and writing an undefined name into the manifest each fail the suite |
+| Public library-module routing test | `C-HWB-13`, `EF-SRS-08`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Reads the routed module's own manifest entry, not the whole section and not the whole record, so neither an incidental mention elsewhere nor another module's entry can satisfy it. Enforces three rules: shipped-tree imports must be routed, `__all__` modules must be routed, and every importable module at any depth outside the shipped subject tree — dunder-named files and directories included, `__pycache__` excluded — must be routed or explicitly internal. Imports are read from the syntax tree. Verified by inversion in seventeen directions, each run and each failing the suite: removing a routed entry; adding a new module that declares `__all__`; adding one that declares nothing; adding one under `builtin/`; adding one under a dunder-named directory; importing an internal module from the shipped tree by seven spellings (`from harness_workbench import runner`, the same as the second name of a comma list, `import harness_workbench.runner`, the same aliased, `from harness_workbench.runner import run`, `from harness_workbench.builtin.retry import feature`, and `from harness_workbench.builtin import retry`); importing from a subdirectory of the subject tree; a function-local import; `__init__.py` declaring `__all__`; the internal list naming a module that no longer exists; and a module listed as both routed and internal. Four of those seventeen passed silently until this record's own commit: both package-relative spellings were discarded before the module intersection, and dunder paths — `__init__.py` among them, and anything under a dunder-named directory — were skipped by discovery entirely. This check did not exist for `0.1.0rc1`, which is why a new public module reached a published candidate unrouted |
+| Exported-name agreement test | `C-HWB-13` | `tests/test_release_engineering.py` in every full suite | For every module declaring `__all__` — `capture` and `canon` — compares its exports against the names written in its own manifest entry in both directions, and additionally requires every name the entry writes to be something the module actually defines, so the manifest cannot promise an export that does not exist. Adding, removing or renaming an export fails until the manifest is updated. Verified by inversion in five directions, each run and each failing the suite: appending a name to `__all__`, renaming an export, removing a name from `__all__` the entry still lists, writing an undefined name into the entry, and writing a sibling module's name into the entry. The last was open until this candidate — every routed module's short name was subtracted from the entry before both checks, so an entry could claim a sibling module as part of its own surface. Sibling modules are named in dotted form, which the identifier pattern ignores |
 | Capture primitive unit suite and determinism soak | `C-HWB-13` | `tests/test_capture.py`, `tests/test_capture_soak.py` | Eight failure modes (success, nonzero exit, malformed output, saturation, timeout, ignored termination, orphan child, corrupt evidence) hold one projection digest across repeated runs; passing locally |
 | Standards-pin assertions | exact EF-SRS/EF-RS-REL version, commit, blob, and SHA-256 | `tests/test_release_engineering.py` | Prepared and passing locally |
 | Relative Markdown link/anchor check | navigable front door and docs | `tests/test_workbench.py` | Passing locally |
@@ -464,9 +494,11 @@ the package version was unchanged.
 | Registered transcript replay and unverified-transcript ceiling | evidence behind example/CLI output claims | `tests/test_workbench.py` | Passing locally |
 | Build plus strict Twine | package metadata/README rendering | local gate and package CI job | Passed locally; private preparation package job passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; exact freeze-commit job pending |
 | Sdist normalization plus archive content/licence/generated-store/privacy verifier | `C-HWB-01`, `C-HWB-12`, EF-SRS-02 | `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py` | Neutral ownership, commit-derived tar/gzip timestamps, safe paths/links, and byte-identical repeated normalization passed locally; final assets pending |
+| Archive permission-bit and executable-set check | `C-HWB-12` | `tools/verify_release_artifacts.py` in the maintainer gate and the package CI job | Two checks, neither taking its expectation from the archive. Permission bits must be one of three constants (`0644`, `0755`, `0777`) plus the `0664` the pinned wheel writer stamps on `RECORD`; the set of executable members must **equal** the set the checkout marks executable, mapping sdist `harness_workbench-<version>/<path>` to `<path>` and wheel `harness_workbench/<path>` to `src/harness_workbench/<path>`, with generated members executable in neither. Verified by inversion against real built archives rather than fixtures only, eleven directions across both forms: rewriting every regular member to `0755`, stripping the executable bit from the shipped `run_subject.sh`, adding it to a file the checkout does not mark, `0600`, `0664` where the member is not `RECORD`, and `RECORD` at `0644`. The check this replaces derived each member's expected mode from that member's own executable bit, which every archive satisfies: on the same real artefacts it accepted an sdist with every regular member rewritten to `0755` and a wheel with `run_subject.sh` stripped |
+| Pinned build backend | `C-HWB-12`; the step 3 comparison in `RELEASING.md` | `pyproject.toml` `release` extra, `RELEASING.md`, `.github/workflows/ci.yml`, `tests/test_release_engineering.py` | `[build-system].requires` is a floor and `python -m build` resolves a floor freshly per build, so the reproducibility claim held only under a version nothing pinned: the same commit on one machine at one umask produced different wheel bytes and different member modes under setuptools 79.0.1 and 84.0.0, 84 dropping the executable bit from `.py` package data the checkout marks executable. The release path installs `setuptools==83.0.0` with the other two release tools and builds `--no-isolation`, so the pin is the backend that actually runs; the floor still governs third parties building from source. A test reconstructs the install command from the `release` extra and requires it verbatim in both procedures, so the literal versions cannot drift from the declaration. Verified by inversion in six directions: bumping either list alone, deleting the backend pin, restoring `pip install '.[release]'`, and dropping `--no-isolation` from either surface each fail the suite. Verified against real builds as well: building the wheel at setuptools 84.0.0 under `umask 022` is rejected by the executable-set check naming `subjects/hook.py` and `subjects/runner.py`, so an unpinned backend surfaces as a failed gate rather than as different bytes two steps later. The drift is wheel-only — the normalized sdist is byte-identical across 83.0.0 and 84.0.0 |
 | Separate clean wheel and sdist install/first run | EF-SRS-03, `C-HWB-02`, `C-HWB-12` | `tools/verify_installed_artifact.py` | Passed locally as self-run; downloaded assets pending |
 | Checksums and tag/version verifier | content/version identity | release tools and CI | Local archive checks pass; final tag/assets pending |
-| Reproducible-build agreement between independent checkouts | `C-HWB-12`; the step 3 comparison in `RELEASING.md` | maintainer release gate | Two independent pristine clones of the same commit produced byte-identical wheel, sdist and `SHA256SUMS`. Verified by inversion: building a different commit yields different digests, so the comparison detects a checkout that is not the gated commit rather than passing on anything. This is what makes step 3's `diff` between the offline gate and the GitHub clone meaningful; without reproducibility that comparison would fail spuriously and be disabled |
+| Reproducible-build agreement between independent checkouts | `C-HWB-12`; the step 3 comparison in `RELEASING.md` | maintainer release gate | Two independent pristine clones of the same commit, built at the pinned backend, produced byte-identical wheel, sdist and `SHA256SUMS`, and the normalized sdist was identical across `umask 022`, `077` and `002`. Verified by inversion: building a different commit yields different digests, so the comparison detects a checkout that is not the gated commit rather than passing on anything. This is what makes step 3's `diff` between the offline gate and the GitHub clone meaningful; without reproducibility that comparison would fail spuriously and be disabled |
 | Gitleaks history and archive scan | disclosure review, `D-06` | maintainer release gate | Pinned Gitleaks 8.30.1, obtained from its official release with the published archive checksum verified and installed outside the repository. History-wide scan over every commit reachable from every ref: no leaks. Archive scan over the built wheel, sdist and `SHA256SUMS`: no leaks. No commit count is recorded here because it moves with every commit and would be stale before it was read; the scope is every ref, and the scan is re-run at the release commit. Verified by inversion — planted synthetic credential-shaped strings in a scratch copy are reported and exit non-zero, and the allowlisted fixture pattern is reported outside its allowlisted path **when it appears in a form a rule matches**, such as an assignment. It is not reported in the `echo` and JSON-value forms the initial-history commit carries in `examples/`, which trip no default rule at all; those pass because nothing matches them, not because the allowlist covers them. Must be re-run against the exact release commit once that exists |
 | Hosted matrix, CodeQL, repository settings, routes, tag and release | external release predicates | GitHub | Superseded public freeze passed CI and uploaded CodeQL, exposing one release-blocking fixture alert; exact remediated-freeze CI, zero-open-alert result, rulesets, tag, and release remain **blocking** |
 

@@ -39,8 +39,18 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# The exact release toolchain, including the build backend. `requires` above is
+# a floor, and `python -m build` resolves a floor freshly in an isolated
+# environment, so the same commit built minutes apart produced different wheel
+# bytes and different member modes under setuptools 79.0.1 and 84.0.0 -- 84
+# drops the executable bit from `.py` package data that the source tree marks
+# executable. The release gate therefore builds with `--no-isolation` against
+# this pin. Third parties building from source are still governed by the floor;
+# only the release path is pinned. `RELEASING.md` writes these versions
+# literally and a test asserts the two lists agree.
 release = [
     "build==1.5.0",
+    "setuptools==83.0.0",
     "twine==7.0.0",
 ]
 

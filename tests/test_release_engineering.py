@@ -6,7 +6,7 @@ import fnmatch
 import gzip
 import io
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -86,11 +86,23 @@ class TestReleaseVersion(unittest.TestCase):
         nothing looked at them: they are the version written where a grep for
         release surfaces does not think to go, and the only cost of being wrong
         is that every bug report is seeded with a version that no longer exists.
+
+        The vacuity guard is per file. One counter across every template passes
+        while a template that lost its placeholder line entirely -- the exact
+        drift this exists to catch -- hides behind a sibling that still has one.
+        Which templates must carry a placeholder is derived rather than listed:
+        a template with a `version` field is asking the reporter for a version,
+        so it has to show them a current one.
         """
         templates = sorted((ROOT / ".github" / "ISSUE_TEMPLATE").glob("*.yml"))
         self.assertTrue(templates, "no issue templates found")
-        checked = 0
-        for template in templates:
+        seeding = [
+            template for template in templates
+            if "id: version" in template.read_text(encoding="utf-8")
+        ]
+        self.assertTrue(seeding, "no template collects a version; check drifted")
+        for template in seeding:
+            checked = 0
             for line in template.read_text(encoding="utf-8").splitlines():
                 if "placeholder:" not in line or "hwb " not in line:
                     continue
@@ -101,7 +113,12 @@ class TestReleaseVersion(unittest.TestCase):
                         f"{template.name} seeds reports with a stale version",
                     )
                 checked += 1
-        self.assertTrue(checked, "no version placeholder found; this check is vacuous")
+            with self.subTest(template=template.name):
+                self.assertTrue(
+                    checked,
+                    f"{template.name} has no `placeholder: hwb ...` line; the "
+                    "version check is vacuous for this file",
+                )
 
 
 class TestReleaseChecksums(unittest.TestCase):
@@ -288,6 +305,24 @@ class TestSourceDistributionPrivacy(unittest.TestCase):
             archives[0o022],
         )
 
+    def test_umask_leaked_member_modes_are_rejected(self):
+        """The allowed modes are a constant, so both directions of drift fail.
+
+        `0o600` is what `umask 077` leaves behind and `0o664` is what a
+        group-writable checkout leaves behind. Neither is what Git records, and
+        an sdist carrying either is a function of the machine that built it.
+        """
+        for mode in (0o600, 0o664, 0o700, 0o777):
+            member = self.member("harness-workbench/file.txt")
+            member.mode = mode
+            archive = self.write_archive(f"mode{mode:04o}.tar.gz", [member])
+            with self.subTest(mode=oct(mode)), self.assertRaisesRegex(
+                SystemExit, "non-neutral mode"
+            ):
+                verify_release_artifacts.check_sdist_archive_safety(
+                    archive, self.EPOCH
+                )
+
     def test_unsafe_member_paths_and_links_are_rejected(self):
         traversal = self.write_archive(
             "traversal.tar.gz",
@@ -315,6 +350,113 @@ class TestSourceDistributionPrivacy(unittest.TestCase):
         normalize_sdist.normalize(raw, self.root / "normalized.tar.gz", self.EPOCH)
 
         self.assertEqual(b"unchanged wheel bytes", wheel.read_bytes())
+
+
+class TestArchiveExecutableAgreement(unittest.TestCase):
+    """Which members may be executable is decided by the source, not the archive.
+
+    The check this replaces asked the member's own mode what its mode should
+    have been -- `0755` if the executable bit is set, `0644` otherwise -- which
+    every archive satisfies by construction. Rewriting every regular member of
+    a real sdist to `0755` passed it, and so did stripping the executable bit
+    off the one shipped script that needs it. The expectation now comes from
+    `st_mode & 0o100` on the source file, the single permission bit Git
+    records, so the two can disagree and be caught disagreeing.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="hwb-exec-set-")
+        self.source = Path(self.temp.name)
+        (self.source / "script.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.source / "script.sh").chmod(0o755)
+        (self.source / "notes.md").write_text("prose\n", encoding="utf-8")
+        (self.source / "notes.md").chmod(0o644)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def entries(self, script_executable=True, notes_executable=False,
+                generated_executable=False):
+        return [
+            ("root/script.sh", script_executable, PurePosixPath("script.sh")),
+            ("root/notes.md", notes_executable, PurePosixPath("notes.md")),
+            ("root/PKG-INFO", generated_executable, None),
+        ]
+
+    def check(self, entries):
+        verify_release_artifacts.check_executable_set(
+            entries, self.source, "sdist"
+        )
+
+    def test_an_archive_agreeing_with_the_source_tree_passes(self):
+        self.check(self.entries())
+
+    def test_an_executable_the_source_does_not_mark_is_rejected(self):
+        with self.assertRaisesRegex(
+            SystemExit, r"executable in the archive but not in the source tree"
+        ):
+            self.check(self.entries(notes_executable=True))
+
+    def test_a_source_executable_the_archive_lost_is_rejected(self):
+        with self.assertRaisesRegex(
+            SystemExit, r"executable in the source tree but not in the archive"
+        ):
+            self.check(self.entries(script_executable=False))
+
+    def test_generated_members_have_no_source_and_must_not_be_executable(self):
+        with self.assertRaisesRegex(
+            SystemExit, r"archive but not in the source tree.*PKG-INFO"
+        ):
+            self.check(self.entries(generated_executable=True))
+
+    def test_both_directions_are_reported_together(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.check(
+                self.entries(script_executable=False, notes_executable=True)
+            )
+        message = str(raised.exception)
+        self.assertIn("executable in the archive but not in the source tree", message)
+        self.assertIn("executable in the source tree but not in the archive", message)
+
+    def test_members_resolve_to_the_source_files_they_were_built_from(self):
+        """The mapping is the other half: a wrong path expects nothing.
+
+        Every member whose source counterpart cannot be found is expected to be
+        non-executable, so a mapping that silently misses would turn the whole
+        check back into "nothing may be executable" -- which the real shipped
+        scripts would then fail loudly, but only for shipped scripts.
+        """
+        self.assertEqual(
+            PurePosixPath("src/harness_workbench/subjects/run_subject.sh"),
+            verify_release_artifacts.wheel_source_relpath(
+                "harness_workbench/subjects/run_subject.sh"
+            ),
+        )
+        self.assertIsNone(
+            verify_release_artifacts.wheel_source_relpath(
+                "harness_workbench-0.1.0rc2.dist-info/RECORD"
+            )
+        )
+        self.assertEqual(
+            PurePosixPath("examples/echo.sh"),
+            verify_release_artifacts.sdist_source_relpath(
+                "harness_workbench-0.1.0rc2",
+                "harness_workbench-0.1.0rc2/examples/echo.sh",
+            ),
+        )
+        self.assertIsNone(
+            verify_release_artifacts.sdist_source_relpath(
+                "harness_workbench-0.1.0rc2", "harness_workbench-0.1.0rc2"
+            )
+        )
+        # The source files these map onto really are marked the way the
+        # verifier will read them, so the mapping is checked against the same
+        # tree the gate runs on rather than against a fixture only.
+        self.assertTrue(
+            (ROOT / "src/harness_workbench/subjects/run_subject.sh").stat().st_mode
+            & 0o100
+        )
+        self.assertFalse((ROOT / "README.md").stat().st_mode & 0o100)
 
 
 class TestReleaseSurfaces(unittest.TestCase):
@@ -624,6 +766,67 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertNotIn("python -m build --sdist --wheel", releasing)
         self.assertIn("A raw backend-built sdist must not be\nuploaded", readme)
 
+    def test_release_toolchain_is_pinned_and_written_the_same_way_everywhere(self):
+        """One toolchain, declared once, spelled identically in both procedures.
+
+        `RELEASING.md` and the package job install literal versions rather than
+        `.[release]`, because installing the project runs an in-tree build and
+        leaves the `build/` directory step 2 refuses to start with. That makes
+        the literals a second source of truth, so this reconstructs the install
+        command from `pyproject.toml` and requires it verbatim.
+
+        `setuptools` is in that list because it is the build backend and
+        `requires` is only a floor: `python -m build` resolves a floor freshly
+        per build, and two setuptools versions produced different wheel bytes
+        and different member modes from one commit. A pin that the builds do
+        not use is decoration, so `--no-isolation` is required too.
+        """
+        with (ROOT / "pyproject.toml").open("rb") as stream:
+            extras = tomllib.load(stream)["project"]["optional-dependencies"]
+        pins = sorted(
+            requirement.replace(" ", "") for requirement in extras["release"]
+        )
+        for pin in pins:
+            with self.subTest(pin=pin):
+                self.assertRegex(
+                    pin, r"^[A-Za-z0-9_.-]+==[0-9][^,;]*$",
+                    "the release extra must pin exact versions, not ranges",
+                )
+        self.assertIn(
+            "setuptools", " ".join(pins),
+            "the build backend must be pinned in the release extra; a floor in "
+            "[build-system].requires is resolved per build",
+        )
+
+        command = "python -m pip install --disable-pip-version-check " + " ".join(
+            f"'{pin}'" for pin in pins
+        )
+        surfaces = {
+            "RELEASING.md": 2,  # the local gate clone and the GitHub clone
+            ".github/workflows/ci.yml": 1,
+        }
+        for relative, expected in surfaces.items():
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            # Shell line continuations are formatting, not content.
+            joined = re.sub(r"[ \t]*\\\n\s+", " ", text)
+            installs = [
+                line.strip() for line in joined.splitlines()
+                if line.strip().startswith("python -m pip install")
+            ]
+            with self.subTest(surface=relative):
+                self.assertEqual(
+                    expected, joined.count(command),
+                    f"{relative} does not install exactly the pinned release "
+                    f"toolchain {pins}",
+                )
+                self.assertEqual(
+                    [], [line for line in installs if "[release]" in line],
+                    f"{relative} installs the project itself, which runs an "
+                    "in-tree build and leaves a build/ directory behind",
+                )
+                self.assertIn("python -m build --no-isolation --wheel", joined)
+                self.assertIn("python -m build --no-isolation --sdist", joined)
+
     def test_all_workflow_actions_are_official_and_pinned_to_full_shas(self):
         allowed = {
             "actions/checkout",
@@ -750,6 +953,20 @@ class TestReleaseSurfaces(unittest.TestCase):
         "builtin.retry.feature", "builtin.retry.invert",
         "builtin.sample.feature", "builtin.sample.invert",
         "builtin.timing.feature",
+        # The package initializer and the `python -m` entry point. Both are
+        # importable and both are decided here rather than skipped: discovery
+        # used to drop every dunder path, so `__init__.py` -- the module every
+        # recipient touches first -- could grow an `__all__` and a public
+        # function with nothing failing.
+        #
+        # The decision is internal *as library modules*, and neither is
+        # unrouted. `__init__` holds one public name, `__version__`, which is
+        # routed by `C-HWB-01` as package identity rather than as a library
+        # surface. `__main__` is the `python -m harness_workbench` entry point,
+        # routed in the CLI/help manifest; it defines nothing of its own and
+        # exists to call `cli.main`. If either ever declares `__all__`, rule 2
+        # fails until somebody moves it into the manifest, which is the point.
+        "__init__", "__main__",
     })
 
     # The shipped subject tree is opt-in data, not a library surface, and the
@@ -764,6 +981,12 @@ class TestReleaseSurfaces(unittest.TestCase):
         A module added one directory down -- under `builtin/`, which ships in
         the wheel and imports fine -- needed no decision from anyone. That is
         the hole `capture` went through, and it was still open underneath.
+
+        It was open a second way: skipping every path part beginning with `__`
+        excused `__init__.py`, `__main__.py`, and anything under a dunder-named
+        directory from being decided at all. `__init__.py` is the first module
+        any recipient imports and it already exports `__version__`. Only
+        `__pycache__` is skipped now -- it is a build product, not source.
         """
         package = ROOT / "src" / "harness_workbench"
         found = {}
@@ -771,7 +994,7 @@ class TestReleaseSurfaces(unittest.TestCase):
             relative = path.relative_to(package)
             if relative.parts[0] == self.SHIPPED_TREE:
                 continue
-            if any(part.startswith("__") for part in relative.parts):
+            if "__pycache__" in relative.parts:
                 continue
             found[".".join(relative.with_suffix("").parts)] = path
         return found
@@ -819,6 +1042,11 @@ class TestReleaseSurfaces(unittest.TestCase):
         `import harness_workbench.a`, and did not recurse -- so a core import
         could be added that the rule could not see while it went on passing,
         which reads as coverage and is worse than no rule.
+
+        Returns dotted paths below `harness_workbench.`, each of which may name
+        a module, a package, or a name inside a module. Resolving which is
+        `implicated_core_modules`'s job -- an importer cannot tell them apart
+        from syntax alone, and guessing wrong silently drops the import.
         """
         package = ROOT / "src" / "harness_workbench"
         prefix = "harness_workbench."
@@ -831,12 +1059,39 @@ class TestReleaseSurfaces(unittest.TestCase):
                     if module == "harness_workbench":
                         imported.update(alias.name for alias in node.names)
                     elif module.startswith(prefix):
-                        imported.add(module[len(prefix):])
+                        remainder = module[len(prefix):]
+                        imported.add(remainder)
+                        # `from harness_workbench.builtin.retry import feature`
+                        # imports the module `builtin.retry.feature`, and the
+                        # remainder alone is `builtin.retry` -- not a module
+                        # key, so intersecting on it discarded the import and
+                        # the rule passed on a working spelling.
+                        imported.update(
+                            f"{remainder}.{alias.name}" for alias in node.names
+                        )
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith(prefix):
                             imported.add(alias.name[len(prefix):])
         return imported
+
+    def implicated_core_modules(
+        self, candidates: "set[str]", modules: "dict[str, Path]"
+    ) -> "set[str]":
+        """The core modules a set of imported dotted paths reaches.
+
+        A candidate implicates the module it names, and -- when it names a
+        package -- every module under it. `from harness_workbench.builtin
+        import retry` binds a package whose modules the importer can then reach
+        by attribute; treating that as importing nothing let the shipped tree
+        take a dependency on internal code with the rule still green.
+        """
+        implicated = set()
+        for candidate in candidates:
+            for name in modules:
+                if name == candidate or name.startswith(candidate + "."):
+                    implicated.add(name)
+        return implicated
 
     def test_public_library_surface_is_routed_or_declared_internal(self):
         entries = self.manifest_entries()
@@ -849,8 +1104,9 @@ class TestReleaseSurfaces(unittest.TestCase):
         #    recipient receives and runs, and whatever it imports from core is
         #    load-bearing public API by use rather than by declaration. This
         #    rule needs no maintenance: it reads the imports.
-        imported_by_shipped_tree = self.core_imports_of_shipped_tree()
-        imported_by_shipped_tree &= set(modules)
+        imported_by_shipped_tree = self.implicated_core_modules(
+            self.core_imports_of_shipped_tree(), modules
+        )
         self.assertTrue(
             imported_by_shipped_tree,
             "found no core imports in the shipped subject tree; the discovery "
@@ -905,7 +1161,6 @@ class TestReleaseSurfaces(unittest.TestCase):
         import importlib
 
         entries = self.manifest_entries()
-        siblings = {name.split(".")[-1] for name in entries}
         checked = 0
         for name, path in sorted(self.core_modules().items()):
             if not re.search(
@@ -935,9 +1190,14 @@ class TestReleaseSurfaces(unittest.TestCase):
                 for found in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", entry)
                 if not found.startswith("__")
             } - {"harness_workbench"}
-            # An entry may name a sibling module in passing, but not if that
-            # name is also a real export -- then it is checked like any other.
-            listed -= siblings - exported
+            # Nothing is subtracted here. Excusing every routed module's short
+            # name punched a hole straight through both checks below: an entry
+            # could name a sibling module -- `conform` inside `capture`'s row --
+            # and the manifest would read as though that sibling were part of
+            # this module's exported surface, with nothing failing. A sibling
+            # gets named in its dotted form (`capture.digest_file`), which the
+            # identifier pattern above does not match, so every bare backticked
+            # identifier left here must be an export of this module.
 
             # Every name the entry writes must BE an export. Comparing only
             # against `dir(module)` meant a name that was not an attribute at

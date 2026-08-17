@@ -332,8 +332,14 @@ def _verify_ollama_digest(model: str) -> str:
 def _apply_model_profile(text: str, subject: str, secret: str | None = None) -> str:
     """Rewrite a harness config's provider block for the active profile.
 
-    The checked-in configs are the local-ollama defaults, so the local profile
-    substitutes each value with itself and the bytes are unchanged.
+    The endpoint and key-env values checked into the configs are the
+    local-ollama defaults, so under that profile those two substitute with
+    themselves. The model does not: `dsh_patch.yml` and `hermes_config.yaml`
+    still name `qwen3.5:9b`, and every profile rewrites it to the model that
+    profile declares -- `gpt-oss:20b` under local-ollama. Both retired model
+    strings are mapped for that reason, so no profile can leave a model behind
+    that was replaced after failing the repair workload. The bytes change under
+    every profile, including the local one.
     """
     _, profile = _active_profile()
     resolved = _resolve_model(subject)

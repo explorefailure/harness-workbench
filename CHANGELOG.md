@@ -42,6 +42,31 @@ Nothing below is published. The heading gains a date only at step 1 of
   derived modes with a message naming the cause, because nothing normalizes a
   wheel the same way and the release procedure compares the two builds for byte
   identity.
+- **The build backend is pinned for the release path.** `[build-system]`
+  declares `setuptools>=77`, a floor, and `python -m build` resolves a floor
+  freshly in an isolated environment — so the same commit, on one machine, at
+  one umask, produced different wheel bytes under setuptools 79.0.1 and 84.0.0,
+  including different member modes. The `release` extra now pins
+  `setuptools==83.0.0` beside `build` and `twine`, and the gate builds with
+  `--no-isolation` so the pin is the backend that actually runs. The floor still
+  governs anyone building from source. `RELEASING.md` writes the three versions
+  literally and a test reconstructs that install command from the extra, so the
+  two spellings cannot drift.
+- **Archive modes are checked against the source tree, not against themselves.**
+  The verifier asked each member's own executable bit what its mode should have
+  been, which every archive satisfies: an sdist with every regular member
+  rewritten to `0755` verified, and so did a wheel with the executable bit
+  stripped off the shipped `run_subject.sh`. Permission bits are now compared
+  against a constant set, and the set of executable members must equal the set
+  the checkout marks executable — the one permission bit Git records — with
+  both directions of disagreement named in the failure.
+- **`RELEASING.md` step 1 no longer installs the project.** It ended with
+  `pip install '.[release]'`, which runs an in-tree build and leaves a `build/`
+  directory; step 2's first precondition is that no `build/` exists. Step 2
+  could not start, and the fresh clone step 2's prose recommended landed in the
+  same state. Only the pinned tools are installed now, and step 2's version
+  check reads the source tree rather than an installed copy — which is what it
+  should have been checking anyway.
 - Identify a subject call by its request and its id rather than by its id
   alone, which is not unique.
 

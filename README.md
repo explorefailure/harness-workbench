@@ -338,14 +338,19 @@ questions and non-sensitive bugs, and discuss larger changes there before
 substantial implementation. The complete posture and local checks are in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
 
-Release tooling is pinned in the `release` extra so local and CI artifact
-checks use the same versions:
+Release tooling is pinned in the `release` extra — the build backend included,
+because `[build-system].requires` is only a floor and an isolated build
+resolves it freshly — so local and CI artifact checks use the same versions:
 
 ```sh
 python3 -m pip install '.[release]'
-python3 -m build --wheel
+python3 -m build --no-isolation --wheel
 python3 -m twine check --strict dist/*.whl
 ```
+
+That is the development convenience. The release gate installs the same pinned
+versions without installing the project, because installing the project leaves
+behind the `build/` directory the gate refuses to start with.
 
 Maintainers should use the complete, fail-closed candidate and final-release
 procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,

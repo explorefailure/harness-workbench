@@ -85,7 +85,8 @@ export SOURCE_DATE_EPOCH
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
-python -m pip install --disable-pip-version-check '.[release]'
+python -m pip install --disable-pip-version-check \
+  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
 GITLEAKS_VERSION=8.30.1
 test "$(gitleaks version)" = "$GITLEAKS_VERSION"
 gitleaks git --no-banner --redact=100 --log-opts='--all' "$SOURCE_REPO"
@@ -97,6 +98,37 @@ Clone rather than build from the development tree. Gitignored files — a stale
 from source. A clone carries committed bytes and nothing else. This is not
 hypothetical in this repository.
 
+Install the pinned release tools, not the project. `pip install '.[release]'`
+would run an in-tree PEP 517 build and leave a `build/` directory behind, and
+step 2 begins by requiring that no `build/` exists — so that one line made step
+2 unreachable from its own step 1, and a fresh clone landed in the same state.
+Nothing in the gate needs the project installed: the test suite puts `src` on
+`sys.path` itself, `tools/verify_release_tag.py` parses the source
+`__version__`, and `tools/verify_installed_artifact.py` builds its own throwaway
+environments. The version check in step 2 reads the source for the same reason —
+the gate must check the version *being released*, not whichever copy happens to
+be installed.
+
+The three pins are exact, and `setuptools` is pinned because it is the build
+backend. `pyproject.toml`'s `requires = ["setuptools>=77"]` is a floor that
+`python -m build` resolves freshly in an isolated environment, so the release
+bytes would depend on whatever the index served that day: the same commit built
+under setuptools 79.0.1 and 84.0.0 produced different wheels, differing in
+member modes as well as compressed bytes. The gate therefore builds with
+`--no-isolation` against the pinned backend, which is why it has to be installed
+here. The floor still governs third parties building from source; only the
+release path is pinned. `pyproject.toml`'s `release` extra carries the same
+three versions and a test fails if the two lists disagree.
+
+Bumping that pin is a deliberate act with a visible consequence, not
+housekeeping. setuptools 84 stops copying the executable bit onto `.py` package
+data, so `subjects/hook.py` and `subjects/runner.py` ship non-executable and
+the artifact verifier fails naming both — the change reaches a reader as a
+failed gate rather than as a quietly different wheel. Only the wheel is
+affected: the normalized sdist is byte-identical across 83 and 84, because
+normalization reduces every member to the neutral modes and both versions copy
+the checkout's executable bit into the sdist unchanged.
+
 The history scan runs against `$SOURCE_REPO` rather than whichever checkout is
 to hand. A full local clone happens to carry every branch, but that is a
 property of how it was made and not a guarantee: `--single-branch`, a shallow
@@ -105,9 +137,8 @@ cannot see a local-only branch such as a pre-rewrite backup at all. Scan the
 repository that holds every ref, so the scan's coverage never depends on the
 checkout's provenance.
 
-Stop if the checkout is dirty, dependency installation fails, the release-tool
-versions differ from `pyproject.toml`, or the history-wide secret scan reports a
-finding. Obtain Gitleaks from its official release, verify the published archive
+Stop if the checkout is dirty, tool installation fails, or the history-wide
+secret scan reports a finding. Obtain Gitleaks from its official release, verify the published archive
 checksum, and install it outside the repository. `.gitleaks.toml` extends the
 default rules. Its sole exception is joined with `AND` across the exact
 initial-history commit, one test path, and the synthetic fixture pattern that
@@ -122,15 +153,15 @@ For the current candidate, these variables and their agreement check are exact:
 ```sh
 VERSION=0.1.0rc2
 TAG=v0.1.0-rc.2
-test "$(python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
+test "$(PYTHONPATH=src python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
 test ! -e build
 test ! -e dist
 RAW_SDIST_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$RAW_SDIST_DIR"' EXIT HUP INT TERM
-python -m build --wheel --outdir dist
-python -m build --sdist --outdir "$RAW_SDIST_DIR"
+python -m build --no-isolation --wheel --outdir dist
+python -m build --no-isolation --sdist --outdir "$RAW_SDIST_DIR"
 python tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
 rm -rf -- "$RAW_SDIST_DIR"
 trap - EXIT HUP INT TERM
@@ -160,11 +191,32 @@ links, special nodes, duplicate members, and platform-bearing gzip headers.
 Modes are normalized because they are not the source's — they are the umask of
 whoever ran the build. Git tracks one permission bit, so that bit is kept and
 the rest is fixed. Nothing normalizes the *wheel* the same way: setuptools
-stores each file's mode as it found it, so the verifier requires `0644`/`0755`
-there (plus the `0664` the wheel writer stamps on `RECORD` at any umask) and
-fails with the umask named. **Run the whole gate under `umask 022`.** A wheel
-built under a different umask is byte-different for no reason a reader could
-ever recover from the artefact.
+stores each file's mode as it found it. **Run the whole gate under `umask 022`.**
+A wheel built under a different umask is byte-different for no reason a reader
+could ever recover from the artefact.
+
+The verifier checks archive modes two ways, and neither expectation comes from
+the archive:
+
+- **permission bits against a constant.** Every member must be `0644`, a
+  directory or executable `0755`, a link `0777`, or the `0664` the wheel writer
+  stamps on `RECORD` — that last one a known constant of the pinned backend
+  rather than an observation. This is what catches umask leakage, and it fails
+  with the umask named.
+- **the executable set against the source tree.** The set of regular members
+  carrying the executable bit must *equal* the set the checkout marks
+  executable: sdist `harness_workbench-<version>/<path>` against `<path>`, wheel
+  `harness_workbench/<path>` against `src/harness_workbench/<path>`, and
+  generated members (`PKG-INFO`, `*.dist-info/*`) executable in neither. The
+  expected value is the source file's own mode bit, which is the one bit Git
+  records, so a shipped script that quietly lost its executable bit and a
+  shipped document that quietly gained one both fail, and both directions are
+  named in the message.
+
+The second check exists because the first cannot stand alone: an "expected"
+mode derived from the member's own executable bit says only that `0755` members
+are executable, which every archive satisfies. Rewriting every sdist member to
+`0755` passed that check.
 
 The two installed-artifact commands are intentionally separate. Each creates
 a clean virtual environment, installs only that artifact, checks installed
@@ -209,14 +261,16 @@ export SOURCE_DATE_EPOCH
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
-python -m pip install --disable-pip-version-check '.[release]'
+python -m pip install --disable-pip-version-check \
+  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
 ```
 
-This clone needs its own environment. The venv, the release toolchain, and
-`SOURCE_DATE_EPOCH` all belong to `hwb-release`, and step 2's block assumes
-they already exist — carrying the previous clone's activated venv over here
-would build one clone while the version check reads the other one's installed
-package, which passes for the wrong reason.
+This clone needs its own environment. The venv, the pinned release toolchain,
+and `SOURCE_DATE_EPOCH` all belong to `hwb-release`, and step 2's block assumes
+they already exist. `--no-isolation` builds with whatever backend the active
+environment happens to hold, so a borrowed or unactivated venv either fails
+outright or builds this clone against a backend nobody pinned — which is the
+one input this comparison is least able to show you.
 
 Repeat step 2 here in full, then compare the two runs:
 
@@ -231,16 +285,25 @@ checkout. The wheel is not normalized that way and carries the modes of the
 checkout it was built from, which is why both clones are made under `umask 022`
 and why step 2 rejects a wheel whose modes say otherwise.
 
-A difference means one of three things, and they are not equally likely:
+Start from the difference itself: `SHA256SUMS` names which file moved, and the
+two `dist/` directories are still on disk, so compare the archives' member
+lists, modes and per-member digests before theorising. Known causes, not an
+exhaustive list:
 
-- the two builds ran under different umasks, or on a filesystem that
-  materializes modes differently — check this **first**, by comparing member
-  modes rather than digests, because it is the only benign cause and the one
-  that will not announce itself;
-- the remote is not serving the commit that passed the gate; or
-- the build is not reproducible.
+- **the toolchain differs between the two clones** — a venv that was not
+  activated, `--no-isolation` dropped, or an environment holding a setuptools
+  other than the pin. This one is genuinely benign and it presents as a *mode*
+  difference, which is exactly what a "benign umask" story would also predict,
+  so check the installed versions in both clones before believing either;
+- **the remote is not serving the commit that passed the gate**;
+- **the build is not reproducible** for a reason nobody has found yet.
 
-Only the first is fixable by rebuilding. For the other two, stop. Do not
+Umask drift is deliberately absent from this list: step 2 rejects it in both
+clones, with the umask named, before this comparison is ever reached. If it
+somehow reaches here, the mode check is what failed, and that is a finding
+rather than a rebuild.
+
+Only a toolchain difference is fixable by rebuilding. For the other two, stop. Do not
 disable or loosen the comparison to get past it: a gate that fails benignly
 gets switched off, and this one is the only thing that checks the bytes GitHub
 serves against the bytes that passed the gate. This comparison is only

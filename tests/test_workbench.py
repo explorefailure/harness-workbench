@@ -3875,7 +3875,7 @@ class TestPackageIdentity(unittest.TestCase):
         self.assertEqual(["LICENSE", "NOTICE"], project["license-files"])
         self.assertEqual([{"name": "Garrett Davis"}], project["maintainers"])
         self.assertEqual(
-            ["build==1.5.0", "twine==7.0.0"],
+            ["build==1.5.0", "setuptools==83.0.0", "twine==7.0.0"],
             project["optional-dependencies"]["release"],
         )
         self.assertEqual(
