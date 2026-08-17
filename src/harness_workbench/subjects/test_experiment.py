@@ -1446,5 +1446,67 @@ class ClaudeGuardWiringTests(unittest.TestCase):
         self.assertIn("Claude stream does not start with system init", dirty)
 
 
+class CodexGuardWiringTests(unittest.TestCase):
+    def config(self) -> str:
+        return adapters._codex_guard_config(Path("/tmp/guard_hook.py"))
+
+    def test_the_guard_is_declared_in_config_toml_not_a_hooks_file(self) -> None:
+        # The mechanic that cost the most to find. A correctly-shaped
+        # `$CODEX_HOME/hooks/hooks.json` is read by NOTHING -- three runs with
+        # one in place produced no receipt at all. That filename lives in
+        # Codex's importer for Claude Code's settings, a different feature with
+        # a familiar name. Codex's own hooks are config.toml tables.
+        config = self.config()
+        self.assertIn("[[hooks.SessionStart]]", config)
+        self.assertIn("[[hooks.PreToolUse]]", config)
+        self.assertIn("--event session_start", config)
+        self.assertIn("--event tool_call", config)
+
+    def test_both_hook_entries_are_enabled(self) -> None:
+        # An entry that parses and is not enabled is the silent kind of broken.
+        self.assertEqual(2, self.config().count("enabled = true"))
+
+    def test_the_guard_arm_trades_ignore_user_config_for_an_isolated_home(
+        self,
+    ) -> None:
+        # `--ignore-user-config` is what keeps the host's config.toml out of the
+        # observational workloads, and the guard arm cannot use it, because for
+        # Codex the guard IS config.toml. Isolation moves to a per-run
+        # CODEX_HOME instead. Getting this backwards yields a guard that is
+        # configured and ignored.
+        identity = {"model": "test-model"}
+        guarded = adapters._codex_command(identity, Path("/ws"), "guard")
+        self.assertNotIn("--ignore-user-config", guarded)
+        self.assertIn(adapters.HOOK_TRUST_FLAG, guarded)
+        plain = adapters._codex_command(identity, Path("/ws"), "write")
+        self.assertIn("--ignore-user-config", plain)
+        self.assertNotIn(adapters.HOOK_TRUST_FLAG, plain)
+
+    def test_the_hook_trust_advisory_is_forgiven_but_nothing_else_is(self) -> None:
+        # Codex reports "hooks may run without review" as an `error` ITEM, so
+        # it cannot be filtered by severity, and it lands between thread and
+        # turn. Forgiving it must not turn into forgiving real error items
+        # there, which is why the check names the flag rather than the type.
+        advisory = {
+            "type": "item.completed",
+            "item": {"type": "error", "message":
+                     f"`{adapters.HOOK_TRUST_FLAG}` is enabled. Enabled hooks"
+                     " may run without review for this invocation."},
+        }
+        real = {
+            "type": "item.completed",
+            "item": {"type": "error", "message": "something actually broke"},
+        }
+        thread = {"type": "thread.started"}
+        turn = {"type": "turn.started"}
+        complaint = "Codex stream does not start with thread and turn"
+        _, forgiven = adapters._normalize_codex(
+            jsonl(thread, advisory, turn), Path(".")
+        )
+        self.assertNotIn(complaint, forgiven)
+        _, refused = adapters._normalize_codex(jsonl(thread, real, turn), Path("."))
+        self.assertIn(complaint, refused)
+
+
 if __name__ == "__main__":
     unittest.main()

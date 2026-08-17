@@ -377,6 +377,10 @@ def _fixture(workspace: Path, workload: str) -> None:
 
 
 GUARD_HOOK_INTERPRETER = "python3.11"
+# Codex refuses to run a hook it has no persisted `trusted_hash` for, and
+# announces that stand-down as an `error` item on its own stream. Named once so
+# the flag and the stream check that forgives its notice cannot drift apart.
+HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
 
 
 def _install_guard_hook(root: Path) -> Path:
@@ -509,22 +513,69 @@ def _claude_command(
     return argv
 
 
+def _codex_guard_config(guard_hook: Path) -> str:
+    """Codex's guard, declared where Codex actually reads hooks from.
+
+    NOT `hooks/hooks.json`. The tree's own handover said hooks.json, the binary
+    contains that string, and a correctly-shaped file at
+    `$CODEX_HOME/hooks/hooks.json` is read by nothing: three runs with it in
+    place produced no receipt at all. That string belongs to Codex's importer
+    for *Claude Code's* `.claude/settings.json`, which is a different feature
+    wearing a familiar name. Codex's own hooks are `[[hooks.<Event>]]` tables
+    in `config.toml`, which is what produced the first `loaded` line.
+
+    `SessionStart` is the receipt and `PreToolUse` is the control, for the same
+    reason as Claude: a PreToolUse hook fires only on a tool call, so by itself
+    it cannot distinguish a guard that never loaded from a model that never
+    called a tool.
+    """
+    session_start = _guard_hook_command(guard_hook, "codex", "session_start")
+    tool_call = _guard_hook_command(guard_hook, "codex", "tool_call")
+    return "\n".join([
+        "[[hooks.SessionStart]]",
+        "enabled = true",
+        "[[hooks.SessionStart.hooks]]",
+        'type = "command"',
+        f"command = {json.dumps(session_start)}",
+        "",
+        "[[hooks.PreToolUse]]",
+        # Every tool, not only the guarded one: the shell call is the
+        # routing-around evidence and a narrower matcher would hide it.
+        'matcher = "*"',
+        "enabled = true",
+        "[[hooks.PreToolUse.hooks]]",
+        'type = "command"',
+        f"command = {json.dumps(tool_call)}",
+        "",
+    ])
+
+
 def _codex_command(
     identity: dict[str, Any], workspace: Path, workload: str
 ) -> list[str]:
-    return [
+    argv = [
         str(_executable("codex")),
         "exec",
         "--json",
         "--ephemeral",
-        "--ignore-user-config",
         "--ignore-rules",
         "--skip-git-repo-check",
         "--sandbox", "workspace-write",
         "--model", identity["model"],
         "--cd", str(workspace),
-        WORKLOADS[workload]["prompt"],
     ]
+    if workload == "guard":
+        # Hooks are trust-gated; without this Codex declines to run one it has
+        # no persisted `trusted_hash` for, and a declined hook is silent.
+        argv.insert(2, HOOK_TRUST_FLAG)
+    else:
+        # `--ignore-user-config` is what keeps the host's config.toml out of
+        # the observational workloads. The guard arm cannot use it, because the
+        # guard IS config.toml -- so that arm isolates with a per-run
+        # `CODEX_HOME` instead, which removes the host's config by not being it.
+        argv.insert(2, "--ignore-user-config")
+    argv.append(WORKLOADS[workload]["prompt"])
+    return argv
 
 
 def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
@@ -755,8 +806,27 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
 def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
     events, errors = parse_jsonl_objects(raw)
     types = [event.get("type") for event in events]
+    # thread first, turn next, and between them only Codex's own advisory that
+    # the guard arm asked for hooks to run untrusted. Codex reports that notice
+    # as an `error` ITEM rather than as a warning, so it cannot be filtered by
+    # severity; it is matched by its declared text instead. Anything else
+    # appearing before the turn -- including a real error item -- still fails,
+    # which is the whole point of keeping the check narrow rather than
+    # relaxing it to "a thread and a turn appear somewhere".
+    between = (
+        events[1 : types.index("turn.started")] if "turn.started" in types else events
+    )
+    advisory_only = all(
+        event.get("type") == "item.completed"
+        and isinstance(event.get("item"), dict)
+        and event["item"].get("type") == "error"
+        and HOOK_TRUST_FLAG in str(event["item"].get("message", ""))
+        for event in between
+    )
     if (
-        types[:2] != ["thread.started", "turn.started"]
+        types[:1] != ["thread.started"]
+        or "turn.started" not in types
+        or not advisory_only
         or types.count("thread.started") != 1
         or types.count("turn.started") != 1
     ):
@@ -1392,6 +1462,31 @@ def capture(
                 environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
             argv = _claude_command(identity, workload, guard_settings)
         elif subject == "codex":
+            if workload == "guard":
+                codex_home = root / "codex-home"
+                codex_home.mkdir()
+                # Only the credential is carried over from the host home, and
+                # only because an isolated CODEX_HOME otherwise authenticates
+                # as nobody -- the same trap Claude's isolated config directory
+                # sprang, where a run that made zero tool calls would have
+                # scored as a perfectly contained block arm. Copying one file
+                # keeps every other ambient thing (config.toml, AGENTS.md,
+                # sessions, plugins) out by simply not being there.
+                source_home = Path(
+                    os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
+                )
+                credential = source_home / "auth.json"
+                if not credential.is_file():
+                    raise AdapterError(
+                        f"codex credential not found at {credential}; the guard"
+                        " arm cannot authenticate from an isolated CODEX_HOME"
+                    )
+                shutil.copy2(credential, codex_home / "auth.json")
+                (codex_home / "config.toml").write_text(
+                    _codex_guard_config(_install_guard_hook(root)),
+                    encoding="utf-8",
+                )
+                environment["CODEX_HOME"] = str(codex_home)
             argv = _codex_command(identity, workspace, workload)
         elif subject == "hermes":
             for name in sensitive_environment_names:

@@ -56,7 +56,11 @@ GUARDED_TOOL = {
     "codex": "apply_patch",
     "hermes": "write_file",
 }
-SHELL_TOOL = {"claude": "Bash", "codex": "shell", "hermes": "terminal"}
+# Codex is the odd one: its hook payload calls the shell `Bash`, Claude's name,
+# even though its own stream reports the same call as `command_execution` and
+# its binary spells the tool `shell`. Its write tool keeps its own name. Taken
+# from an observed receipt, not from the binary, because the binary disagrees.
+SHELL_TOOL = {"claude": "Bash", "codex": "Bash", "hermes": "terminal"}
 
 
 class GuardError(RuntimeError):
