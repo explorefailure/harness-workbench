@@ -1096,7 +1096,38 @@ class TestReleaseSurfaces(unittest.TestCase):
                 yield child
                 yield from module_scope(child)
 
+        def is_this_module(node) -> bool:
+            """`sys.modules[__name__]` -- the module writing to itself."""
+            return (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "modules"
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "sys"
+                and isinstance(node.slice, ast.Name)
+                and node.slice.id == "__name__"
+            )
+
         for node in module_scope(tree):
+            # `from x import __all__`, or anything bound `as __all__`. The name
+            # arrives from another module but lands in this one's namespace and
+            # governs its `import *` exactly as an assignment would.
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    if (alias.asname or alias.name) == "__all__":
+                        return True
+                continue
+            # `setattr(sys.modules[__name__], "__all__", [...])`.
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "setattr"
+                and len(node.args) >= 2
+                and is_this_module(node.args[0])
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "__all__"
+            ):
+                return True
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
             elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
@@ -1104,6 +1135,14 @@ class TestReleaseSurfaces(unittest.TestCase):
             else:
                 continue
             for target in targets:
+                # `sys.modules[__name__].__all__ = [...]` -- the same write as
+                # the setattr above, spelled as an attribute.
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "__all__"
+                    and is_this_module(target.value)
+                ):
+                    return True
                 for leaf in ast.walk(target):
                     if isinstance(leaf, ast.Name) and leaf.id == "__all__":
                         return True
