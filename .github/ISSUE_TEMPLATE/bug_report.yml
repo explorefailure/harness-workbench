@@ -13,7 +13,7 @@ body:
     attributes:
       label: Harness Workbench version or commit
       description: Paste `hwb --version` and, for a source checkout, the commit ID.
-      placeholder: hwb 0.1.0rc1 / abc1234
+      placeholder: hwb 0.1.0rc2 / abc1234
     validations:
       required: true
   - type: input

@@ -24,6 +24,24 @@ Nothing below is published. The heading gains a date only at step 1 of
   mechanical check that fails until every module declaring `__all__` is routed
   there. `capture` reached the published `0.1.0rc1` candidate unrouted because
   no check looked at modules.
+- **`harness_workbench.canon` now declares `__all__`**: `canon_bytes`,
+  `digest_file`, `digest_obj`, `digest_tree`, `file_digests`, `short`. The
+  module was already public by use — the shipped subject tree imports it and
+  every adapter record digests it — but with no declared surface its functions
+  could be added, removed or renamed with nothing failing. Declaring it also
+  stops `from harness_workbench.canon import *` re-exporting `hashlib`, `json`,
+  `os` and the typing names.
+- **Source distributions are no longer a function of the builder's umask.**
+  `normalize_sdist.py` already neutralized ownership and timestamps but copied
+  each member's mode straight from the checkout, so building one commit under
+  `umask 077` produced different bytes than under `umask 022`. Modes are now
+  reduced to `0644`, `0755` for directories and executables, and `0777` for
+  links — the executable bit is the only one Git tracks and the only one kept.
+  **This changes the bytes of any sdist built from this tree.** The artifact
+  verifier enforces the neutral modes, and rejects a wheel carrying umask-
+  derived modes with a message naming the cause, because nothing normalizes a
+  wheel the same way and the release procedure compares the two builds for byte
+  identity.
 - Identify a subject call by its request and its id rather than by its id
   alone, which is not unique.
 

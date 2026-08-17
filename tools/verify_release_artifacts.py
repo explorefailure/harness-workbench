@@ -29,6 +29,7 @@ SDIST_STORE_NAMES = {
     "replays", "steadies", "effects", "interrupts",
 }
 ALLOWED_PAX_HEADERS = {"path", "linkpath"}
+WHEEL_RECORD_MODE = 0o664
 
 
 def fail(message: str) -> None:
@@ -185,8 +186,46 @@ def check_no_retired_package(names: set[str], source: str) -> None:
             fail(f"{source} still contains retired import package: {name}")
 
 
+def check_wheel_member_modes(archive: zipfile.ZipFile) -> None:
+    """Reject a wheel whose members carry the builder's umask.
+
+    Nothing normalizes the wheel the way normalize_sdist.py normalizes the
+    sdist: setuptools stores each file's mode as it found it in the checkout,
+    and a checkout's modes come from the umask. Building the same commit under
+    `umask 077` produced a wheel differing from the `umask 022` one in nothing
+    but permission bits -- which the step 3 comparison against the GitHub clone
+    would report as a reproducibility failure, for a cause that is neither the
+    remote nor the build. Fail here, where the message can say so, rather than
+    two steps later where it cannot.
+    """
+    for info in archive.infolist():
+        stored = info.external_attr >> 16
+        if not stored:
+            # No POSIX mode recorded at all; nothing to disagree about.
+            continue
+        permissions = stored & 0o7777
+        if info.is_dir():
+            allowed = {normalize_sdist.NEUTRAL_DIR_MODE}
+        elif PurePosixPath(info.filename).name == "RECORD":
+            # The wheel writer stamps RECORD itself and always writes 0o664,
+            # at any umask. That is its choice, not the environment's.
+            allowed = {WHEEL_RECORD_MODE}
+        elif permissions & 0o100:
+            allowed = {normalize_sdist.NEUTRAL_EXEC_MODE}
+        else:
+            allowed = {normalize_sdist.NEUTRAL_FILE_MODE}
+        if permissions not in allowed:
+            expected = " or ".join(f"{mode:#o}" for mode in sorted(allowed))
+            fail(
+                f"wheel member {info.filename!r} has non-neutral mode "
+                f"{permissions:#o}, expected {expected}; the build inherited "
+                "the umask -- rebuild with `umask 022`"
+            )
+
+
 def check_wheel(path: Path, project: dict, version: str) -> None:
     with zipfile.ZipFile(path) as archive:
+        check_wheel_member_modes(archive)
         names = {name.rstrip("/") for name in archive.namelist() if not name.endswith("/")}
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         entry_names = [name for name in names if name.endswith(".dist-info/entry_points.txt")]
@@ -268,6 +307,13 @@ def check_sdist_archive_safety(path: Path, epoch: int) -> None:
                 fail(
                     f"sdist member {member.name!r} has non-neutral named ownership "
                     f"{member.uname!r}:{member.gname!r}"
+                )
+            expected_mode = normalize_sdist.normalized_mode(member)
+            if member.mode != expected_mode:
+                fail(
+                    f"sdist member {member.name!r} has non-neutral mode "
+                    f"{member.mode:#o}, expected {expected_mode:#o}; modes must "
+                    "not carry the builder's umask into the archive"
                 )
             if member.mtime != epoch:
                 fail(

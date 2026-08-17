@@ -11,6 +11,22 @@ import os
 from typing import Any, Dict, Iterable, List, Tuple
 
 
+# Declared so the surface is held. This module is routed in the release
+# conformance record and its digest rule moves every digest in every adapter
+# record, but with no `__all__` the exported-name check skipped it: these
+# functions could be added, removed or renamed with nothing failing. Declaring
+# the surface also stops `import *` re-exporting `hashlib`, `json`, `os` and
+# the typing names as though they were part of it.
+__all__ = [
+    "canon_bytes",
+    "digest_file",
+    "digest_obj",
+    "digest_tree",
+    "file_digests",
+    "short",
+]
+
+
 def canon_bytes(obj: Any) -> bytes:
     """Canonical JSON encoding. Deterministic across runs and machines."""
     return json.dumps(

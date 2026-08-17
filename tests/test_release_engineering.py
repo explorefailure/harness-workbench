@@ -1,6 +1,7 @@
 """Mechanical checks for release policy that must not depend on GitHub."""
 from __future__ import annotations
 
+import ast
 import fnmatch
 import gzip
 import io
@@ -77,6 +78,30 @@ class TestReleaseVersion(unittest.TestCase):
             stdout=subprocess.PIPE,
         )
         self.assertEqual("hwb 0.1.0rc2\n", completed.stdout)
+
+    def test_issue_template_version_placeholders_are_current(self):
+        """A reader-facing example version must not name a superseded candidate.
+
+        These two placeholders sat at `0.1.0rc1` through the bump because
+        nothing looked at them: they are the version written where a grep for
+        release surfaces does not think to go, and the only cost of being wrong
+        is that every bug report is seeded with a version that no longer exists.
+        """
+        templates = sorted((ROOT / ".github" / "ISSUE_TEMPLATE").glob("*.yml"))
+        self.assertTrue(templates, "no issue templates found")
+        checked = 0
+        for template in templates:
+            for line in template.read_text(encoding="utf-8").splitlines():
+                if "placeholder:" not in line or "hwb " not in line:
+                    continue
+                with self.subTest(template=template.name):
+                    self.assertIn(
+                        f"hwb {harness_workbench.__version__}",
+                        line,
+                        f"{template.name} seeds reports with a stale version",
+                    )
+                checked += 1
+        self.assertTrue(checked, "no version placeholder found; this check is vacuous")
 
 
 class TestReleaseChecksums(unittest.TestCase):
@@ -206,7 +231,11 @@ class TestSourceDistributionPrivacy(unittest.TestCase):
                 self.assertEqual(("root", "root"), (member.uname, member.gname))
                 self.assertEqual(self.EPOCH, member.mtime)
             members = {member.name: member for member in archive.getmembers()}
-            self.assertEqual(0o751, members["harness-workbench/file.txt"].mode)
+            # The executable bit survives because Git tracks it; the rest of
+            # the mode does not, because the rest of the mode is the builder's
+            # umask and nothing else.
+            self.assertEqual(0o755, members["harness-workbench/file.txt"].mode)
+            self.assertEqual(0o755, members["harness-workbench/subdir"].mode)
             self.assertTrue(members["harness-workbench/subdir"].isdir())
             self.assertEqual("file.txt", members["harness-workbench/link"].linkname)
             self.assertTrue(members["harness-workbench/link"].issym())
@@ -215,6 +244,49 @@ class TestSourceDistributionPrivacy(unittest.TestCase):
                 members["harness-workbench/hardlink"].linkname,
             )
             self.assertTrue(members["harness-workbench/hardlink"].islnk())
+
+    def test_normalization_does_not_carry_the_builders_umask(self):
+        """The same tree built under two umasks must normalize to one archive.
+
+        Ownership and timestamps were neutralized but modes were not, so the
+        sdist was a function of the builder's umask: `umask 077` and
+        `umask 022` produced different bytes for one commit. Step 3 of
+        RELEASING.md compares the offline build against a rebuild from the
+        GitHub clone and requires byte identity, so that difference surfaced
+        there as "the build is not reproducible" -- a true statement with a
+        cause nobody would find, and a gate that fails benignly gets disabled.
+        """
+        archives = {}
+        for umask_bits, permissive in ((0o022, 0o644), (0o077, 0o600)):
+            directory = self.member(f"harness-workbench/subdir{umask_bits}")
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o777 & ~umask_bits
+            plain = self.member(f"harness-workbench/plain{umask_bits}.txt")
+            plain.mode = permissive
+            script = self.member(f"harness-workbench/script{umask_bits}.sh")
+            script.mode = 0o777 & ~umask_bits
+            raw = self.write_archive(
+                f"raw{umask_bits}.tar.gz", [directory, plain, script]
+            )
+            out = self.root / f"norm{umask_bits}.tar.gz"
+            normalize_sdist.normalize(raw, out, self.EPOCH)
+            with tarfile.open(out, "r:gz") as archive:
+                archives[umask_bits] = {
+                    member.name.rsplit("/", 1)[-1].replace(str(umask_bits), ""): (
+                        member.mode
+                    )
+                    for member in archive.getmembers()
+                }
+
+        self.assertEqual(
+            archives[0o022],
+            archives[0o077],
+            "normalized member modes still depend on the builder's umask",
+        )
+        self.assertEqual(
+            {"subdir": 0o755, "plain.txt": 0o644, "script.sh": 0o755},
+            archives[0o022],
+        )
 
     def test_unsafe_member_paths_and_links_are_rejected(self):
         traversal = self.write_archive(
@@ -665,7 +737,44 @@ class TestReleaseSurfaces(unittest.TestCase):
         "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
         "sweep",
+        # The builtin feature tree. `builtin/` carries no `__init__.py`, but a
+        # namespace package nested inside a regular one is importable anyway
+        # and every file here ships in the wheel, so these are as reachable as
+        # any top-level module and have to be decided rather than assumed. The
+        # decision is internal: a recipient reaches them through the feature
+        # loader in `features.py`, which resolves them by path, and none is an
+        # import surface anyone is invited to depend on.
+        "builtin.freeze.feature", "builtin.freeze.invert",
+        "builtin.receipt.feature", "builtin.receipt.invert",
+        "builtin.redact.feature", "builtin.redact.invert",
+        "builtin.retry.feature", "builtin.retry.invert",
+        "builtin.sample.feature", "builtin.sample.invert",
+        "builtin.timing.feature",
     })
+
+    # The shipped subject tree is opt-in data, not a library surface, and the
+    # record says so. It is the *subject* of rule 1 below rather than something
+    # rule 3 classifies.
+    SHIPPED_TREE = "subjects"
+
+    def core_modules(self) -> "dict[str, Path]":
+        """Every importable module in the package except the shipped tree.
+
+        Discovery used to be `glob("*.py")`, which reached only the top level.
+        A module added one directory down -- under `builtin/`, which ships in
+        the wheel and imports fine -- needed no decision from anyone. That is
+        the hole `capture` went through, and it was still open underneath.
+        """
+        package = ROOT / "src" / "harness_workbench"
+        found = {}
+        for path in sorted(package.rglob("*.py")):
+            relative = path.relative_to(package)
+            if relative.parts[0] == self.SHIPPED_TREE:
+                continue
+            if any(part.startswith("__") for part in relative.parts):
+                continue
+            found[".".join(relative.with_suffix("").parts)] = path
+        return found
 
     def public_library_manifest(self) -> str:
         """The manifest section alone, not the whole 400-line record.
@@ -681,34 +790,67 @@ class TestReleaseSurfaces(unittest.TestCase):
         heading = "### Exact public library-module manifest"
         self.assertIn(heading, record, "the public library manifest is missing")
         section = record.split(heading, 1)[1]
-        return section.split("\n## ", 1)[0].split("\n### ", 1)[0]
+        # Any heading ends the section. Splitting on `## ` and `### ` alone let
+        # an `#### ` subheading through, so everything under it counted as
+        # manifest and a module named down there read as routed.
+        return re.split(r"\n#{1,6} ", section, maxsplit=1)[0]
+
+    def manifest_entries(self) -> "dict[str, str]":
+        """The manifest split per routed module, not one flat blob.
+
+        Reading the whole section for every module lets one module's entry
+        satisfy another's, and lets prose after the last bullet count as
+        routing. An entry is the bullet that names the module and ends where
+        that bullet ends.
+        """
+        manifest = self.public_library_manifest()
+        entries = {}
+        for block in re.split(r"\n(?=- `harness_workbench\.)", manifest):
+            match = re.match(r"- `harness_workbench\.([A-Za-z0-9_.]+)`", block.lstrip())
+            if match:
+                entries[match.group(1)] = block.split("\n\n", 1)[0]
+        return entries
+
+    def core_imports_of_shipped_tree(self) -> "set[str]":
+        """What the shipped tree imports from core, read as syntax not text.
+
+        The old rule scraped two regexes over `subjects/*.py`. It captured only
+        the first name of `from harness_workbench import a, b`, never saw
+        `import harness_workbench.a`, and did not recurse -- so a core import
+        could be added that the rule could not see while it went on passing,
+        which reads as coverage and is worse than no rule.
+        """
+        package = ROOT / "src" / "harness_workbench"
+        prefix = "harness_workbench."
+        imported = set()
+        for path in sorted((package / self.SHIPPED_TREE).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and not node.level:
+                    module = node.module or ""
+                    if module == "harness_workbench":
+                        imported.update(alias.name for alias in node.names)
+                    elif module.startswith(prefix):
+                        imported.add(module[len(prefix):])
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith(prefix):
+                            imported.add(alias.name[len(prefix):])
+        return imported
 
     def test_public_library_surface_is_routed_or_declared_internal(self):
-        manifest = self.public_library_manifest()
-        package = ROOT / "src" / "harness_workbench"
-        modules = {
-            path.stem
-            for path in package.glob("*.py")
-            if not path.stem.startswith("__")
-        }
+        entries = self.manifest_entries()
+        modules = self.core_modules()
 
         def routed(name: str) -> bool:
-            return f"`harness_workbench.{name}`" in manifest
+            return name in entries
 
         # 1. DERIVED. The shipped subject tree is opt-in data, but it is data a
         #    recipient receives and runs, and whatever it imports from core is
         #    load-bearing public API by use rather than by declaration. This
         #    rule needs no maintenance: it reads the imports.
-        imported_by_shipped_tree = set()
-        for path in sorted((package / "subjects").glob("*.py")):
-            source = path.read_text(encoding="utf-8")
-            imported_by_shipped_tree.update(
-                re.findall(r"from harness_workbench\.(\w+) import", source)
-            )
-            imported_by_shipped_tree.update(
-                re.findall(r"from harness_workbench import (?!\()(\w+)", source)
-            )
-        imported_by_shipped_tree &= modules
+        imported_by_shipped_tree = self.core_imports_of_shipped_tree()
+        imported_by_shipped_tree &= set(modules)
         self.assertTrue(
             imported_by_shipped_tree,
             "found no core imports in the shipped subject tree; the discovery "
@@ -725,8 +867,8 @@ class TestReleaseSurfaces(unittest.TestCase):
 
         # 2. DECLARED. `__all__` is the author saying "this is the public
         #    surface" in the code itself.
-        for name in sorted(modules):
-            source = (package / f"{name}.py").read_text(encoding="utf-8")
+        for name, path in sorted(modules.items()):
+            source = path.read_text(encoding="utf-8")
             if not re.search(r"^__all__\s*=", source, re.MULTILINE):
                 continue
             with self.subTest(declared=name):
@@ -748,7 +890,7 @@ class TestReleaseSurfaces(unittest.TestCase):
                     "library manifest nor listed in INTERNAL_MODULES; decide "
                     "which it is",
                 )
-        stale = sorted(self.INTERNAL_MODULES - modules)
+        stale = sorted(self.INTERNAL_MODULES - set(modules))
         self.assertEqual([], stale, f"INTERNAL_MODULES names missing modules: {stale}")
         both = sorted(name for name in self.INTERNAL_MODULES if routed(name))
         self.assertEqual([], both, f"modules both routed and internal: {both}")
@@ -762,41 +904,58 @@ class TestReleaseSurfaces(unittest.TestCase):
         """
         import importlib
 
-        manifest = self.public_library_manifest()
-        package = ROOT / "src" / "harness_workbench"
+        entries = self.manifest_entries()
+        siblings = {name.split(".")[-1] for name in entries}
         checked = 0
-        for path in sorted(package.glob("*.py")):
-            name = path.stem
-            if name.startswith("__"):
-                continue
+        for name, path in sorted(self.core_modules().items()):
             if not re.search(
                 r"^__all__\s*=", path.read_text(encoding="utf-8"), re.MULTILINE
             ):
                 continue
+            entry = entries.get(name)
+            self.assertIsNotNone(
+                entry,
+                f"harness_workbench.{name} declares __all__ but has no entry in "
+                "the public library manifest",
+            )
             module = importlib.import_module(f"harness_workbench.{name}")
-            for exported in sorted(module.__all__):
-                with self.subTest(module=name, exported=exported):
+            exported = set(module.__all__)
+            for name_ in sorted(exported):
+                with self.subTest(module=name, exported=name_):
                     self.assertIn(
-                        f"`{exported}`",
-                        manifest,
-                        f"harness_workbench.{name} exports {exported!r}, which "
-                        "the public library manifest does not name",
+                        f"`{name_}`",
+                        entry,
+                        f"harness_workbench.{name} exports {name_!r}, which its "
+                        "public library manifest entry does not name",
                     )
+            # Read only this module's own entry. Reading the whole section let
+            # one module's exported names satisfy another module's row.
             listed = {
                 found
-                for found in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", manifest)
+                for found in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", entry)
                 if not found.startswith("__")
-            }
-            unexpected = sorted(
-                (listed & set(dir(module)))
-                - set(module.__all__)
-                - {name, "harness_workbench"}
+            } - {"harness_workbench"}
+            # An entry may name a sibling module in passing, but not if that
+            # name is also a real export -- then it is checked like any other.
+            listed -= siblings - exported
+
+            # Every name the entry writes must BE an export. Comparing only
+            # against `dir(module)` meant a name that was not an attribute at
+            # all fell outside the comparison and passed unnoticed, so the
+            # manifest could promise an export that does not exist.
+            absent = sorted(found for found in listed if not hasattr(module, found))
+            self.assertEqual(
+                [],
+                absent,
+                f"the manifest entry for harness_workbench.{name} names {absent}, "
+                "which the module does not define at all",
             )
+            unexpected = sorted(listed - exported)
             self.assertEqual(
                 [],
                 unexpected,
-                f"the manifest names {unexpected} for harness_workbench.{name}, "
-                "which are not in its __all__",
+                f"the manifest entry for harness_workbench.{name} names "
+                f"{unexpected}, which are not in its __all__",
             )
             checked += 1
         self.assertTrue(checked, "no module declares __all__; this check is vacuous")

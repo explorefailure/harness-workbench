@@ -13,7 +13,7 @@
   "deepseek_harness": {
     "version": "0.1.0-rc.6",
     "provider": "workbench-ollama",
-    "model": "qwen3.5:9b",
+    "comment": "No model is pinned here. DeepSeek is a configurable-model subject, so model_selection.json chooses its model and the adapter overwrites anything this block claimed. The key said qwen3.5:9b long after that model was replaced, which is exactly what a pin nobody reads decays into.",
     "executable_sha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62",
     "npm_integrity": "sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg=="
   },

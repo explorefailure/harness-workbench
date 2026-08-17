@@ -67,6 +67,7 @@ spent whether or not it was any good. What the gate genuinely needs is a
 from the local repository.
 
 ```sh
+umask 022
 SOURCE_REPO="$PWD"
 RELEASE_COMMIT="$(git rev-parse HEAD)"
 test "${#RELEASE_COMMIT}" -eq 40
@@ -147,13 +148,23 @@ test -z "$(git status --porcelain --untracked-files=all)"
 The backend-built sdist exists only under the private `mktemp` directory and is
 deleted after normalization. Only the normalized archive enters `dist/`, the
 checksum manifest, or an upload command. `normalize_sdist.py` preserves the
-backend-selected files, file modes, and safe file/directory/link types while
-sorting members, setting every member to `0:0` / `root:root`, setting every tar
-and gzip timestamp to the release commit's `SOURCE_DATE_EPOCH`, removing
-machine-specific PAX fields, and writing a filename-free gzip header. The
-artifact verifier rejects a raw or malformed sdist, including non-neutral
-ownership, timestamp drift, absolute/traversal paths, unsafe links, special
-nodes, duplicate members, and platform-bearing gzip headers.
+backend-selected files and safe file/directory/link types while sorting
+members, setting every member to `0:0` / `root:root`, reducing every mode to
+`0644`, `0755` for a directory or an executable, and `0777` for a link, setting
+every tar and gzip timestamp to the release commit's `SOURCE_DATE_EPOCH`,
+removing machine-specific PAX fields, and writing a filename-free gzip header.
+The artifact verifier rejects a raw or malformed sdist, including non-neutral
+ownership, non-neutral modes, timestamp drift, absolute/traversal paths, unsafe
+links, special nodes, duplicate members, and platform-bearing gzip headers.
+
+Modes are normalized because they are not the source's — they are the umask of
+whoever ran the build. Git tracks one permission bit, so that bit is kept and
+the rest is fixed. Nothing normalizes the *wheel* the same way: setuptools
+stores each file's mode as it found it, so the verifier requires `0644`/`0755`
+there (plus the `0664` the wheel writer stamps on `RECORD` at any umask) and
+fails with the umask named. **Run the whole gate under `umask 022`.** A wheel
+built under a different umask is byte-different for no reason a reader could
+ever recover from the artefact.
 
 The two installed-artifact commands are intentionally separate. Each creates
 a clean virtual environment, installs only that artifact, checks installed
@@ -183,6 +194,7 @@ commit is sound; this proves the remote holds that commit and nothing else, and
 that a recipient cloning it gets identical bytes:
 
 ```sh
+umask 022
 cd ..
 test ! -e hwb-release-remote
 git clone https://github.com/explorefailure/harness-workbench.git hwb-release-remote
@@ -191,7 +203,20 @@ git fetch --tags origin
 test "$(git rev-parse 'origin/release/0.1.0rc2^{commit}')" = "$RELEASE_COMMIT"
 git checkout --detach "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_COMMIT")"
+test "$SOURCE_DATE_EPOCH" -gt 0
+export SOURCE_DATE_EPOCH
+python3.11 -m venv .venv
+. .venv/bin/activate
+python -m pip install --disable-pip-version-check --upgrade pip
+python -m pip install --disable-pip-version-check '.[release]'
 ```
+
+This clone needs its own environment. The venv, the release toolchain, and
+`SOURCE_DATE_EPOCH` all belong to `hwb-release`, and step 2's block assumes
+they already exist — carrying the previous clone's activated venv over here
+would build one clone while the version check reads the other one's installed
+package, which passes for the wrong reason.
 
 Repeat step 2 here in full, then compare the two runs:
 
@@ -200,10 +225,25 @@ diff ../hwb-release/dist/SHA256SUMS dist/SHA256SUMS
 ```
 
 **The manifests must be identical.** `SOURCE_DATE_EPOCH` is derived from the
-release commit and the sdist is normalized to neutral ownership and that
-timestamp, so the same commit must produce the same bytes from either checkout.
-A difference means the remote is not serving the commit that passed the gate, or
-the build is not reproducible — either way, stop. This comparison is only
+release commit, and the sdist is normalized to neutral ownership, neutral modes
+and that timestamp, so the same commit produces the same sdist from either
+checkout. The wheel is not normalized that way and carries the modes of the
+checkout it was built from, which is why both clones are made under `umask 022`
+and why step 2 rejects a wheel whose modes say otherwise.
+
+A difference means one of three things, and they are not equally likely:
+
+- the two builds ran under different umasks, or on a filesystem that
+  materializes modes differently — check this **first**, by comparing member
+  modes rather than digests, because it is the only benign cause and the one
+  that will not announce itself;
+- the remote is not serving the commit that passed the gate; or
+- the build is not reproducible.
+
+Only the first is fixable by rebuilding. For the other two, stop. Do not
+disable or loosen the comparison to get past it: a gate that fails benignly
+gets switched off, and this one is the only thing that checks the bytes GitHub
+serves against the bytes that passed the gate. This comparison is only
 available because the gate ran before the push; it is the reason for that
 ordering as much as avoiding a published failure is.
 
