@@ -588,19 +588,104 @@ class CodexNormalizerTests(unittest.TestCase):
 
 
 class HermesNormalizerTests(unittest.TestCase):
-    def event(self, name: str, *, status: str | None = None) -> dict:
-        extra = {"tool_call_id": "call-1"}
+    def event(
+        self,
+        name: str,
+        *,
+        status: str | None = None,
+        call_id: str = "call-1",
+        request_id: str = "sess:task:turn:api:1",
+        schema: str | None = adapters.HERMES_TELEMETRY_SCHEMA,
+        path: str = "/workspace/shared.txt",
+    ) -> dict:
+        # Mirrors a real payload: Hermes puts `api_request_id` and the
+        # telemetry schema version beside the call id, and a call is only
+        # identified by the request AND the id together.
+        extra: dict = {"tool_call_id": call_id, "api_request_id": request_id}
+        if schema is not None:
+            extra["telemetry_schema_version"] = schema
         if status is not None:
             extra["status"] = status
         return {
             "hook_event_name": name,
             "tool_name": "write_file",
             "tool_input": {
-                "path": "/workspace/shared.txt",
+                "path": path,
                 "content": EXPECTED_CONTENT.decode("utf-8"),
             },
             "extra": extra,
         }
+
+    def test_a_reused_call_id_in_a_later_request_is_a_separate_call(self) -> None:
+        # The defect this replaced. Hermes restarts `tool_call_id` per API
+        # request, so a multi-request run -- every `repair` run -- reused
+        # `read_file_0` and the pairing map reported it as duplicate evidence,
+        # failing the ADAPTER verdict on a run where nothing went wrong.
+        lifecycle, errors = adapters._normalize_hermes(
+            b"done\n",
+            jsonl(
+                self.event("pre_tool_call", request_id="s:t:u:api:1"),
+                self.event("post_tool_call", status="ok", request_id="s:t:u:api:1"),
+                self.event("pre_tool_call", request_id="s:t:u:api:2"),
+                self.event("post_tool_call", status="ok", request_id="s:t:u:api:2"),
+            ),
+            Path("/workspace"),
+            0,
+        )
+        self.assertEqual([], errors)
+        executions = lifecycle["tool_executions"]
+        self.assertEqual(2, len(executions))
+        # The id Hermes reported is kept, so a record reads like the sidecar,
+        # and the request is what separates the two.
+        self.assertEqual(["call-1", "call-1"], [e["call_id"] for e in executions])
+        self.assertEqual(
+            ["s:t:u:api:1", "s:t:u:api:2"], sorted(e["request_id"] for e in executions)
+        )
+
+    def test_a_repeated_call_id_within_one_request_is_still_duplicate(self) -> None:
+        # Re-keyed, not removed. Two `pre` events sharing a request and an id
+        # is still corrupt evidence, and the check that says so has to survive
+        # the fix for the collision above -- otherwise the symptom goes away
+        # and a real control goes with it.
+        _, errors = adapters._normalize_hermes(
+            b"done\n",
+            jsonl(
+                self.event("pre_tool_call"),
+                self.event("pre_tool_call"),
+                self.event("post_tool_call", status="ok"),
+            ),
+            Path("/workspace"),
+            0,
+        )
+        self.assertTrue(
+            any("duplicate Hermes pre_tool_call" in e for e in errors), errors
+        )
+
+    def test_a_hook_event_without_a_request_id_is_refused_loudly(self) -> None:
+        # Never a fallback to the colliding key: losing this field would
+        # silently restore the mispairing, which is the one outcome worse than
+        # failing.
+        event = self.event("pre_tool_call")
+        del event["extra"]["api_request_id"]
+        _, errors = adapters._normalize_hermes(
+            b"done\n", jsonl(event), Path("/workspace"), 0
+        )
+        self.assertTrue(
+            any("no api request id" in e for e in errors), errors
+        )
+
+    def test_an_unexpected_telemetry_schema_is_refused(self) -> None:
+        # `api_request_id` arrives inside a versioned envelope. A bump means
+        # the identity assumption is unverified, not merely old.
+        _, errors = adapters._normalize_hermes(
+            b"done\n",
+            jsonl(self.event("pre_tool_call", schema="hermes.observer.v2")),
+            Path("/workspace"),
+            0,
+        )
+        self.assertTrue(
+            any("unexpected Hermes telemetry schema" in e for e in errors), errors
+        )
 
     def test_valid_hook_pair_with_process_boundary(self) -> None:
         lifecycle, errors = adapters._normalize_hermes(
@@ -627,7 +712,12 @@ class HermesNormalizerTests(unittest.TestCase):
             Path("/workspace"),
             0,
         )
-        self.assertIn("Hermes hook pair is out of order: call-1", errors)
+        # The message names the request as well as the id, because the id on
+        # its own no longer locates the call in the sidecar.
+        self.assertIn(
+            "Hermes hook pair is out of order: call-1 in sess:task:turn:api:1",
+            errors,
+        )
 
     def test_outside_workspace_proposal_is_rejected(self) -> None:
         pre = self.event("pre_tool_call")
@@ -640,7 +730,8 @@ class HermesNormalizerTests(unittest.TestCase):
         self.assertEqual(
             errors,
             [
-                "Hermes proposed an operation outside the disposable workspace: call-1"
+                "Hermes proposed an operation outside the disposable workspace:"
+                " call-1 in sess:task:turn:api:1"
             ],
         )
 

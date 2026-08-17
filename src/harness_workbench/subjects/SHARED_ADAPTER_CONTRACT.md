@@ -42,6 +42,7 @@ Each available attempt has:
 ```json
 {
   "call_id": "subject correlation id or null",
+  "request_id": "scope the call_id is unique within, where the subject reports one",
   "tool_name": "subject tool family",
   "effect_kind": "read | write | command | other",
   "operation": "recognized semantic operation or null",
@@ -60,9 +61,10 @@ effective executed arguments. A native file-change event is a subject report,
 not an external proof that the bytes landed. The after-manifest and outcome
 oracle supply the independent effect evidence.
 
-Normalizers reject duplicate lifecycle terminals, duplicate tool identifiers,
-orphaned native tool completions, incomplete hook pairs, and post-before-pre
-hook ordering. A reported tool error remains a valid measured attempt; it does
+Normalizers reject duplicate lifecycle terminals, duplicate tool identifiers
+*within the scope those identifiers are unique in* — for Hermes that scope is
+the API request, not the run — orphaned native tool completions, incomplete
+hook pairs, and post-before-pre hook ordering. A reported tool error remains a valid measured attempt; it does
 not make the adapter structurally invalid by itself.
 
 `reported_error` preserves the harness's own tool-result status. It is not
@@ -79,7 +81,7 @@ can report `isError: false` while its first-party result text ends with
 | Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
 | DeepSeek Harness `0.1.0-rc.6` | Native persisted JSONL plus process | Native `turn/end` | Correlated `tool/call` / `tool/result`, plus projected bash exit marker | The supported headless stdout contains final text only; the developer-preview session format has no compatibility promise, and `tool/result.isError` is not a child-process exit verdict. |
-| Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs when a call occurs | The final repair run terminated cleanly after one read but never attempted red/edit/green; earlier probes also timed out or proposed outside-workspace paths. |
+| Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs, keyed on `(api_request_id, tool_call_id)` | `tool_call_id` alone is NOT unique — it restarts per API request, so correlation needs both fields. Process exit is the only terminal evidence, and ordinary hook failures fail open. |
 
 Claude documents noninteractive `-p` operation and streamed JSON output, while
 its hooks expose lifecycle and tool boundaries:
@@ -199,43 +201,68 @@ Scope, still real:
   per spec, each with its `freeze` lock over the same 13 inputs. That
   directory is gitignored, as every run store in this tree is -- retained
   means on disk and checkable, not committed.
+- **Cut against the pre-fix `adapters.py`.** The Hermes pairing fix below
+  landed after this matrix was measured, so its `freeze` locks bind a digest of
+  `adapters.py` that is no longer HEAD. Nothing in the matrix depended on the
+  fix -- no Hermes guard arm collided, which is why they all passed -- but a
+  re-cut would legitimately report a changed input, and that is the apparatus
+  baseline working rather than a discrepancy to explain away.
 - **Cost, measured rather than inferred.** The whole matrix moved the gateway
   windows by +10 rolling, +4 weekly, +1 monthly points for 18 gateway runs;
   the 12 Claude and Codex runs bill first-party accounts and moved the gateway
   by zero. Percentages and deltas only, no dollar conversion.
 
-### Hermes call ids are per-TURN, not per-session — `repair` is broken by it
+### A Hermes call is identified by its REQUEST and its id, not by its id
 
-**Open defect, reproduced twice, not caused by the guard work.** The Hermes
-adapter keys its pre/post hook pairing on `tool_call_id` and assumes that id is
-unique for the run. It is not: Hermes numbers calls per tool with a counter
-that restarts on a later turn. One `repair` run's sidecar, in order:
+`tool_call_id` is a per-tool counter that Hermes restarts on each **API
+request** — one model round-trip. A run spanning more than one round-trip
+therefore reuses it. The adapter keyed its pre/post pairing on `tool_call_id`
+alone, so every multi-request run collided and failed the ADAPTER verdict with
+`duplicate Hermes pre_tool_call: read_file_0` — on runs where nothing about the
+subject had gone wrong.
+
+`write` never tripped it: one request, one call per tool, no id reused.
+`repair` always did, because it is inherently several round-trips (run the
+test, edit, run it again). One repair sidecar, in order:
 
 ```
-#0 pre  read_file  read_file_0     #6  pre  terminal    terminal_0
-#1 post read_file  read_file_0     #7  post terminal    terminal_0
-#2 pre  read_file  read_file_0 <-- #8  pre  write_file  write_file_0
-#3 pre  read_file  read_file_1     #9  post write_file  write_file_0
-#4 post read_file  read_file_0 <-- #10 pre  terminal    terminal_0 <--
-#5 post read_file  read_file_1     #11 post terminal    terminal_0 <--
+#0 pre  read_file  read_file_0  api:1     #6  pre  terminal    terminal_0  api:3
+#1 post read_file  read_file_0  api:1     #7  post terminal    terminal_0  api:3
+#2 pre  read_file  read_file_0  api:2 <-- #8  pre  write_file  write_file_0 api:4
+#3 pre  read_file  read_file_1  api:2     #9  post write_file  write_file_0 api:4
+#4 post read_file  read_file_0  api:2     #10 pre  terminal    terminal_0  api:5 <--
+#5 post read_file  read_file_1  api:2     #11 post terminal    terminal_0  api:5 <--
 ```
 
-`read_file_1` at #3 shows the counter does increment within a turn; `#2` and
-`#10` show it restarting across turns. The pairing map therefore collides and
-the adapter reports `duplicate Hermes pre_tool_call: read_file_0`, failing the
-ADAPTER verdict — correctly, in the sense that the evidence really is
-unpairable as keyed, and wrongly, in the sense that nothing about the subject
-went wrong.
+`#2` and `#10` reuse an id from an earlier request. `#3` shows the counter also
+incrementing *within* a request, and `#2`-`#5` show two `read_file` calls in
+flight at once (`pre`, `pre`, `post`, `post`).
 
-Why it surfaces on `repair` and not `write`: `write` is a single turn with one
-call per tool, so no id is ever reused. `repair` is inherently multi-turn (run
-the test, edit, run it again), which is exactly when the counter restarts.
+**The key is `(api_request_id, tool_call_id)`.** Measured over three runs, that
+pairs 6/6, 6/6 and 2/2 calls with zero collisions and zero orphans, `pre`
+always before `post`.
 
-This code path predates the guard work — it is unchanged since the contract was
-first derived — so the observational workloads were passing on a shape of run
-that happened not to reuse an id. Fixing it means choosing a new pairing key
-(turn index plus call id, or positional pre/post matching), which is a design
-decision rather than a patch, and is deliberately left open here.
+**Not `turn_id`**, which is the obvious guess and does not work: an entire
+repair run is a single turn, so pairing on it collides exactly as badly.
+`api_request_id` is `{turn_id}:api:{n}` — the granularity the counter actually
+resets at.
+
+**Not positional pairing** (nth `pre` to nth `post`), which fits the evidence
+and is still inference. The request id is a fact the subject declares about
+itself, and preferring a declared fact to a reconstructed one is the same rule
+that makes the guard write a startup receipt instead of deducing it from the
+absence of errors. Positional pairing also fails silently under the
+interleaving above, and a silent mispairing in evidence code is the worst
+available outcome.
+
+Two things guard the assumption. The duplicate check was **re-keyed, not
+removed** — two `pre` events sharing a request *and* an id is still corrupt
+evidence, and deleting the check would have made the symptom disappear along
+with a real control. And `telemetry_schema_version` is pinned to
+`hermes.observer.v1`: `api_request_id` arrives inside a versioned envelope, so
+a bump means this identity assumption is unverified rather than merely old. A
+missing `api_request_id` is a loud adapter error and never a fallback to the
+colliding key.
 
 ### DeepSeek's deny seam, runtime-confirmed
 

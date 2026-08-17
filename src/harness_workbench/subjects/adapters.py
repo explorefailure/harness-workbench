@@ -1084,6 +1084,12 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
     }, errors
 
 
+# The telemetry envelope `api_request_id` arrives in. Pinned because the call
+# identity below depends on that field existing and meaning what it means; a
+# schema bump is a reason to re-check the assumption, not to pair on faith.
+HERMES_TELEMETRY_SCHEMA = "hermes.observer.v1"
+
+
 def _hermes_result_exit_code(result: Any) -> int | None:
     """Project the child exit status Hermes reports inside its post-hook result.
 
@@ -1123,6 +1129,10 @@ def _normalize_hermes(
             "event": event.get("hook_event_name"),
             "tool_name": event.get("tool_name"),
             "call_id": extra.get("tool_call_id"),
+            # Hermes numbers tool calls PER API REQUEST, not per run, so
+            # `tool_call_id` alone is not an identity. See the pairing below.
+            "request_id": extra.get("api_request_id"),
+            "telemetry_schema": extra.get("telemetry_schema_version"),
             "arguments_sha256": digest_obj(arguments),
             "effect_kind": effect_kind,
             "operation": arguments.get("operation"),
@@ -1131,19 +1141,63 @@ def _normalize_hermes(
             "operation_exit_code": _hermes_result_exit_code(extra.get("result")),
             "acquisition": "shell_hook",
         })
-    calls: dict[str, dict[str, dict[str, Any]]] = {}
+    # A CALL IS IDENTIFIED BY ITS REQUEST AND ITS ID, NOT BY ITS ID.
+    #
+    # `tool_call_id` is a per-tool counter that Hermes restarts on each API
+    # request, so a run spanning more than one model round-trip reuses it. This
+    # keyed on `tool_call_id` alone and reported `duplicate Hermes
+    # pre_tool_call: read_file_0` on any multi-request run -- which is every
+    # `repair` run, because that workload is inherently several round-trips
+    # (run the test, edit, run it again). `write` never tripped it: one
+    # request, one call per tool, no id ever reused.
+    #
+    # NOT keyed on `turn_id`, which is the obvious guess and does not work: a
+    # whole repair run is a single turn, and pairing on it collides exactly as
+    # badly. `api_request_id` is `{turn_id}:api:{n}` and is the granularity the
+    # counter actually resets at.
+    #
+    # And NOT solved by pairing positionally -- matching the nth `pre` with the
+    # nth `post` -- which fits the observed evidence and is still inference. The
+    # request id is a fact the subject declares about itself, and the whole
+    # reason this tree writes startup receipts instead of deducing them is that
+    # a declared fact beats a reconstructed one. Positional pairing also fails
+    # SILENTLY under interleaving, and two `read_file` calls really are in
+    # flight at once here (`pre`, `pre`, `post`, `post`).
+    #
+    # The duplicate check is re-keyed, never removed. Two `pre` events sharing
+    # a request AND an id is still corrupt evidence; deleting the check would
+    # make the symptom go away and take a real control with it.
+    calls: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
     for index, item in enumerate(projected):
         call_id = item.get("call_id")
+        request_id = item.get("request_id")
         event_name = item.get("event")
+        schema = item.get("telemetry_schema")
         if not isinstance(call_id, str) or not call_id:
             errors.append("Hermes hook event has no tool call id")
+            continue
+        if not isinstance(request_id, str) or not request_id:
+            # Loud, and never a fallback to the colliding key. Losing this
+            # field would silently restore the mispairing this replaced.
+            errors.append(f"Hermes hook event has no api request id: {call_id}")
+            continue
+        if schema != HERMES_TELEMETRY_SCHEMA:
+            # `api_request_id` lives inside a versioned telemetry envelope. If
+            # the envelope moves, the identity assumption above is unverified
+            # rather than merely old, so say so instead of pairing on faith.
+            errors.append(
+                f"unexpected Hermes telemetry schema: {schema!r}"
+                f" (expected {HERMES_TELEMETRY_SCHEMA!r})"
+            )
             continue
         if event_name not in {"pre_tool_call", "post_tool_call"}:
             errors.append(f"unexpected Hermes hook event: {event_name}")
             continue
-        pair = calls.setdefault(call_id, {})
+        pair = calls.setdefault((request_id, call_id), {})
         if event_name in pair:
-            errors.append(f"duplicate Hermes {event_name}: {call_id}")
+            errors.append(
+                f"duplicate Hermes {event_name}: {call_id} in {request_id}"
+            )
         pair[event_name] = {**item, "index": index}
     if not calls:
         errors.append("Hermes emitted no write hook evidence")
@@ -1155,24 +1209,31 @@ def _normalize_hermes(
     if returncode != 0 or not final_text:
         errors.append("Hermes process boundary is not a successful terminal")
     executions = []
-    for call_id, pair in calls.items():
+    for (request_id, call_id), pair in calls.items():
+        # Named for the message only. The identity is the pair; this is what a
+        # reader needs to find the call in the sidecar.
+        where = f"{call_id} in {request_id}"
         pre = pair.get("pre_tool_call")
         post = pair.get("post_tool_call")
         if pre is None or post is None:
-            errors.append(f"Hermes hook pair is incomplete: {call_id}")
+            errors.append(f"Hermes hook pair is incomplete: {where}")
             continue
         if pre["index"] >= post["index"]:
-            errors.append(f"Hermes hook pair is out of order: {call_id}")
+            errors.append(f"Hermes hook pair is out of order: {where}")
         if pre["outside_workspace"] or post["outside_workspace"]:
             errors.append(
-                f"Hermes proposed an operation outside the disposable workspace: {call_id}"
+                f"Hermes proposed an operation outside the disposable workspace: {where}"
             )
         if pre["tool_name"] != post["tool_name"]:
-            errors.append(f"Hermes hook tool names disagree: {call_id}")
+            errors.append(f"Hermes hook tool names disagree: {where}")
         if pre["arguments_sha256"] != post["arguments_sha256"]:
-            errors.append(f"Hermes hook arguments disagree: {call_id}")
+            errors.append(f"Hermes hook arguments disagree: {where}")
         executions.append({
+            # Both, and both as strings. `call_id` stays the id Hermes
+            # reported, so a record still reads the way the sidecar does;
+            # `request_id` is what makes it unique across the run.
             "call_id": call_id,
+            "request_id": request_id,
             "tool_name": pre["tool_name"],
             "effect_kind": pre["effect_kind"],
             "operation": pre.get("operation"),
