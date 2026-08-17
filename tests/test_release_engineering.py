@@ -974,6 +974,66 @@ class TestReleaseSurfaces(unittest.TestCase):
     # rule 3 classifies.
     SHIPPED_TREE = "subjects"
 
+    # The top-level packages under `src/` that this distribution ships. Like
+    # INTERNAL_MODULES this is the decision, not the discovery.
+    #
+    # The routing rules below read `src/harness_workbench/` only, while
+    # `[tool.setuptools.packages.find]` names `where = ["src"]` with no filter
+    # -- so `src/harness_extra/` was found by the build, shipped in the wheel,
+    # and classified by nothing. That is outside the letter of the manifest,
+    # whose prose scopes itself to one package, but straight through its
+    # purpose: adding a module to the distribution is supposed to force
+    # somebody to decide what it is, and that placement forced nothing.
+    #
+    # Binding the set here rather than widening discovery is deliberate. Every
+    # routing key, every INTERNAL_MODULES entry and the manifest itself are
+    # written relative to `harness_workbench`, so widening discovery would file
+    # a second package's modules under a manifest namespace that does not
+    # exist and quietly reinterpret the keys that do. A declared set fails at
+    # the moment the second package appears and makes the widening a decision
+    # somebody takes on purpose, with the record updated to match.
+    DISTRIBUTED_PACKAGES = frozenset({"harness_workbench"})
+
+    def test_only_the_decided_top_level_packages_are_distributed(self):
+        config = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        find = config["tool"]["setuptools"]["packages"]["find"]
+        self.assertEqual(
+            ["src"],
+            find.get("where"),
+            "package discovery no longer roots at src/; this check reads src/",
+        )
+        # An include/exclude filter would change what "found under src/ ships"
+        # means, and this check may not assume the answer it was written for.
+        self.assertEqual(
+            [],
+            sorted(set(find) - {"where"}),
+            "packages.find grew a filter; re-derive what actually ships before "
+            "trusting the set below",
+        )
+        # Every directory under `src/` holding Python at any depth. That is a
+        # superset of what `find_packages` returns -- it needs an `__init__.py`
+        # and this does not -- on purpose: a directory of shipped Python with
+        # no initializer is still a thing somebody has to decide about, and
+        # failing on it costs one line in the set below.
+        found = set()
+        for path in sorted((ROOT / "src").iterdir()):
+            if not path.is_dir() or path.name.endswith(".egg-info"):
+                continue
+            if any(
+                "__pycache__" not in module.parts for module in path.rglob("*.py")
+            ):
+                found.add(path.name)
+        self.assertEqual(
+            sorted(self.DISTRIBUTED_PACKAGES),
+            sorted(found),
+            "the top-level packages under src/ are not the ones this suite "
+            "routes; a package added here ships in the wheel and is classified "
+            "by nothing, so add it to DISTRIBUTED_PACKAGES only together with "
+            "the routing that decides its modules",
+        )
+
     def core_modules(self) -> "dict[str, Path]":
         """Every importable module in the package except the shipped tree.
 
@@ -998,6 +1058,50 @@ class TestReleaseSurfaces(unittest.TestCase):
                 continue
             found[".".join(relative.with_suffix("").parts)] = path
         return found
+
+    @staticmethod
+    def declares_all(path: Path) -> bool:
+        """Whether a module assigns `__all__`, read as syntax at any nesting.
+
+        The regex this replaces was anchored at column zero, so two spellings
+        that move a module's declared surface went unread: an `__all__`
+        assigned inside an `if` block, and `globals()["__all__"] = [...]`.
+        Either moves what `import *` re-exports while the routing and
+        exported-name rules skip the module entirely -- the same shape as the
+        hole `canon` sat in before `0.1.0rc2`.
+
+        Deliberately syntax, not `hasattr` on an imported module: importing
+        every module in the package to answer this question runs import side
+        effects across the whole tree, which is a worse risk than the gap.
+
+        Over-detection is the safe direction and is left in: an `__all__`
+        assigned inside a function is not the module's surface, but it fails
+        loudly and makes somebody decide rather than passing quietly.
+        """
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                for leaf in ast.walk(target):
+                    if isinstance(leaf, ast.Name) and leaf.id == "__all__":
+                        return True
+                    # `globals()["__all__"] = [...]` writes the module
+                    # namespace without ever naming `__all__` as a binding.
+                    if (
+                        isinstance(leaf, ast.Subscript)
+                        and isinstance(leaf.value, ast.Call)
+                        and isinstance(leaf.value.func, ast.Name)
+                        and leaf.value.func.id in {"globals", "vars"}
+                        and isinstance(leaf.slice, ast.Constant)
+                        and leaf.slice.value == "__all__"
+                    ):
+                        return True
+        return False
 
     def public_library_manifest(self) -> str:
         """The manifest section alone, not the whole 400-line record.
@@ -1034,6 +1138,31 @@ class TestReleaseSurfaces(unittest.TestCase):
                 entries[match.group(1)] = block.split("\n\n", 1)[0]
         return entries
 
+    @staticmethod
+    def imported_module_name(node: ast.ImportFrom, containing: "tuple[str, ...]"):
+        """The module an `ImportFrom` reads, with relative levels resolved.
+
+        `node.level` is the leading dot count and `containing` is the package
+        of the file holding the statement, so level 1 is that package, level 2
+        its parent, and so on. Returns `None` for a level that walks off the
+        top of the source root, which is not importable at runtime either.
+
+        Skipping relative imports outright -- which is what `not node.level`
+        did -- made the whole rule optional: `from .. import runner` inside the
+        shipped tree binds `harness_workbench.runner` exactly as the absolute
+        spelling does, the modules resolve, and the suite stayed green. A
+        spelling the rule cannot see reads as coverage and is worse than no
+        rule, and that is truer of a spelling the rule deliberately discards.
+        """
+        if not node.level:
+            return node.module or ""
+        if node.level > len(containing):
+            return None
+        base = list(containing[: len(containing) - node.level + 1])
+        if node.module:
+            base.append(node.module)
+        return ".".join(base)
+
     def core_imports_of_shipped_tree(self) -> "set[str]":
         """What the shipped tree imports from core, read as syntax not text.
 
@@ -1043,19 +1172,39 @@ class TestReleaseSurfaces(unittest.TestCase):
         could be added that the rule could not see while it went on passing,
         which reads as coverage and is worse than no rule.
 
+        Absolute and package-relative spellings are both resolved to one
+        absolute name before anything is decided, so the two cannot disagree.
+        Relative imports that stay inside the shipped tree resolve to
+        `harness_workbench.subjects.*`, which `core_modules` excludes, so the
+        tree's own internal imports implicate nothing -- the exclusion does
+        that work, not a filter here.
+
         Returns dotted paths below `harness_workbench.`, each of which may name
         a module, a package, or a name inside a module. Resolving which is
         `implicated_core_modules`'s job -- an importer cannot tell them apart
         from syntax alone, and guessing wrong silently drops the import.
+
+        Only import *statements* are read. A module named solely through a
+        dynamic call -- `importlib.import_module("harness_workbench.runner")`
+        -- is not seen, which the record discloses as the boundary of the rule
+        rather than claiming otherwise.
         """
-        package = ROOT / "src" / "harness_workbench"
+        source_root = ROOT / "src"
+        package = source_root / "harness_workbench"
         prefix = "harness_workbench."
         imported = set()
         for path in sorted((package / self.SHIPPED_TREE).rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            # The package holding this file. Dropping the final part gives the
+            # package for a module (`subjects/compare.py` -> `subjects`) and
+            # for a package initializer alike (`subjects/__init__.py` is itself
+            # `subjects`, whose own package for relative purposes is `subjects`).
+            containing = path.relative_to(source_root).with_suffix("").parts[:-1]
             for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and not node.level:
-                    module = node.module or ""
+                if isinstance(node, ast.ImportFrom):
+                    module = self.imported_module_name(node, containing)
+                    if module is None:
+                        continue
                     if module == "harness_workbench":
                         imported.update(alias.name for alias in node.names)
                     elif module.startswith(prefix):
@@ -1070,6 +1219,10 @@ class TestReleaseSurfaces(unittest.TestCase):
                             f"{remainder}.{alias.name}" for alias in node.names
                         )
                 elif isinstance(node, ast.Import):
+                    # `alias.asname` is not read on purpose: `import x` and
+                    # `import x as y` bind the same module and `alias.name` is
+                    # identical for both, so an alias is a spelling of this
+                    # branch rather than a second one.
                     for alias in node.names:
                         if alias.name.startswith(prefix):
                             imported.add(alias.name[len(prefix):])
@@ -1124,8 +1277,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         # 2. DECLARED. `__all__` is the author saying "this is the public
         #    surface" in the code itself.
         for name, path in sorted(modules.items()):
-            source = path.read_text(encoding="utf-8")
-            if not re.search(r"^__all__\s*=", source, re.MULTILINE):
+            if not self.declares_all(path):
                 continue
             with self.subTest(declared=name):
                 self.assertTrue(
@@ -1163,9 +1315,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         entries = self.manifest_entries()
         checked = 0
         for name, path in sorted(self.core_modules().items()):
-            if not re.search(
-                r"^__all__\s*=", path.read_text(encoding="utf-8"), re.MULTILINE
-            ):
+            if not self.declares_all(path):
                 continue
             entry = entries.get(name)
             self.assertIsNotNone(
@@ -1174,7 +1324,14 @@ class TestReleaseSurfaces(unittest.TestCase):
                 "the public library manifest",
             )
             module = importlib.import_module(f"harness_workbench.{name}")
-            exported = set(module.__all__)
+            declared = getattr(module, "__all__", None)
+            self.assertIsNotNone(
+                declared,
+                f"harness_workbench.{name} assigns __all__ in its source but the "
+                "imported module has no __all__; the assignment does not reach "
+                "the module namespace",
+            )
+            exported = set(declared)
             for name_ in sorted(exported):
                 with self.subTest(module=name, exported=name_):
                     self.assertIn(
@@ -1185,11 +1342,16 @@ class TestReleaseSurfaces(unittest.TestCase):
                     )
             # Read only this module's own entry. Reading the whole section let
             # one module's exported names satisfy another module's row.
-            listed = {
-                found
-                for found in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", entry)
-                if not found.startswith("__")
-            } - {"harness_workbench"}
+            # Only the two literals an entry legitimately writes about itself
+            # are subtracted: `__all__`, which the entry prose names when it
+            # says the module declares one, and the package name. Dropping the
+            # whole dunder *class* instead excused every other dunder from both
+            # checks below, so an entry could promise `__nonexistent__` and
+            # pass -- a false positive fixed by widening the exemption past
+            # what caused it.
+            listed = set(
+                re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", entry)
+            ) - {"harness_workbench", "__all__"}
             # Nothing is subtracted here. Excusing every routed module's short
             # name punched a hole straight through both checks below: an entry
             # could name a sibling module -- `conform` inside `capture`'s row --

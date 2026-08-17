@@ -23,7 +23,15 @@ Nothing below is published. The heading gains a date only at step 1 of
 - Route the public library surface in the conformance record, and add a
   mechanical check that fails until every module declaring `__all__` is routed
   there. `capture` reached the published `0.1.0rc1` candidate unrouted because
-  no check looked at modules.
+  no check looked at modules. The check reads the shipped subject tree's
+  imports as syntax, resolving package-relative spellings (`from .. import
+  runner`) to the same module the absolute spelling names, and reads `__all__`
+  as an assignment anywhere in a module rather than at the start of a line, so
+  neither a declared surface nor a dependency on internal code can move by
+  being written a different way. Dynamic `importlib` calls are outside it and
+  the record says so. A companion check declares which top-level packages under
+  `src/` ship, because `packages.find` ships every one of them and only
+  `harness_workbench` was being classified at all.
 - **`harness_workbench.canon` now declares `__all__`**: `canon_bytes`,
   `digest_file`, `digest_obj`, `digest_tree`, `file_digests`, `short`. The
   module was already public by use — the shipped subject tree imports it and
