@@ -19,6 +19,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
+
+def _glob_matches(relative: str, glob: str) -> bool:
+    """Match a package-data glob the way setuptools does, not the way fnmatch does.
+
+    `fnmatch` compiles `*` to `.*`, which happily crosses `/`; setuptools
+    globs a directory at a time and never does. Comparing segment counts
+    first, then each segment on its own, is that difference spelled out --
+    without it, `subjects/*.mjs` silently claims to cover a file nested one
+    directory deeper that no wheel will ever contain.
+    """
+    parts = relative.split("/")
+    pattern = glob.split("/")
+    if len(parts) != len(pattern):
+        return False
+    return all(fnmatch.fnmatch(p, g) for p, g in zip(parts, pattern))
+
 import harness_workbench  # noqa: E402
 import normalize_sdist  # noqa: E402
 import release_checksums  # noqa: E402
@@ -289,9 +305,56 @@ class TestReleaseSurfaces(unittest.TestCase):
             if not line.strip():
                 continue
             relative = line.split("src/harness_workbench/", 1)[1]
-            if not any(fnmatch.fnmatch(relative, glob) for glob in subject_globs):
+            if not any(_glob_matches(relative, glob) for glob in subject_globs):
                 uncovered.append(relative)
         self.assertEqual([], uncovered)
+
+    def test_the_coverage_check_does_not_match_across_directories(self):
+        """`subjects/*.mjs` must not be read as covering `subjects/n/x.mjs`.
+
+        The obvious spelling of the check above is `fnmatch`, and it is wrong
+        in a way that restores the exact bug it was written to catch: fnmatch
+        translates `*` to `.*`, which crosses `/`, while setuptools' own
+        package-data globbing does not. So a tracked
+        `subjects/interceptors/guard.mjs` would satisfy `subjects/*.mjs`, the
+        check would pass, and the wheel would ship without it -- one directory
+        further down than `guard_extension.ts` was.
+
+        A control nobody inverts is a control nobody tested, so this asserts
+        the segment rule directly rather than trusting the helper's name.
+        """
+        self.assertTrue(_glob_matches("subjects/guard_plugin.mjs", "subjects/*.mjs"))
+        self.assertTrue(
+            _glob_matches("subjects/repair_fixture/a.py", "subjects/repair_fixture/*.py")
+        )
+        self.assertFalse(_glob_matches("subjects/nested/guard.mjs", "subjects/*.mjs"))
+        self.assertFalse(_glob_matches("subjects/a/b/c.py", "subjects/*.py"))
+
+    def test_the_capture_run_root_cannot_be_committed(self):
+        """`capture()` builds its per-run root inside the subject tree.
+
+        It is created with `dir=HERE`, and the Codex guard arm copies
+        `~/.codex/auth.json` into it -- an isolated CODEX_HOME authenticates as
+        nobody otherwise. `TemporaryDirectory` removes it on any ordinary exit,
+        but nothing in Python runs after a SIGKILL, and an OOM or a spend limit
+        killing a run mid-flight leaves that credential in the working tree
+        where the next `git add -A` would stage it.
+
+        The ignore rule is the only link in that chain that does not depend on
+        the process surviving, so it is asserted rather than trusted.
+        """
+        probe = "src/harness_workbench/subjects/.hwb-codex-probe/codex-home/auth.json"
+        decision = subprocess.run(
+            ["git", "check-ignore", "-q", probe],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        if decision.returncode not in (0, 1):
+            self.skipTest("not a git checkout")
+        self.assertEqual(
+            0, decision.returncode,
+            "capture()'s .hwb-* run root is not gitignored; a killed Codex "
+            "guard run would leave a copied credential stageable",
+        )
 
     def test_public_identity_and_minimal_verification_provenance_are_explicit(self):
         with (ROOT / "pyproject.toml").open("rb") as stream:

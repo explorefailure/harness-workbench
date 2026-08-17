@@ -3690,13 +3690,41 @@ class TestPackageIdentity(unittest.TestCase):
         # five externally-pinned third-party integrations part of the package's
         # own import graph, and a broken adapter would then break `import
         # harness_workbench` rather than one experiment.
+        #
+        # Parsed, and walked, rather than matched as substrings. This checked
+        # `"from .subjects"` and `"import subjects\n"` against the top-level
+        # modules only, which is three separate ways to miss: a subpackage was
+        # never opened, `from harness_workbench.subjects import x` does not
+        # contain either string, and neither does `import subjects.adapters`.
+        # The rule is about the import GRAPH, so read the imports.
+        import ast
+
         package = os.path.join(ROOT, "src", "harness_workbench")
-        for entry in sorted(os.listdir(package)):
-            if not entry.endswith(".py"):
+        offenders = []
+        for directory, _, filenames in os.walk(package):
+            # The subject tree is allowed to import itself; it is the only
+            # thing that may.
+            if "subjects" in os.path.relpath(directory, package).split(os.sep):
                 continue
-            source = read_text(os.path.join(package, entry))
-            self.assertNotIn("from .subjects", source)
-            self.assertNotIn("import subjects\n", source)
+            for filename in sorted(filenames):
+                if not filename.endswith(".py"):
+                    continue
+                path = os.path.join(directory, filename)
+                tree = ast.parse(read_text(path), filename=path)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        # `level` covers `from .subjects` and `from ..subjects`.
+                        name = node.module or ""
+                        if name == "subjects" or name.endswith(".subjects") \
+                                or name.startswith("subjects."):
+                            offenders.append(f"{path}: from {name}")
+                    elif isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if alias.name == "subjects" \
+                                    or alias.name.startswith("subjects.") \
+                                    or ".subjects" in alias.name:
+                                offenders.append(f"{path}: import {alias.name}")
+        self.assertEqual([], offenders)
 
     def test_subject_tree_does_not_reimplement_the_capture_primitive(self):
         # The tree carried a standalone second implementation of `capture` for

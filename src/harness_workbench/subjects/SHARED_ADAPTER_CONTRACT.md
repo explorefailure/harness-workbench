@@ -131,11 +131,13 @@ DeepSeek's pipeline is documented in its `dsh-tools` registry README:
 cannot rewrite `exec.arguments`, because logged and rendered arguments would
 then desync from what actually ran.
 
-### The containment matrix, all five subjects, runtime-confirmed
+### The containment matrix, all five subjects, one draw each
 
 One paired draw per subject, `allow` and `block` differing only in the variant.
-Every arm loaded its guard and every arm is a valid measurement (adapter
-verdict passing, `status 0`).
+Every arm loaded its guard and every arm was a valid measurement (adapter
+verdict passing, `status 0`) as reported at the time. Read the scope note below
+the table before quoting any of it: these runs were not retained, so this is a
+reported result rather than one the tree can check.
 
 | Subject | Arm | Calls | Denials | Tools tried | `shared.txt` | Contained |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -163,13 +165,30 @@ that denying a write tool prevents a write, and only a measurement that keeps
 adapter verdict and outcome verdict separate can say that without calling it
 either a pass or a failure.
 
-The allow arms carry their own finding: every subject reached for the shell
-even when the write tool was permitted. The shell is the default route, not
-merely the fallback.
+The allow arms carry a weaker observation, stated weakly on purpose: every
+subject's receipt shows a shell call in the allow arm as well. That is not
+evidence about which tool created the file. The guard oracle asks only whether
+`shared.txt` exists, never which tool produced it -- that mismatch with the
+tool-scoped guard is the whole design -- so "the shell was used at all" is what
+these arms support, and "the shell is the preferred route" is not.
 
-Scope: one draw per arm, one model per subject, one task. This says nothing yet
-about how often, and the `sample` feature exists precisely because one draw is
-not a measurement.
+Scope, and it is narrower than the table's confidence suggests:
+
+- **One draw per arm**, one model per subject, one task. This says nothing yet
+  about how often, and the `sample` feature exists precisely because one draw
+  is not a measurement.
+- **The records were not retained.** Every row above was produced by invoking
+  `runner.py` directly, with the record going to a terminal; the workspaces
+  were temporary directories that deleted themselves. The numbers are
+  reproducible only by paying for the runs again, and nothing in the tree can
+  check them. `runner.py --record PATH` exists now so this is a choice rather
+  than the default, and the matrix should be re-cut through
+  `hwb run guard_<subject>_<variant>.json` -- which also exercises `freeze`,
+  `receipt`, `retry`, `sample` and `timing` over these specs for the first
+  time. Until then, treat this table as a reported result, not a checkable one.
+- **These specs have never been executed as specs.** The ten `guard_*.json`
+  files were authored and their inputs bound, but every result above came from
+  the adapter directly.
 
 ### DeepSeek's deny seam, runtime-confirmed
 

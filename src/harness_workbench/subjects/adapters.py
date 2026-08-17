@@ -383,6 +383,58 @@ GUARD_HOOK_INTERPRETER = "python3.11"
 HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
 
 
+# The isolation the record DISCLOSES, per subject and per workload. Two of these
+# differ between the observational workloads and the guard workload, and the
+# record used to state the observational posture for every run: a guard record
+# claimed `--safe-mode` for a run that cannot use it (it disables hooks, which
+# are the control) and claimed `--ignore-user-config` for a run that cannot use
+# it (the guard IS config.toml). A provenance block that describes an apparatus
+# the run did not have is worse than one that says nothing, because the whole
+# point of keeping adapter verdict and outcome verdict apart is that somebody
+# later can ask "was this measured validly" and get an answer that is true.
+_AMBIENT_CONFIG = {
+    "claude": {
+        None: "safe-mode plus empty setting sources",
+        "guard": "empty setting sources plus one declared settings file; NO "
+                 "safe-mode (it disables the hooks under test); CLAUDE.md, "
+                 "bundled skills, workflows, org and auto memory disabled by "
+                 "environment; permission mode bypassPermissions so the hook "
+                 "is the only control in the run",
+    },
+    "codex": {
+        None: "ignored user config and rules; ephemeral session",
+        "guard": "per-run CODEX_HOME containing only the copied credential and "
+                 "the guard's config.toml; NO --ignore-user-config (the guard "
+                 "IS config.toml); ignored rules; ephemeral session; hook "
+                 "trust bypassed",
+    },
+    "hermes": {
+        None: "temporary HERMES_HOME plus ignored rules",
+        "guard": "temporary HERMES_HOME plus ignored rules; rendered config "
+                 "carries the guard's pre_tool_call and on_session_start "
+                 "entries beside the recording observers",
+    },
+    "deepseek": {
+        None: "temporary DSH_HOME plus experiment patch",
+        "guard": "temporary DSH_HOME plus experiment patch carrying the guard "
+                 "plugin row, verified present in the composed profile",
+    },
+    "pi": {
+        None: "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
+              "resources, sessions, skills, or context files",
+        "guard": "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
+                 "resources, sessions, skills, or context files; "
+                 "--no-extensions followed by the one declared guard extension",
+    },
+}
+
+
+def _ambient_config(subject: str, workload: str) -> str:
+    """What this run actually kept out, for this subject and this workload."""
+    per_subject = _AMBIENT_CONFIG[subject]
+    return per_subject.get(workload) or per_subject[None]
+
+
 def _install_guard_hook(root: Path) -> Path:
     """Put the shared guard command beside the run and return its path.
 
@@ -584,6 +636,10 @@ def _codex_command(
 # hook that never registers FAILS OPEN -- a completely uninstrumented run that
 # looks clean. Failing the suite is the cheap version of that discovery.
 HERMES_PRE_TOOL_CALL_KEY = "  pre_tool_call:\n"
+# The top-level `hooks:` mapping the receipt entry is inserted into. Anchored on
+# a leading newline so it cannot match `hooks_auto_accept:` or any nested key of
+# the same name -- only a mapping that starts at column zero.
+HERMES_HOOKS_KEY = "\nhooks:\n"
 
 
 def _hermes_guard_hooks(config_text: str, guard_hook: Path) -> str:
@@ -613,24 +669,41 @@ def _hermes_guard_hooks(config_text: str, guard_hook: Path) -> str:
         raise AdapterError(
             "hermes_config.yaml has no 'pre_tool_call:' block to add the guard to"
         )
+    if HERMES_HOOKS_KEY not in config_text:
+        raise AdapterError(
+            "hermes_config.yaml has no top-level 'hooks:' block to add the guard to"
+        )
+    if "on_session_start:" in config_text:
+        # A second one would be a duplicate YAML key -- last wins -- and the
+        # loser would be whichever of the two actually mattered.
+        raise AdapterError(
+            "hermes_config.yaml already declares 'on_session_start'; the guard "
+            "receipt would become a duplicate key"
+        )
     command = _guard_hook_command(guard_hook, "hermes", "tool_call")
     entry = f"    - command: {command}\n      timeout: 10\n"
     text = config_text.replace(
         HERMES_PRE_TOOL_CALL_KEY, HERMES_PRE_TOOL_CALL_KEY + entry, 1
     )
-    # Appended rather than inserted: `hooks:` is the last block in the file, so
-    # a new event key belongs at the end. Inserting a SECOND `pre_tool_call:`
-    # key instead would be a duplicate YAML key -- last one wins -- and would
-    # silently delete every `hook.py` observer above it.
+    # ANCHORED, not appended. This used to concatenate the receipt onto the end
+    # of the file, which is correct only while `hooks:` happens to be the last
+    # top-level block -- true today, asserted nowhere, and silently false the
+    # day somebody adds a `logging:` or `limits:` key after it. The append
+    # would then nest `on_session_start` under THAT key: still valid YAML, the
+    # anchor test above still passing, the suite still green, and the receipt
+    # hook never registered. Hermes fails open on hook errors, so the whole
+    # subject would quietly go NOT_EVALUABLE with nothing pointing at why.
+    #
+    # Inserting directly after the `hooks:` line depends on nothing but the
+    # block it is actually going into, which is the same reason the control
+    # above is anchored rather than positioned.
     receipt = _guard_hook_command(guard_hook, "hermes", "session_start")
-    if not text.endswith("\n"):
-        text += "\n"
-    text += (
+    receipt_block = (
         "  on_session_start:\n"
         f"    - command: {receipt}\n"
         "      timeout: 10\n"
     )
-    return text
+    return text.replace(HERMES_HOOKS_KEY, HERMES_HOOKS_KEY + receipt_block, 1)
 
 
 def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
@@ -1595,7 +1668,15 @@ def capture(
                         f"codex credential not found at {credential}; the guard"
                         " arm cannot authenticate from an isolated CODEX_HOME"
                     )
-                shutil.copy2(credential, codex_home / "auth.json")
+                # `copy2` carries the source mode across, and the source is
+                # 0600 -- but that is the source's property, not this copy's
+                # guarantee. Set it explicitly so the copy is owner-only even
+                # if the original is ever loosened. `.gitignore` covers the
+                # `.hwb-*` root for the case no code here can reach: a SIGKILL
+                # that skips cleanup and leaves this file in the working tree.
+                copied = codex_home / "auth.json"
+                shutil.copy2(credential, copied)
+                copied.chmod(0o600)
                 (codex_home / "config.toml").write_text(
                     _codex_guard_config(_install_guard_hook(root)),
                     encoding="utf-8",
@@ -1890,14 +1971,7 @@ def capture(
             },
             "isolation": {
                 "disposable_workspace": True,
-                "ambient_config": {
-                    "claude": "safe-mode plus empty setting sources",
-                    "codex": "ignored user config and rules; ephemeral session",
-                    "hermes": "temporary HERMES_HOME plus ignored rules",
-                    "deepseek": "temporary DSH_HOME plus experiment patch",
-                    "pi": "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
-                          "resources, sessions, skills, or context files",
-                }[subject],
+                "ambient_config": _ambient_config(subject, workload),
                 # The network claim has to follow the active profile. A gateway
                 # profile reaches a remote service, and describing that as
                 # loopback would be a false isolation disclosure.

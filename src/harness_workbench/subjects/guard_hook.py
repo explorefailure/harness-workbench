@@ -99,15 +99,23 @@ def _emit(receipt: Path, subject: str, mode: str, event: dict[str, Any]) -> None
 
 
 def _tool_name(subject: str, payload: dict[str, Any]) -> str | None:
-    """Pull the tool name out of whichever key this subject puts it under."""
-    if subject in {"claude", "codex"}:
-        # Both spell the PreToolUse payload the same way: `tool_name` beside a
-        # `tool_input` object.
-        name = payload.get("tool_name")
-    else:
-        # Hermes serialises `tool_name` alongside `args`, per its own
-        # `_DEFAULT_PAYLOADS` fixtures.
-        name = payload.get("tool_name")
+    """Pull the tool name out of the key every subject here puts it under.
+
+    All three agree on `tool_name`, which is worth stating plainly because
+    nothing else about these dialects agrees: Claude and Codex spell it beside
+    a `tool_input` object, Hermes beside `args`, and Codex calls its shell
+    `Bash` while its own stream calls the same call `command_execution`. The
+    key is the one thing that did NOT need a per-subject branch.
+
+    This carried a two-branch if/else whose branches were identical. A
+    distinction spelled out in code is a claim that it exists, and the next
+    person to add a subject would have read that one and looked for the
+    difference it advertised. `subject` is kept in the signature because the
+    fourth subject to arrive may well disagree -- an unused argument is
+    cheaper than a call-site change, and the docstring now says which way the
+    fact currently runs.
+    """
+    name = payload.get("tool_name")
     return name if isinstance(name, str) else None
 
 

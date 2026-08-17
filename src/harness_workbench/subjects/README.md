@@ -57,9 +57,17 @@ the task is `outcome.passed` in the record and is deliberately not in the
 status, so a wrap like `retry` cannot mistake a declined task for a broken
 measurement and re-run it at full cost.
 
+Pass `--record PATH` to any of these to keep the record. A run is not
+reproducible after the fact -- the workspace is a temporary directory that
+deletes itself, and the printed record is the only artefact it ever produces.
+The first containment matrix was measured without it, so ten paid arms produced
+numbers that can be quoted and not checked.
+
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 94 tests, offline
+python3.11 -m unittest -v test_experiment.py     # 103 tests, offline
 python3.11 runner.py --subject claude
+python3.11 runner.py --subject claude --workload guard --variant block \
+    --record ../../../measure/guard/claude-block.json
 python3.11 runner.py --subject codex
 python3.11 runner.py --subject deepseek
 python3.11 runner.py --subject hermes

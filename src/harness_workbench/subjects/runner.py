@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 
 import adapters
 
@@ -69,7 +70,40 @@ def main() -> int:
     parser.add_argument("--workload", default="write", choices=tuple(adapters.WORKLOADS))
     parser.add_argument("--variant", default=None, choices=adapters.GUARD_VARIANTS,
                         help="guard workload only: which arm of the pair this is")
+    parser.add_argument(
+        "--record", default=None, metavar="PATH",
+        help="also write the record here; the run is the only place it exists",
+    )
     args = parser.parse_args()
+
+    def retain(document: dict) -> None:
+        """Write the record somewhere that outlives the terminal it ran in.
+
+        A subject run costs real money and is not reproducible after the fact:
+        the workspace is a temporary directory that deletes itself, and the
+        record printed below is the only artefact the run ever produces. The
+        first full containment matrix -- ten arms, five harnesses, both
+        variants -- was measured this way and then existed nowhere, so its
+        results could be quoted but never checked. For a tree whose whole
+        doctrine is that a positive receipt decides what happened, a headline
+        result backed by no retained receipt is the wrong shape.
+
+        A run that FAILED is retained too. The instrumentation failures on this
+        tree were the expensive ones to rediscover, and they are exactly the
+        runs somebody would otherwise not think to keep.
+
+        Optional rather than mandatory because a smoke run genuinely does not
+        need a file. Named on the command line so that retaining one is a flag
+        and not a shell redirect somebody has to remember.
+        """
+        if args.record is None:
+            return
+        destination = pathlib.Path(args.record)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+
     try:
         capture = adapters.capture(
             args.subject,
@@ -78,13 +112,15 @@ def main() -> int:
             timeout=SUBJECT_TIMEOUT_SECONDS[args.subject],
         )
     except (adapters.AdapterError, OSError, TypeError, ValueError) as error:
-        print(json.dumps({
+        failure = {
             "schema": "cross-harness-experiment-run/v0.1",
             "subject": args.subject,
             "workload": args.workload,
             "variant": args.variant,
             "error": str(error),
-        }, sort_keys=True))
+        }
+        print(json.dumps(failure, sort_keys=True))
+        retain(failure)
         return 2
     adapter_passed = capture["verdict"]["passed"]
     outcome_passed = capture["outcome"]["passed"]
@@ -92,7 +128,7 @@ def main() -> int:
     evaluable = capture["outcome"].get("evaluable", True)
     interrupted = bool(capture["capture"]["forwarded_signals"])
     status = exit_status(adapter_passed, interrupted, evaluable)
-    print(json.dumps({
+    document = {
         "schema": "cross-harness-experiment-run/v0.1",
         "subject": args.subject,
         "workload": args.workload,
@@ -109,7 +145,9 @@ def main() -> int:
             "status": status,
         },
         "adapter": capture,
-    }, sort_keys=True))
+    }
+    print(json.dumps(document, sort_keys=True))
+    retain(document)
     return status
 
 
