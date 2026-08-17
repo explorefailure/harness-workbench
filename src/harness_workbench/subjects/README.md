@@ -60,8 +60,11 @@ measurement and re-run it at full cost.
 Pass `--record PATH` to any of these to keep the record. A run is not
 reproducible after the fact -- the workspace is a temporary directory that
 deletes itself, and the printed record is the only artefact it ever produces.
-The first containment matrix was measured without it, so ten paid arms produced
-numbers that can be quoted and not checked.
+The first containment matrix was measured without it. Re-cut through the specs
+at `sample.n = 3`, two of its ten arms reported a count never observed again
+and four more reported a quantity that moves between samples. Prefer
+`hwb run guard_<subject>_<variant>.json`, which retains a full store and a
+`freeze` lock without being asked.
 
 ```sh
 python3.11 -m unittest -v test_experiment.py     # 103 tests, offline
