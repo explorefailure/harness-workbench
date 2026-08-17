@@ -1508,5 +1508,60 @@ class CodexGuardWiringTests(unittest.TestCase):
         self.assertIn(complaint, refused)
 
 
+class HermesGuardWiringTests(unittest.TestCase):
+    def rendered(self) -> str:
+        source = (adapters.HERE / "hermes_config.yaml").read_text(encoding="utf-8")
+        return adapters._hermes_guard_hooks(source, Path("/tmp/guard_hook.py"))
+
+    def test_the_insertion_point_still_exists_in_the_committed_config(self) -> None:
+        # The whole injection is a string replace, and a Hermes hook that never
+        # registers FAILS OPEN -- an uninstrumented run that looks clean. If
+        # this key is renamed or reindented the insertion becomes a silent
+        # no-op, so the suite is where that gets discovered.
+        source = (adapters.HERE / "hermes_config.yaml").read_text(encoding="utf-8")
+        self.assertIn(adapters.HERMES_PRE_TOOL_CALL_KEY, source)
+        with self.assertRaises(adapters.AdapterError):
+            adapters._hermes_guard_hooks("hooks:\n", Path("/tmp/guard_hook.py"))
+
+    def test_the_recording_observers_survive_the_guard(self) -> None:
+        # `hook.py` is still the required sidecar evidence for this workload,
+        # and its contract is to record WITHOUT changing the decision. The
+        # guard is a separate file registered beside it precisely so that
+        # contract stays true; dropping the observers would also make the
+        # adapter's own evidence capture fail.
+        rendered = self.rendered()
+        self.assertEqual(8, rendered.count("command: python3.11 hook.py"))
+
+    def test_the_guard_registers_a_receipt_event_and_a_control_event(self) -> None:
+        rendered = self.rendered()
+        self.assertIn("  on_session_start:\n", rendered)
+        self.assertIn("--event session_start", rendered)
+        self.assertIn("--event tool_call", rendered)
+
+    def test_only_one_pre_tool_call_key_exists_after_injection(self) -> None:
+        # A second `pre_tool_call:` key would be a duplicate YAML mapping key --
+        # last one wins -- which would silently delete every observer above it.
+        self.assertEqual(
+            1, self.rendered().count(adapters.HERMES_PRE_TOOL_CALL_KEY)
+        )
+
+    def test_the_guard_entry_carries_no_matcher_so_it_sees_every_tool(self) -> None:
+        # Hermes treats a matcher as a fullmatch regex and an absent one as
+        # "every tool". The terminal call is the routing-around evidence, so
+        # the guard must see it; a matcher scoped to write_file would hide the
+        # single most important line in the receipt.
+        rendered = self.rendered()
+        guard_line = [
+            line for line in rendered.splitlines()
+            if "--event tool_call" in line
+        ][0]
+        self.assertTrue(guard_line.strip().startswith("- command:"))
+
+    def test_the_guard_arm_keeps_a_shell_in_the_toolsets(self) -> None:
+        identity = {"model": "test-model"}
+        argv = adapters._hermes_command(identity, "guard")
+        self.assertIn("terminal", argv[argv.index("--toolsets") + 1])
+
+
 if __name__ == "__main__":
     unittest.main()

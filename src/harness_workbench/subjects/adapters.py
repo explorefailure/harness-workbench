@@ -578,6 +578,61 @@ def _codex_command(
     return argv
 
 
+# The line the guard's `pre_tool_call` entry is inserted after. Pinned as a
+# constant and asserted by a test: if this key is ever renamed or reindented in
+# `hermes_config.yaml`, the insertion silently becomes a no-op, and a Hermes
+# hook that never registers FAILS OPEN -- a completely uninstrumented run that
+# looks clean. Failing the suite is the cheap version of that discovery.
+HERMES_PRE_TOOL_CALL_KEY = "  pre_tool_call:\n"
+
+
+def _hermes_guard_hooks(config_text: str, guard_hook: Path) -> str:
+    """Add the guard to a rendered Hermes config without displacing `hook.py`.
+
+    Two entries. `pre_tool_call` is the control, and it carries NO matcher on
+    purpose: Hermes treats a matcher as a `fullmatch` regex and an absent one
+    as "every tool", so one entry records `write_file`, `read_file`, `patch`
+    AND `terminal`. The terminal call is the routing-around evidence and a
+    matcher scoped to `write_file` would hide it.
+
+    `on_session_start` is the receipt, and it is the reason this subject is
+    instrumentable at all: a `pre_tool_call` hook fires only when a tool call
+    happens, so on its own an empty receipt cannot separate "the guard never
+    loaded" from "the model never called a tool". Hermes needs that separation
+    more than any other subject here, because ORDINARY SHELL HOOK FAILURES FAIL
+    OPEN -- its own `get_pre_tool_call_block_message` ignores return values it
+    does not recognise, silently. A broken guard here does not error; it simply
+    is not there.
+
+    The existing `hook.py` observers are left exactly where they are. They are
+    still the required sidecar evidence for this workload, and their contract
+    is to record without changing the decision -- which is why the guard is a
+    separate file registered alongside them rather than an edit to that one.
+    """
+    if HERMES_PRE_TOOL_CALL_KEY not in config_text:
+        raise AdapterError(
+            "hermes_config.yaml has no 'pre_tool_call:' block to add the guard to"
+        )
+    command = _guard_hook_command(guard_hook, "hermes", "tool_call")
+    entry = f"    - command: {command}\n      timeout: 10\n"
+    text = config_text.replace(
+        HERMES_PRE_TOOL_CALL_KEY, HERMES_PRE_TOOL_CALL_KEY + entry, 1
+    )
+    # Appended rather than inserted: `hooks:` is the last block in the file, so
+    # a new event key belongs at the end. Inserting a SECOND `pre_tool_call:`
+    # key instead would be a duplicate YAML key -- last one wins -- and would
+    # silently delete every `hook.py` observer above it.
+    receipt = _guard_hook_command(guard_hook, "hermes", "session_start")
+    if not text.endswith("\n"):
+        text += "\n"
+    text += (
+        "  on_session_start:\n"
+        f"    - command: {receipt}\n"
+        "      timeout: 10\n"
+    )
+    return text
+
+
 def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
     toolsets = "file" if workload == "write" else "file,terminal"
     return [
@@ -1507,13 +1562,17 @@ def capture(
                     environment[name] = secret
             hermes_home = root / "hermes-home"
             hermes_home.mkdir()
+            hermes_config = _apply_model_profile(
+                (HERE / "hermes_config.yaml").read_text(encoding="utf-8"),
+                "hermes",
+                secret,
+            )
+            if workload == "guard":
+                hermes_config = _hermes_guard_hooks(
+                    hermes_config, _install_guard_hook(root)
+                )
             (hermes_home / "config.yaml").write_text(
-                _apply_model_profile(
-                    (HERE / "hermes_config.yaml").read_text(encoding="utf-8"),
-                    "hermes",
-                    secret,
-                ),
-                encoding="utf-8",
+                hermes_config, encoding="utf-8"
             )
             evidence_path = root / "hermes-hooks.jsonl"
             # Created empty before Hermes starts, so absence and emptiness stop
