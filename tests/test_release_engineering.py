@@ -1074,12 +1074,29 @@ class TestReleaseSurfaces(unittest.TestCase):
         every module in the package to answer this question runs import side
         effects across the whole tree, which is a worse risk than the gap.
 
-        Over-detection is the safe direction and is left in: an `__all__`
-        assigned inside a function is not the module's surface, but it fails
-        loudly and makes somebody decide rather than passing quietly.
+        Scoped to module level rather than every nesting. `if`, `try` and
+        `with` at module scope still count -- a conditional `__all__` is the
+        module's surface, and skipping it was the original hole. A `def` or
+        `class` body does not: an `__all__` bound there is a local variable
+        that never reaches the module namespace, so tripping on it would force
+        a decision about a surface that does not exist. Over-detection is the
+        safer direction of the two, but it is not free -- a rule that fires on
+        something harmless teaches the reader to route around it.
         """
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
+
+        def module_scope(node):
+            """Statements executing in the module namespace, not inside a scope."""
+            for child in ast.iter_child_nodes(node):
+                if isinstance(
+                    child,
+                    (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+                ):
+                    continue
+                yield child
+                yield from module_scope(child)
+
+        for node in module_scope(tree):
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
             elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
