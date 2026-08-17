@@ -137,6 +137,29 @@ class CommonTests(unittest.TestCase):
             self.assertEqual(argv_a[:-1], argv_b[:-1])
             self.assertEqual(["allow", "block"], [argv_a[-1], argv_b[-1]])
 
+    def test_guard_specs_bind_the_same_complete_input_set(self) -> None:
+        # The same binding `write` and `repair` already have, and it was
+        # missing: adding an interceptor to GUARD_INPUTS without adding it to
+        # the ten specs leaves `freeze` digesting a set that does not include
+        # the file which decides what the run measures. Every arm digests every
+        # interceptor, not only the one it loads, because the arms are
+        # comparable to each other only if they were cut against one apparatus.
+        for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
+            for variant in ("allow", "block"):
+                spec = json.loads(
+                    (adapters.HERE / f"guard_{subject}_{variant}.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(
+                    tuple(spec["steps"][0]["inputs"]), adapters.GUARD_INPUTS
+                )
+
+    def test_every_guard_input_actually_exists_in_the_tree(self) -> None:
+        # A digested input that is not on disk is a spec that cannot run.
+        for name in adapters.GUARD_INPUTS:
+            self.assertTrue((adapters.HERE / name).exists(), name)
+
     def test_the_guard_workload_shares_the_write_prompt(self) -> None:
         # Same prompt, same fixture. Only the variant moves.
         self.assertEqual(

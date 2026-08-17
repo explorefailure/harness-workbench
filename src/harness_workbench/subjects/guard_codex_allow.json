@@ -45,7 +45,9 @@
         "hook.py",
         "hermes_config.yaml",
         "dsh_patch.yml",
-        "guard_extension.ts"
+        "guard_extension.ts",
+        "guard_hook.py",
+        "guard_plugin.mjs"
       ]
     }
   ]
