@@ -96,9 +96,13 @@ Clone rather than build from the development tree. Gitignored files — a stale
 from source. A clone carries committed bytes and nothing else. This is not
 hypothetical in this repository.
 
-The history scan runs against `$SOURCE_REPO`, not the clone. A clone carries
-only the refs it was told to fetch, so a secret on a branch that did not come
-along would go unscanned; scan the repository that holds every ref.
+The history scan runs against `$SOURCE_REPO` rather than whichever checkout is
+to hand. A full local clone happens to carry every branch, but that is a
+property of how it was made and not a guarantee: `--single-branch`, a shallow
+clone, or the GitHub clone in step 3 would each scan less, and the GitHub one
+cannot see a local-only branch such as a pre-rewrite backup at all. Scan the
+repository that holds every ref, so the scan's coverage never depends on the
+checkout's provenance.
 
 Stop if the checkout is dirty, dependency installation fails, the release-tool
 versions differ from `pyproject.toml`, or the history-wide secret scan reports a
