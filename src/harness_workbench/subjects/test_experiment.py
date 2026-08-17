@@ -1563,5 +1563,48 @@ class HermesGuardWiringTests(unittest.TestCase):
         self.assertIn("terminal", argv[argv.index("--toolsets") + 1])
 
 
+class DeepSeekGuardWiringTests(unittest.TestCase):
+    def patched(self) -> str:
+        source = (adapters.HERE / "dsh_patch.yml").read_text(encoding="utf-8")
+        return adapters._deepseek_guard_patch(source, Path("/tmp/guard_plugin.mjs"))
+
+    def test_the_guard_row_uses_the_insert_form(self) -> None:
+        # The single most expensive mechanic in this tree. `- insert:` adds a
+        # row; a bare `- id: … name: …` only MODIFIES an existing one, is
+        # rejected with `patch: entry "hwb-guard" not found`, and leaves a run
+        # that looks completely clean and is not instrumented at all. Measured
+        # against the real loader: the bare form yields 0 `hwb-guard` rows in
+        # `dsh --dump-config`, the insert form yields 1.
+        patched = self.patched()
+        self.assertIn("- insert:", patched)
+        self.assertIn("- id: hwb-guard", patched)
+        # The bare form is `- id:` at the top level of the list, two spaces
+        # shallower than the inserted row. Its absence is the assertion.
+        self.assertNotIn("\n- id: hwb-guard", patched)
+
+    def test_the_plugin_is_referenced_by_absolute_file_url(self) -> None:
+        # The loader imports `name` as a module specifier, and the run's cwd is
+        # the disposable workspace, so a relative path resolves to nothing.
+        self.assertIn("name: 'file:///tmp/guard_plugin.mjs'", self.patched())
+
+    def test_only_the_guard_workload_carries_a_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plain = adapters._deepseek_command(root, "write")
+            written = (root / "dsh_patch.yml").read_text(encoding="utf-8")
+            self.assertNotIn("hwb-guard", written)
+            self.assertIn("--patch", plain)
+            adapters._deepseek_command(root, "guard", Path("/tmp/guard_plugin.mjs"))
+            self.assertIn(
+                "hwb-guard", (root / "dsh_patch.yml").read_text(encoding="utf-8")
+            )
+
+    def test_the_shell_plugin_is_never_disabled_by_the_patch(self) -> None:
+        # `tool-bash` staying enabled is the arm's design. Disabling it would
+        # guarantee containment by construction and measure nothing.
+        patched = self.patched()
+        self.assertNotIn("- id: tool-bash\n  disabled: true", patched)
+
+
 if __name__ == "__main__":
     unittest.main()

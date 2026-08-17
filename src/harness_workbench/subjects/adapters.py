@@ -715,14 +715,73 @@ def _pi_models_json(identity: dict[str, Any], secret: str) -> str:
     }, indent=2)
 
 
-def _deepseek_command(root: Path, workload: str) -> list[str]:
-    patch = root / "dsh_patch.yml"
-    patch.write_text(
-        _apply_model_profile(
-            (HERE / "dsh_patch.yml").read_text(encoding="utf-8"), "deepseek"
-        ),
-        encoding="utf-8",
+def _deepseek_guard_patch(patch_text: str, guard_plugin: Path) -> str:
+    """Add the guard plugin as a NEW row, which is not the obvious spelling.
+
+    `- insert:` is load-bearing. A bare `- id: … name: …` entry only MODIFIES
+    an existing row: the loader reports `patch: entry "hwb-guard" not found`
+    and carries on, and that report does NOT reach the subject's captured
+    stderr. Three separate instrumentation attempts on this harness produced
+    perfectly clean-looking runs that were not instrumented at all, which is
+    the reason the startup receipt exists across the whole workload.
+    """
+    row = (
+        "\n- insert:\n"
+        "    - id: hwb-guard\n"
+        f"      name: 'file://{guard_plugin}'\n"
     )
+    if not patch_text.endswith("\n"):
+        patch_text += "\n"
+    return patch_text + row
+
+
+def _verify_deepseek_guard_row(patch: Path, environment: dict[str, str]) -> None:
+    """Ask dsh what it actually composed, before spending a model call on it.
+
+    A receipt written by a file that was never imported cannot warn you about
+    itself, so the receipt alone would still leave the three-failed-attempts
+    failure detectable only AFTER paying for a run. `--dump-config` prints the
+    composed profile tree and exits, which turns "did the row land" from a rule
+    somebody has to remember into a check that fails loudly and for free. A
+    mechanism cannot be forgotten; a comment can.
+    """
+    result = run_bounded(
+        [
+            str(_executable("dsh")),
+            "--profile", "headless",
+            "--patch", str(patch),
+            "--dump-config",
+        ],
+        cwd=HERE,
+        env=environment,
+        timeout=90,
+        stdout_limit=4 * 1024 * 1024,
+        stderr_limit=256 * 1024,
+    )
+    if result.returncode != 0 or result.termination_reason is not None:
+        raise AdapterError(
+            "dsh could not compose the guard profile:"
+            f" exit {result.returncode}"
+            f" ({result.termination_reason or 'no bound fired'})"
+        )
+    composed = result.stdout.decode("utf-8", errors="replace")
+    if "hwb-guard" not in composed:
+        raise AdapterError(
+            "the guard plugin row is absent from dsh's composed profile;"
+            " the patch was accepted and dropped"
+        )
+
+
+def _deepseek_command(
+    root: Path, workload: str, guard_plugin: Path | None = None
+) -> list[str]:
+    patch = root / "dsh_patch.yml"
+    text = _apply_model_profile(
+        (HERE / "dsh_patch.yml").read_text(encoding="utf-8"), "deepseek"
+    )
+    if guard_plugin is not None:
+        text = _deepseek_guard_patch(text, guard_plugin)
+    patch.write_text(text, encoding="utf-8")
     return [
         str(_executable("dsh")),
         "--profile", "headless",
@@ -1647,7 +1706,16 @@ def capture(
                 path.mkdir()
                 environment[f"XDG_{name}_HOME"] = str(path)
             evidence_kind = "native_persisted_session_jsonl"
-            argv = _deepseek_command(root, workload)
+            guard_plugin: Path | None = None
+            if workload == "guard":
+                # Beside the run, never in the workspace: a plugin sitting in
+                # the workspace would appear in both manifests and become part
+                # of the effect it exists to observe.
+                guard_plugin = root / "guard_plugin.mjs"
+                shutil.copy2(HERE / "guard_plugin.mjs", guard_plugin)
+            argv = _deepseek_command(root, workload, guard_plugin)
+            if guard_plugin is not None:
+                _verify_deepseek_guard_row(root / "dsh_patch.yml", environment)
         result = run_bounded(
             argv,
             cwd=workspace,
