@@ -56,16 +56,25 @@ and review
 [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md).
 That record must continue to say that no GitHub prerelease exists yet and must
 not promote preparation self-runs to release evidence. Commit the release-only
-edits. Push that reviewed commit to `release/0.1.0rc2` so a fresh clone can
-resolve it, then do the gate from the fresh clone rather than a development
-worktree.
+edits.
+
+**Do not push yet.** Nothing in step 2 needs a remote — the whole source and
+artifact gate is offline — so it runs here, before anything leaves the machine.
+Publishing a candidate branch and then discovering it cannot build is a
+published mistake rather than a local one, and a pushed candidate number is
+spent whether or not it was any good. What the gate genuinely needs is a
+*pristine* checkout, which is not the same thing as a *remote* one: take it
+from the local repository.
 
 ```sh
-git clone https://github.com/explorefailure/harness-workbench.git hwb-release
-cd hwb-release
-git fetch --tags origin
-RELEASE_COMMIT="$(git rev-parse 'origin/release/0.1.0rc2^{commit}')"
+SOURCE_REPO="$PWD"
+RELEASE_COMMIT="$(git rev-parse HEAD)"
 test "${#RELEASE_COMMIT}" -eq 40
+test -z "$(git status --porcelain --untracked-files=all)"
+cd ..
+test ! -e hwb-release
+git clone --no-hardlinks "$SOURCE_REPO" hwb-release
+cd hwb-release
 git checkout --detach "$RELEASE_COMMIT"
 test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
@@ -78,18 +87,28 @@ python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check '.[release]'
 GITLEAKS_VERSION=8.30.1
 test "$(gitleaks version)" = "$GITLEAKS_VERSION"
-gitleaks git --no-banner --redact=100 --log-opts='--all' .
+gitleaks git --no-banner --redact=100 --log-opts='--all' "$SOURCE_REPO"
 ```
 
-Stop if the commit is not the reviewed commit, the checkout is dirty, dependency
-installation fails, the release-tool versions differ from `pyproject.toml`, or
-the history-wide secret scan reports a finding. Obtain Gitleaks from its
-official release, verify the published archive checksum, and install it outside
-the repository. `.gitleaks.toml` extends the default rules. Its sole exception
-is joined with `AND` across the exact initial-history commit, one test path, and
-the synthetic fixture pattern that has been removed from current source. Do not
-broaden that exception or add another to make a candidate pass. Do not clean an
-uncertain directory to make this check pass; start another fresh clone.
+Clone rather than build from the development tree. Gitignored files — a stale
+`build/lib`, a run store, a measurement directory — are invisible to
+`git status`, and a stale `build/lib` will silently ship files that were deleted
+from source. A clone carries committed bytes and nothing else. This is not
+hypothetical in this repository.
+
+The history scan runs against `$SOURCE_REPO`, not the clone. A clone carries
+only the refs it was told to fetch, so a secret on a branch that did not come
+along would go unscanned; scan the repository that holds every ref.
+
+Stop if the checkout is dirty, dependency installation fails, the release-tool
+versions differ from `pyproject.toml`, or the history-wide secret scan reports a
+finding. Obtain Gitleaks from its official release, verify the published archive
+checksum, and install it outside the repository. `.gitleaks.toml` extends the
+default rules. Its sole exception is joined with `AND` across the exact
+initial-history commit, one test path, and the synthetic fixture pattern that
+has been removed from current source. Do not broaden that exception or add
+another to make a candidate pass. Do not clean an uncertain directory to make
+this check pass; start another fresh clone.
 
 ## 2. Run the source and artifact gate
 
@@ -143,16 +162,51 @@ directory or upload it. Do not upload a subset of the files and do not edit an
 archive or `SHA256SUMS` by hand. If `build/` or `dist/` already exists, stop and
 use another clean clone instead of mixing artifacts from different commits.
 
-## 3. Require GitHub evidence before tagging
+## 3. Publish the reviewed commit, then require GitHub evidence
 
-Wait for the GitHub Actions matrix to pass on the already-pushed, reviewed
-candidate commit. The required evidence is Linux and
-macOS on Python 3.11–3.14 plus the package job. Confirm the remote commit rather
-than trusting a branch label:
+This is the first step that leaves the machine, and it is deliberately after the
+gate. Only a commit that already passed step 2 gets pushed.
 
 ```sh
+cd "$SOURCE_REPO"
+git push origin "$RELEASE_COMMIT":refs/heads/release/0.1.0rc2
 git fetch origin
-test "$(git rev-parse origin/release/0.1.0rc2)" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release/0.1.0rc2^{commit}')" = "$RELEASE_COMMIT"
+```
+
+Now re-run the gate against what GitHub actually serves. Step 2 proved the
+commit is sound; this proves the remote holds that commit and nothing else, and
+that a recipient cloning it gets identical bytes:
+
+```sh
+cd ..
+test ! -e hwb-release-remote
+git clone https://github.com/explorefailure/harness-workbench.git hwb-release-remote
+cd hwb-release-remote
+git fetch --tags origin
+test "$(git rev-parse 'origin/release/0.1.0rc2^{commit}')" = "$RELEASE_COMMIT"
+git checkout --detach "$RELEASE_COMMIT"
+test -z "$(git status --porcelain --untracked-files=all)"
+```
+
+Repeat step 2 here in full, then compare the two runs:
+
+```sh
+diff ../hwb-release/dist/SHA256SUMS dist/SHA256SUMS
+```
+
+**The manifests must be identical.** `SOURCE_DATE_EPOCH` is derived from the
+release commit and the sdist is normalized to neutral ownership and that
+timestamp, so the same commit must produce the same bytes from either checkout.
+A difference means the remote is not serving the commit that passed the gate, or
+the build is not reproducible — either way, stop. This comparison is only
+available because the gate ran before the push; it is the reason for that
+ordering as much as avoiding a published failure is.
+
+Then wait for the GitHub Actions matrix on that commit. The required evidence is
+Linux and macOS on Python 3.11–3.14 plus the package job:
+
+```sh
 gh run list --commit "$RELEASE_COMMIT" --workflow CI \
   --json headSha,status,conclusion,workflowName,url
 ```
@@ -182,7 +236,8 @@ number that has been pushed, whether or not its release was created.
 
 ## 5. Create the GitHub prerelease
 
-From the same verified checkout, with the files still in `dist/`:
+From `hwb-release-remote` — the checkout whose bytes came from GitHub and whose
+`SHA256SUMS` matched the offline gate — with the files still in `dist/`:
 
 ```sh
 python tools/release_checksums.py check dist
