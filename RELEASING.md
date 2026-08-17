@@ -50,7 +50,8 @@ release-gate actions, not changes this procedure or a local commit can perform.
 
 First turn the preparation branch into a release commit: change the README
 status from "preparing" to an accurate candidate-release statement, change the
-changelog heading to `## 0.1.0rc2 — YYYY-MM-DD`, remove its preparation note,
+changelog heading from `## 0.1.0rc2 — unreleased` to `## 0.1.0rc2 — YYYY-MM-DD`
+with the date of this release commit, remove its preparation note,
 and review
 [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md).
 That record must continue to say that no GitHub prerelease exists yet and must
@@ -174,8 +175,10 @@ git push origin "$TAG"
 The tag-triggered CI job repeats tag-to-package agreement with read-only GitHub
 permissions. Wait for every tag run to pass before creating the prerelease. If
 the local tag has not been pushed, delete it locally and fix the source. If it
-has been pushed, do not move it: leave the failed candidate documented, bump to
-`0.1.0rc3` / `v0.1.0-rc.3`, and restart at step 1.
+has been pushed, do not move it: leave the failed candidate documented, increment
+the candidate number to the next unused `0.1.0rcN` with its matching
+`v0.1.0-rc.N` tag, and restart at step 1. Never reuse or retarget a candidate
+number that has been pushed, whether or not its release was created.
 
 ## 5. Create the GitHub prerelease
 

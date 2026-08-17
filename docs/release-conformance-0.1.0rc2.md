@@ -230,7 +230,7 @@ uncertainty, or assurance meaning requires a new ID or revision.
 | `C-HWB-10` — maintenance, contribution, support, and security posture are the policies stated, without an SLA | README, `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md`, intake templates | Wording/routes agree mechanically | Policy declaration; EF-RS observed-result predicate not triggered |
 | `C-HWB-11` — this candidate (`0.1.0rc2`) is frozen and has not been tagged, released, or made public; the preceding candidate `0.1.0rc1` was published as prerelease `v0.1.0-rc.1` and the source surfaces say so | README, `CHANGELOG.md`, absence of a `v0.1.0-rc.2` tag, this record | Source surfaces consistently distinguish this unreleased candidate from the already-published one, and do not let the published prerelease stand as evidence for this source | `v0.1.0-rc.2` tag/release/public state must be verified before publication; the rc1 prerelease is not evidence for rc2 |
 | `C-HWB-12` — release archives include the expected source/docs/examples/tests/tools, exclude generated stores, carry agreeing metadata/licences, and install separately; the release sdist carries neutral ownership and a commit-derived timestamp | `MANIFEST.in`, `pyproject.toml`, `tools/normalize_sdist.py`, `tools/verify_release_artifacts.py`, release tests | Strict Twine, archive inspection, normalized tar/gzip metadata, wheel/sdist clean install, checksums pass locally | Self-run preparation; final downloaded assets absent |
-| `C-HWB-13` — `harness_workbench.capture` is public, importable API whose exported names are the ones listed in the public-library manifest, and a bound that fires is returned as a measurement rather than raised or encoded as a synthesized exit code | `src/harness_workbench/capture.py` and its `__all__`, `docs/adapter-primitive-extraction.md`, the capture unit tests, the determinism soak over success/nonzero/malformed/saturation/timeout/ignored-termination/orphan/corrupt-evidence cases | Exported-name set matches the manifest; timeout, byte-limit and nonzero exit are reported in `termination_reason` with the real `returncode` preserved; the soak holds one projection digest across repeated runs | Self-run source evidence. **Surface added after the published `0.1.0rc1`**; no recipient of that prerelease received this module, and no downloaded-asset evidence exists for it |
+| `C-HWB-13` — `harness_workbench.capture` is public, importable API; its `__all__` is exactly the 24 names listed in the public-library manifest, in both directions; and a bound that fires is returned as a measurement rather than raised or encoded as a synthesized exit code | `src/harness_workbench/capture.py` and its `__all__`, `docs/adapter-primitive-extraction.md`, the capture unit tests, the determinism soak over success/nonzero/malformed/saturation/timeout/ignored-termination/orphan/corrupt-evidence cases | Every exported name appears in the manifest and the manifest names no attribute outside `__all__`, so adding or removing an export fails the suite; timeout, byte-limit and nonzero exit are reported in `termination_reason` with the real `returncode` preserved; the soak holds one projection digest across repeated runs | Self-run source evidence. **Surface added after the published `0.1.0rc1`**; no recipient of that prerelease received this module, and no downloaded-asset evidence exists for it |
 
 ## Complete claim-bearing surface inventory
 
@@ -328,16 +328,33 @@ command fails the suite until this record routes it.
 
 ### Exact public library-module manifest
 
-A module here is public because it declares its own `__all__` or is routed by
-name as a library surface with no top-level command. Both kinds are claim
-bearing: a recipient can import them, and nothing in the CLI manifest above
-would notice if their surface changed.
+A module is public here on any of three grounds: it declares its own `__all__`,
+the shipped subject tree imports it (making it API a recipient receives and
+runs, whatever the declaration says), or it is routed by name as a library
+surface with no top-level command. All three are claim bearing — a recipient
+can import them, and nothing in the CLI manifest above would notice if their
+surface changed.
 
-- `harness_workbench.capture` — bounded subprocess execution, capture
-  envelopes, tree manifests, credential discovery and byte redaction,
-  minimal-environment construction, path containment, and JSONL decoding.
-  Declares `__all__`. **New in `0.1.0rc2`.**
+- `harness_workbench.capture` — **new in `0.1.0rc2`.** Declares `__all__`, and
+  its exact exported names are:
+  `Bounded`, `CREDENTIAL_MARKERS`, `CREDENTIAL_MIN_LENGTH`, `CaptureError`,
+  `DEFAULT_SIDECAR_LIMIT`, `DEFAULT_STDERR_LIMIT`, `DEFAULT_STDOUT_LIMIT`,
+  `PASSTHROUGH_NAMES`, `SIGNALLED`, `STDERR_LIMIT`, `STDOUT_LIMIT`, `TIMEOUT`,
+  `capture_bytes`, `capture_file`, `contained_path`, `credential_values`,
+  `digest_bytes`, `digest_file`, `manifest`, `minimal_environment`,
+  `parse_jsonl`, `redact_bytes`, `relative_to_root`, `run_bounded`.
+  Together these are bounded subprocess execution, capture envelopes, tree
+  manifests, credential discovery and byte redaction, minimal-environment
+  construction, path containment, and JSONL decoding.
+- `harness_workbench.canon` — the canonical-JSON and file/tree digest rule.
+  Declares no `__all__`, but the shipped subject tree imports `digest_obj` from
+  it directly and every adapter record digests this module by name beside
+  `capture`, because `capture.digest_file` wraps `canon.digest_file`: a change
+  to the digest rule moves every digest in a record while `capture.py` stays
+  byte-identical. Public by use.
 - `harness_workbench.conform` — library verdict surface, no top-level command.
+  Declares no `__all__` and is imported by no shipped tree; it is public
+  because this record says so, which is why the completeness rule below exists.
 
 `capture` is the module the adapter tree imports instead of carrying a second
 implementation of bounded capture;
@@ -347,10 +364,15 @@ one intended behaviour change (a bound that fires is reported in
 `termination_reason` and no longer synthesized into an exit code). The adapter
 tree itself is opt-in data and is not part of this manifest.
 
-`tests/test_release_engineering.py` discovers every module under
-`src/harness_workbench/` that declares `__all__` and fails until this manifest
-routes it, so the next promotion cannot repeat the omission this candidate
-fixes.
+`tests/test_release_engineering.py` enforces this manifest three ways, reading
+only this section rather than the whole record: every core module the shipped
+subject tree imports must be routed here; every module declaring `__all__` must
+be routed here with its exported names listed exactly; and every module under
+`src/harness_workbench/` must be either routed here or named in an explicit
+internal list, so adding a module to the package forces somebody to decide
+which it is. The first two rules only catch modules that advertise themselves —
+`conform` does neither, and that is the shape which reached a published
+candidate unrouted.
 
 ## EF-RS-REL component status
 
@@ -387,7 +409,34 @@ An unresolved MUST remains unmet; recording it does not waive it.
 | `D-07` | Public visibility, read-only Actions tokens, secret scanning, push protection, Dependabot security updates, and successful CodeQL upload were verified on 2026-08-12. The superseded freeze produced alert #1 on a credential-shaped synthetic fixture; the containing source remediates it, but exact-commit CodeQL and ruleset evidence remain pending. | A recipient cannot infer that the remediation is accepted or that required checks and immutable release refs are enforced | Zero open CodeQL alerts on the exact remediated freeze plus dated branch/tag ruleset evidence |
 | `D-08` | The exact governing-standard source bytes are pinned but not shipped or asserted publicly reachable | A recipient without the standards repository can detect a supplied file's equality but cannot independently inspect the complete governing text from this artefact alone | Publish or ship the exact pinned standards, or record a stable public content-addressed location |
 | `D-09` | No final release approver/date/disposition exists | A recipient cannot treat preparation as an authorization to release | Named approver, date, decision, and residual limitations after all blockers close |
-| `D-10` | The retained cross-harness containment matrix was measured against an adapter-tree digest that is no longer `HEAD`: a subject-pairing fix landed after the matrix was cut. This is the apparatus baseline working as designed — the record binds the apparatus that measured it — not an undetected discrepancy, and nothing the matrix reports depended on the later fix. The matrix and its run stores live in an untracked working directory, are excluded from both archives, and are not part of the release surface. | A recipient receives no matrix evidence with the artefact and must not read any adapter-tree claim here as evidence measured by the shipped apparatus | Re-cut the matrix against the release commit's adapter tree if a matrix claim is ever routed into a release surface; otherwise this stays a disclosure rather than a blocker |
+
+## Measurement evidence that is not in the release surface
+
+This is disclosure, not a departure: nothing below is an unmet requirement, and
+none of it ships. It is recorded because a reader who found it independently
+would reasonably ask why the record was silent.
+
+The cross-harness containment matrix retained during development was measured
+against an adapter-tree digest that is no longer `HEAD` — a subject-pairing fix
+landed after the matrix was cut. That is the apparatus baseline working as
+designed: a record binds the apparatus that measured it, and nothing the matrix
+reports depended on the later fix. The matrix and its run stores live in an
+untracked working directory, match no `MANIFEST.in` include pattern, and are
+absent from both archives; this was verified against a built sdist rather than
+assumed. **No adapter-tree measurement claim is routed anywhere in this
+record**, so no claim here rests on that evidence.
+
+One consequence of the version bump is worth naming. Every adapter record
+carries an `apparatus` block naming the package version and digesting both
+`capture` and `canon`, and the shipped tree writes a baseline copy at
+materialize time. Agreement against that baseline is computed **from the module
+digests only — the version label is recorded and deliberately not compared.**
+Because `capture.py` and `canon.py` are byte-identical across `0.1.0rc1` →
+`0.1.0rc2`, baselines cut under rc1 still agree under rc2, and retained records
+still name `0.1.0rc1`. That is the intended reading of "digest what determines
+the work": the digest is the commitment and the version is a label. It is
+recorded here so nobody later mistakes an agreeing baseline for evidence that
+the package version was unchanged.
 
 ## Mechanical checks
 
@@ -395,7 +444,8 @@ An unresolved MUST remains unmet; recording it does not waive it.
 |---|---|---|---|
 | Full `unittest` suite | behavioral contracts plus documentation drift | local gate and `.github/workflows/ci.yml` matrix | Passed locally; private preparation matrix passed at `db8b426366b7a5a0775449369b24971b04f1bb1f`; nine-job public matrix passed at superseded freeze `bbcb6fbcd0a873eb3589028119e8b9489179fe34`; exact remediated-freeze matrix pending |
 | Conformance surface inventory test | `EF-SRS-08`, `EF-SRS-09`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Prepared and passing locally |
-| Public library-module routing test | `C-HWB-13`, `EF-SRS-08`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Discovers every module under `src/harness_workbench/` declaring `__all__` and fails until this record routes it by name. Verified by inversion: with the `capture` entry removed from the manifest the suite fails, and with it present the suite passes. This check did not exist for `0.1.0rc1`, which is why a new public module reached a published candidate unrouted |
+| Public library-module routing test | `C-HWB-13`, `EF-SRS-08`, `EF-RS-REL-11` | `tests/test_release_engineering.py` in every full suite | Reads the manifest section alone, not the whole record, so an incidental mention elsewhere cannot satisfy it. Enforces three rules: shipped-tree imports must be routed, `__all__` modules must be routed, and every module must be routed or explicitly internal. Verified by inversion in all three directions — removing the `capture` entry, adding a new `__all__`-declaring module, and adding an unclassified module each fail the suite. This check did not exist for `0.1.0rc1`, which is why a new public module reached a published candidate unrouted |
+| Exported-name agreement test | `C-HWB-13` | `tests/test_release_engineering.py` in every full suite | Compares `capture.__all__` against the names written in the manifest in both directions, so adding or removing an export fails until the manifest is updated. Verified by inversion: appending a name to `__all__` fails the suite |
 | Capture primitive unit suite and determinism soak | `C-HWB-13` | `tests/test_capture.py`, `tests/test_capture_soak.py` | Eight failure modes (success, nonzero exit, malformed output, saturation, timeout, ignored termination, orphan child, corrupt evidence) hold one projection digest across repeated runs; passing locally |
 | Standards-pin assertions | exact EF-SRS/EF-RS-REL version, commit, blob, and SHA-256 | `tests/test_release_engineering.py` | Prepared and passing locally |
 | Relative Markdown link/anchor check | navigable front door and docs | `tests/test_workbench.py` | Passing locally |

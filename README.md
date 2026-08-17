@@ -28,7 +28,7 @@ with wheel and source-distribution assets. It is not published to PyPI.
 This tree is **ahead of that prerelease**: it prepares candidate `0.1.0rc2`,
 which has no tag, no release, and no assets. The difference that matters to a
 reader is a new public module, `harness_workbench.capture`, which recipients of
-`v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+, 379
+`v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+, 381
 tests.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
@@ -75,9 +75,12 @@ A virtualenv avoids it as well, and is the recommended way to try this out.
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. Local release checks exercised macOS. Immutable-tag CI exercised
-the full Linux/macOS matrix; the release-final conformance record is attached
-to the [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
+that test set. Local release checks exercised macOS. The next two facts describe
+the published `v0.1.0-rc.1` and **not** the `0.1.0rc2` candidate in this tree,
+which has no hosted CI evidence at all. Immutable-tag CI exercised the
+full Linux/macOS matrix, and the release-final conformance record is attached
+to that
+[GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns

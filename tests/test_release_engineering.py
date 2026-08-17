@@ -638,23 +638,6 @@ class TestReleaseSurfaces(unittest.TestCase):
                     f"claim-bearing release surface is not routed: {relative}",
                 )
 
-        # A module that declares `__all__` is the author saying "this is public
-        # API". Nothing above discovers it: the CLI manifest only sees what has
-        # a subcommand, and the path manifest only sees Markdown, examples and
-        # GitHub files. `capture` became public and reached a published
-        # candidate routed nowhere, because no check looked at modules at all.
-        for module in sorted((ROOT / "src" / "harness_workbench").glob("*.py")):
-            source = module.read_text(encoding="utf-8")
-            if not re.search(r"^__all__\s*=", source, re.MULTILINE):
-                continue
-            with self.subTest(module=module.stem):
-                self.assertIn(
-                    f"`harness_workbench.{module.stem}`",
-                    record,
-                    "public library module is not routed: "
-                    f"harness_workbench.{module.stem}",
-                )
-
         from harness_workbench import commands
 
         for name in commands.cli_commands():
@@ -670,6 +653,153 @@ class TestReleaseSurfaces(unittest.TestCase):
         link = "docs/release-conformance-0.1.0rc2.md"
         self.assertIn(f"]({link})", readme)
         self.assertIn(f"]({link})", releasing)
+
+    # Modules under `src/harness_workbench/` that are implementation detail.
+    # This list is the *decision*, not the discovery: a module is public until
+    # somebody puts it here on purpose. Adding a module to the package without
+    # touching this list fails the completeness check below, which is the point
+    # -- `capture` reached a published candidate routed nowhere precisely
+    # because a new module needed no decision from anyone.
+    INTERNAL_MODULES = frozenset({
+        "blast", "catch", "cli", "commands", "confine", "diff", "effects",
+        "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
+        "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
+        "sweep",
+    })
+
+    def public_library_manifest(self) -> str:
+        """The manifest section alone, not the whole 400-line record.
+
+        Asserting a module name appears *somewhere* in the record is satisfied
+        by any passing mention -- a departure that names the module, a claim
+        row, even the sentence explaining the omission. Routing means the name
+        is in the manifest, so read only the manifest.
+        """
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+            encoding="utf-8"
+        )
+        heading = "### Exact public library-module manifest"
+        self.assertIn(heading, record, "the public library manifest is missing")
+        section = record.split(heading, 1)[1]
+        return section.split("\n## ", 1)[0].split("\n### ", 1)[0]
+
+    def test_public_library_surface_is_routed_or_declared_internal(self):
+        manifest = self.public_library_manifest()
+        package = ROOT / "src" / "harness_workbench"
+        modules = {
+            path.stem
+            for path in package.glob("*.py")
+            if not path.stem.startswith("__")
+        }
+
+        def routed(name: str) -> bool:
+            return f"`harness_workbench.{name}`" in manifest
+
+        # 1. DERIVED. The shipped subject tree is opt-in data, but it is data a
+        #    recipient receives and runs, and whatever it imports from core is
+        #    load-bearing public API by use rather than by declaration. This
+        #    rule needs no maintenance: it reads the imports.
+        imported_by_shipped_tree = set()
+        for path in sorted((package / "subjects").glob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            imported_by_shipped_tree.update(
+                re.findall(r"from harness_workbench\.(\w+) import", source)
+            )
+            imported_by_shipped_tree.update(
+                re.findall(r"from harness_workbench import (?!\()(\w+)", source)
+            )
+        imported_by_shipped_tree &= modules
+        self.assertTrue(
+            imported_by_shipped_tree,
+            "found no core imports in the shipped subject tree; the discovery "
+            "pattern has probably drifted and is now vacuous",
+        )
+        for name in sorted(imported_by_shipped_tree):
+            with self.subTest(imported=name):
+                self.assertTrue(
+                    routed(name),
+                    f"the shipped subject tree imports harness_workbench.{name}, "
+                    "so it is public API a recipient receives, but it is not in "
+                    "the public library manifest",
+                )
+
+        # 2. DECLARED. `__all__` is the author saying "this is the public
+        #    surface" in the code itself.
+        for name in sorted(modules):
+            source = (package / f"{name}.py").read_text(encoding="utf-8")
+            if not re.search(r"^__all__\s*=", source, re.MULTILINE):
+                continue
+            with self.subTest(declared=name):
+                self.assertTrue(
+                    routed(name),
+                    f"harness_workbench.{name} declares __all__ but is not in "
+                    "the public library manifest",
+                )
+
+        # 3. COMPLETENESS. Every module is routed or deliberately internal.
+        #    Rules 1 and 2 only catch modules that already advertise
+        #    themselves; `conform` is public and does neither, which is exactly
+        #    the shape that slipped through before.
+        for name in sorted(modules):
+            with self.subTest(module=name):
+                self.assertTrue(
+                    routed(name) or name in self.INTERNAL_MODULES,
+                    f"harness_workbench.{name} is neither routed in the public "
+                    "library manifest nor listed in INTERNAL_MODULES; decide "
+                    "which it is",
+                )
+        stale = sorted(self.INTERNAL_MODULES - modules)
+        self.assertEqual([], stale, f"INTERNAL_MODULES names missing modules: {stale}")
+        both = sorted(name for name in self.INTERNAL_MODULES if routed(name))
+        self.assertEqual([], both, f"modules both routed and internal: {both}")
+
+    def test_exported_names_of_declared_public_modules_are_listed_exactly(self):
+        """The manifest names the surface, so the surface cannot move quietly.
+
+        Without this, "the exported names are the ones listed in the manifest"
+        is a claim no test can fail: the manifest described capabilities in
+        prose, and prose does not disagree with an added export.
+        """
+        import importlib
+
+        manifest = self.public_library_manifest()
+        package = ROOT / "src" / "harness_workbench"
+        checked = 0
+        for path in sorted(package.glob("*.py")):
+            name = path.stem
+            if name.startswith("__"):
+                continue
+            if not re.search(
+                r"^__all__\s*=", path.read_text(encoding="utf-8"), re.MULTILINE
+            ):
+                continue
+            module = importlib.import_module(f"harness_workbench.{name}")
+            for exported in sorted(module.__all__):
+                with self.subTest(module=name, exported=exported):
+                    self.assertIn(
+                        f"`{exported}`",
+                        manifest,
+                        f"harness_workbench.{name} exports {exported!r}, which "
+                        "the public library manifest does not name",
+                    )
+            listed = {
+                found
+                for found in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", manifest)
+                if not found.startswith("__")
+            }
+            unexpected = sorted(
+                (listed & set(dir(module)))
+                - set(module.__all__)
+                - {name, "harness_workbench"}
+            )
+            self.assertEqual(
+                [],
+                unexpected,
+                f"the manifest names {unexpected} for harness_workbench.{name}, "
+                "which are not in its __all__",
+            )
+            checked += 1
+        self.assertTrue(checked, "no module declares __all__; this check is vacuous")
 
     def test_conformance_record_pins_standards_and_stays_pre_release(self):
         record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
