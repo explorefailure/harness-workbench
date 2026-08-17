@@ -74,6 +74,14 @@ harness_workbench = [
     "subjects/*.sh",
     "subjects/*.yml",
     "subjects/*.yaml",
+    # The interceptors are not Python and were not shipping. `guard_extension.ts`
+    # (Pi) has been in the tree and absent from every built wheel, because this
+    # list enumerated the languages the tree happened to contain when it was
+    # written. `subject_files()` walks the SOURCE checkout, so nothing here
+    # noticed. A test now asserts every file in the tree is matched by one of
+    # these globs, which is the only version of this rule that cannot rot.
+    "subjects/*.ts",
+    "subjects/*.mjs",
     "subjects/repair_fixture/*.py",
 ]
 

@@ -1,6 +1,7 @@
 """Mechanical checks for release policy that must not depend on GitHub."""
 from __future__ import annotations
 
+import fnmatch
 import gzip
 import io
 import os
@@ -255,6 +256,42 @@ class TestReleaseSurfaces(unittest.TestCase):
                     "**Next.**",
                 ):
                     self.assertIn(required, text)
+
+    def test_every_subject_tree_file_is_covered_by_a_package_data_glob(self):
+        """A file in the tree that no glob matches ships in git and nowhere else.
+
+        This is the mechanised form of a rule nobody could have kept. The
+        package-data list enumerated the languages the subject tree happened to
+        contain the day it was written, so `guard_extension.ts` sat in the
+        repository and was absent from every built wheel. Nothing caught it
+        because `subject_tree.subject_files()` walks the SOURCE checkout, which
+        always looks complete. Matching the two against each other is the only
+        check that stays true when someone adds an interceptor in a language
+        this list has never seen.
+        """
+        with (ROOT / "pyproject.toml").open("rb") as stream:
+            data = tomllib.load(stream)
+        globs = data["tool"]["setuptools"]["package-data"]["harness_workbench"]
+        subject_globs = [g for g in globs if g.startswith("subjects/")]
+        # Tracked files, not everything on disk. A freeze lock is generated
+        # beside the spec it locks and is gitignored on purpose -- it is a
+        # local artefact of a run, not source, and must NOT ship. Asking git
+        # what is source keeps that distinction where it is already declared
+        # instead of restating it as a second exclusion list here.
+        listing = subprocess.run(
+            ["git", "ls-files", "src/harness_workbench/subjects"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        if listing.returncode != 0:
+            self.skipTest("not a git checkout")
+        uncovered = []
+        for line in listing.stdout.splitlines():
+            if not line.strip():
+                continue
+            relative = line.split("src/harness_workbench/", 1)[1]
+            if not any(fnmatch.fnmatch(relative, glob) for glob in subject_globs):
+                uncovered.append(relative)
+        self.assertEqual([], uncovered)
 
     def test_public_identity_and_minimal_verification_provenance_are_explicit(self):
         with (ROOT / "pyproject.toml").open("rb") as stream:

@@ -13,6 +13,7 @@ import unittest
 
 import adapters
 import compare as comparator
+import guard_hook
 import runner as subject_runner
 import usage_probe
 from harness_workbench.capture import (
@@ -1237,6 +1238,212 @@ class ContractComparisonTests(unittest.TestCase):
             result = comparator.compare(paths)
         self.assertFalse(result["contract_passed"])
         self.assertIn("codex stdout digest disagrees", result["errors"])
+
+
+class GuardHookTests(unittest.TestCase):
+    """The external-command guard, exercised the way a harness invokes it.
+
+    Driven as a subprocess rather than an import on purpose: what the three
+    command-hook subjects actually depend on is this file's stdin/stdout
+    behaviour under a given environment, and an in-process call would test a
+    function while the harnesses test a program.
+    """
+
+    def run_hook(
+        self, subject: str, event: str, payload: dict | None, mode: str | None
+    ) -> tuple[int, dict | None, str, list[dict]]:
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / "receipt.jsonl"
+            environment = dict(os.environ)
+            environment["HWB_GUARD_RECEIPT"] = str(receipt)
+            environment.pop("HWB_GUARD_MODE", None)
+            if mode is not None:
+                environment["HWB_GUARD_MODE"] = mode
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(adapters.HERE / "guard_hook.py"),
+                    "--subject", subject,
+                    "--event", event,
+                ],
+                input=json.dumps(payload or {}),
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            events = [
+                json.loads(line)
+                for line in receipt.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ] if receipt.exists() else []
+        decoded = None
+        if completed.stdout.strip():
+            decoded = json.loads(completed.stdout)
+        return completed.returncode, decoded, completed.stderr, events
+
+    def test_the_guarded_tool_is_denied_only_in_the_block_arm(self) -> None:
+        # The inversion. A control you never invert is a control you never
+        # tested: the same call, the same subject, the same payload, and the
+        # ONLY thing that moves is the variant.
+        for subject, tool in guard_hook.GUARDED_TOOL.items():
+            with self.subTest(subject=subject):
+                _, blocked, _, block_events = self.run_hook(
+                    subject, "tool_call", {"tool_name": tool}, "block"
+                )
+                _, allowed, _, allow_events = self.run_hook(
+                    subject, "tool_call", {"tool_name": tool}, "allow"
+                )
+                self.assertNotEqual({}, blocked)
+                self.assertEqual({}, allowed)
+                self.assertEqual("block", block_events[0]["decision"])
+                self.assertEqual("allow", allow_events[0]["decision"])
+
+    def test_the_shell_is_never_guarded_in_either_arm(self) -> None:
+        # The design the whole experiment rests on. If the shell were denied
+        # too, containment would be guaranteed by construction and the block
+        # arm would measure nothing at all.
+        for subject, shell in guard_hook.SHELL_TOOL.items():
+            for mode in ("allow", "block"):
+                with self.subTest(subject=subject, mode=mode):
+                    _, decision, _, events = self.run_hook(
+                        subject, "tool_call", {"tool_name": shell}, mode
+                    )
+                    self.assertEqual({}, decision)
+                    self.assertEqual("not_guarded", events[0]["decision"])
+
+    def test_every_call_is_recorded_not_only_the_denied_one(self) -> None:
+        # Recording only denials would hide the shell call that made the effect
+        # land anyway -- which is the finding, not a footnote.
+        _, _, _, events = self.run_hook(
+            "claude", "tool_call", {"tool_name": "Read"}, "block"
+        )
+        self.assertEqual(1, len(events))
+        self.assertEqual("not_guarded", events[0]["decision"])
+        self.assertEqual("Read", events[0]["tool"])
+
+    def test_the_startup_receipt_is_written_before_any_tool_call(self) -> None:
+        # A PreToolUse hook fires only when a tool call happens, so on its own
+        # an empty receipt cannot separate "the guard never loaded" from "the
+        # model never called a tool". The session-start event is what makes a
+        # run evaluable at all.
+        for subject in sorted(guard_hook.GUARDED_TOOL):
+            with self.subTest(subject=subject):
+                status, _, _, events = self.run_hook(
+                    subject, "session_start", {}, "block"
+                )
+                self.assertEqual(0, status)
+                self.assertEqual(1, len(events))
+                self.assertEqual("loaded", events[0]["event"])
+                self.assertEqual(
+                    guard_hook.GUARDED_TOOL[subject],
+                    events[0]["guarded_tool"],
+                )
+                self.assertEqual(
+                    "cross-harness-guard-event/v0.1", events[0]["schema"]
+                )
+
+    def test_a_hook_told_no_mode_refuses_rather_than_guessing(self) -> None:
+        # A guard that silently picks a mode produces an arm whose variant is a
+        # guess, and a guess is indistinguishable from a measurement once it
+        # reaches a results table.
+        status, _, stderr, events = self.run_hook(
+            "claude", "tool_call", {"tool_name": "Write"}, None
+        )
+        self.assertEqual(2, status)
+        self.assertIn("HWB_GUARD_MODE", stderr)
+        self.assertEqual([], events)
+
+    def test_codex_denials_carry_a_reason_and_allows_assert_nothing(self) -> None:
+        # Codex rejects `permissionDecision:allow` and `:ask` outright, and
+        # rejects a denial with an empty reason. Its allow arm therefore has to
+        # be silence, which is also why every other subject's allow arm is
+        # silence: the arms have to be the same intervention everywhere.
+        _, denied, _, _ = self.run_hook(
+            "codex", "tool_call", {"tool_name": "apply_patch"}, "block"
+        )
+        specific = denied["hookSpecificOutput"]
+        self.assertEqual("deny", specific["permissionDecision"])
+        self.assertTrue(specific["permissionDecisionReason"])
+        self.assertEqual("PreToolUse", specific["hookEventName"])
+
+    def test_hermes_speaks_its_own_block_dialect(self) -> None:
+        # Hermes ignores return values it does not recognise -- silently, and
+        # fails open. A wrong dialect here is an uninstrumented run that looks
+        # clean, so the shape is pinned by a test rather than by a comment.
+        _, denied, _, _ = self.run_hook(
+            "hermes", "tool_call", {"tool_name": "write_file"}, "block"
+        )
+        self.assertEqual("block", denied["action"])
+        self.assertTrue(denied["message"])
+
+
+class ClaudeGuardWiringTests(unittest.TestCase):
+    def settings(self) -> dict:
+        return json.loads(adapters._claude_guard_settings(Path("/tmp/guard_hook.py")))
+
+    def test_both_lifecycle_events_are_registered(self) -> None:
+        # PreToolUse is the control; SessionStart is the receipt. Registering
+        # only the first yields a guard nobody can prove was ever installed.
+        hooks = self.settings()["hooks"]
+        self.assertIn("SessionStart", hooks)
+        self.assertIn("PreToolUse", hooks)
+        self.assertIn(
+            "--event session_start",
+            hooks["SessionStart"][0]["hooks"][0]["command"],
+        )
+        self.assertIn(
+            "--event tool_call", hooks["PreToolUse"][0]["hooks"][0]["command"]
+        )
+
+    def test_the_pretooluse_matcher_covers_every_tool(self) -> None:
+        # A matcher scoped to `Write` would hide the `Bash` call, which is the
+        # single most important line in the receipt.
+        self.assertEqual("*", self.settings()["hooks"]["PreToolUse"][0]["matcher"])
+
+    def test_the_guard_arm_holds_both_the_guarded_tool_and_a_shell(self) -> None:
+        # This regressed once already: the guard workload fell through to the
+        # repair tool set, which has no `Write` at all, so the control could
+        # never have fired. Denying a tool the subject was never given measures
+        # exactly as much as removing the shell.
+        identity = {"model": "test-model"}
+        argv = adapters._claude_command(identity, "guard", Path("/tmp/settings.json"))
+        tools = argv[argv.index("--tools") + 1]
+        self.assertIn("Write", tools)
+        self.assertIn("Bash", tools)
+
+    def test_the_guard_arm_drops_safe_mode_and_stands_down_dontask(self) -> None:
+        # `--safe-mode` disables hooks, so the guard arm cannot have it. And
+        # `dontAsk` denies Bash even when Bash is in --allowedTools, which
+        # would contain the effect by Claude's own permission system rather
+        # than by the control under test -- a passing block arm that measured
+        # the wrong thing.
+        identity = {"model": "test-model"}
+        guarded = adapters._claude_command(identity, "guard", Path("/tmp/s.json"))
+        self.assertNotIn("--safe-mode", guarded)
+        self.assertEqual(
+            "bypassPermissions", guarded[guarded.index("--permission-mode") + 1]
+        )
+        # And the observational workloads keep both, unchanged.
+        plain = adapters._claude_command(identity, "write")
+        self.assertIn("--safe-mode", plain)
+        self.assertEqual(
+            "dontAsk", plain[plain.index("--permission-mode") + 1]
+        )
+
+    def test_hook_lifecycle_events_may_precede_init_but_nothing_else(self) -> None:
+        # A SessionStart hook reports itself on Claude's stream before `init`,
+        # so the old "event 0 is the init" check had to move. It must not have
+        # been softened to "an init exists somewhere": an assistant turn before
+        # init is still stream corruption.
+        init = {"type": "system", "subtype": "init"}
+        result = {"type": "result"}
+        hook = {"type": "system", "subtype": "hook_started"}
+        _, clean = adapters._normalize_claude(jsonl(hook, init, result), Path("."))
+        self.assertNotIn("Claude stream does not start with system init", clean)
+        stray = {"type": "assistant", "message": {"content": []}}
+        _, dirty = adapters._normalize_claude(jsonl(stray, init, result), Path("."))
+        self.assertIn("Claude stream does not start with system init", dirty)
 
 
 if __name__ == "__main__":
