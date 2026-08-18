@@ -1012,6 +1012,36 @@ class TestReleaseSurfaces(unittest.TestCase):
             "packages.find grew a filter; re-derive what actually ships before "
             "trusting the set below",
         )
+        # `packages.find` is not the only key that decides what ships.
+        # `py-modules = ["loose"]` puts `src/loose.py` into the distribution
+        # without `find` ever returning it and without a directory appearing
+        # under `src/`, so the comparison below looked straight past it: the
+        # same hole a second top-level package went through, reached through a
+        # different key. The keys this check has actually reasoned about are
+        # declared here, and one it has not refuses the declaration rather
+        # than being assumed harmless.
+        self.assertEqual(
+            [],
+            sorted(
+                set(config["tool"]["setuptools"])
+                - {
+                    "package-dir",
+                    "packages",
+                    "package-data",
+                    "include-package-data",
+                    "dynamic",
+                }
+            ),
+            "[tool.setuptools] grew a key this check has not reasoned about; "
+            "decide whether it adds Python to the distribution before adding "
+            "it to the set above",
+        )
+        self.assertEqual(
+            {"": "src"},
+            config["tool"]["setuptools"].get("package-dir"),
+            "package-dir no longer maps the distribution root to src/, so the "
+            "directories read below are not the ones that ship",
+        )
         # Every directory under `src/` holding Python at any depth. That is a
         # superset of what `find_packages` returns -- it needs an `__init__.py`
         # and this does not -- on purpose: a directory of shipped Python with
@@ -1069,6 +1099,19 @@ class TestReleaseSurfaces(unittest.TestCase):
         Either moves what `import *` re-exports while the routing and
         exported-name rules skip the module entirely -- the same shape as the
         hole `canon` sat in before `0.1.0rc2`.
+
+        Assignment is not the only statement that binds a name, and reading
+        only assignment targets missed three that do. `for __all__ in ...`,
+        `with ... as __all__` and the walrus `(__all__ := ...)` each leave
+        `__all__` bound in the module namespace and each governs `import *`,
+        so a module could move its declared surface past both the routing and
+        the exported-name rule while spelling `__all__` in plain sight. Their
+        targets go through the same leaf walk as an assignment's, so a tuple
+        target binds the same way here as it does there. A comprehension's own
+        target is deliberately not read -- it does not escape the
+        comprehension, so it never reaches the module namespace -- while a
+        walrus written inside one does escape, and is a `NamedExpr` like any
+        other.
 
         Deliberately syntax, not `hasattr` on an imported module: importing
         every module in the package to answer this question runs import side
@@ -1130,8 +1173,17 @@ class TestReleaseSurfaces(unittest.TestCase):
                 return True
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
-            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            elif isinstance(
+                node,
+                (ast.AnnAssign, ast.AugAssign, ast.NamedExpr, ast.For, ast.AsyncFor),
+            ):
                 targets = [node.target]
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                targets = [
+                    item.optional_vars
+                    for item in node.items
+                    if item.optional_vars is not None
+                ]
             else:
                 continue
             for target in targets:
