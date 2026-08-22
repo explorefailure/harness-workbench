@@ -354,6 +354,28 @@ def _fixture(workspace: Path, workload: str) -> None:
         raise AdapterError(f"unknown workload: {workload}")
 
 
+def _write_private_text(path: Path, text: str) -> None:
+    """Write a disposable vendor config with owner-only permissions.
+
+    Hermes and Pi require the active provider credential in config files; an
+    environment-only handoff is not supported by those harnesses. These files
+    live below capture's owner-only temporary root and disappear with it. The
+    file itself is also created as 0600 so that protection does not depend only
+    on the parent directory. Rewrites retain that mode because every file this
+    helper creates starts at 0600.
+    """
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        0o600,
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        # The vendor-required cleartext exists only in this owner-only,
+        # short-lived file and is never copied into sealed evidence.
+        # codeql[py/clear-text-storage-sensitive-data]
+        handle.write(text)
+
+
 GUARD_HOOK_INTERPRETER = "python3.11"
 # Codex refuses to run a hook it has no persisted `trusted_hash` for, and
 # announces that stand-down as an `error` item on its own stream. Named once so
@@ -793,7 +815,7 @@ def _deepseek_command(
     )
     if guard_plugin is not None:
         text = _deepseek_guard_patch(text, guard_plugin)
-    patch.write_text(text, encoding="utf-8")
+    _write_private_text(patch, text)
     return [
         str(_executable("dsh")),
         "--profile", "headless",
@@ -1780,9 +1802,7 @@ def capture(
                 hermes_config = _hermes_guard_hooks(
                     hermes_config, _install_guard_hook(root)
                 )
-            (hermes_home / "config.yaml").write_text(
-                hermes_config, encoding="utf-8"
-            )
+            _write_private_text(hermes_home / "config.yaml", hermes_config)
             evidence_path = root / "hermes-hooks.jsonl"
             # Created empty before Hermes starts, so absence and emptiness stop
             # meaning the same thing. Absent afterwards means the sidecar was
@@ -1816,8 +1836,8 @@ def capture(
             pi_home = root / "pi-home"
             pi_config = pi_home / "agent"
             pi_config.mkdir(parents=True)
-            (pi_config / "models.json").write_text(
-                _pi_models_json(identity, secret), encoding="utf-8"
+            _write_private_text(
+                pi_config / "models.json", _pi_models_json(identity, secret)
             )
             environment["HOME"] = str(pi_home)
             environment["PI_CODING_AGENT_DIR"] = str(pi_config)

@@ -84,6 +84,19 @@ class CommonTests(unittest.TestCase):
             (root / "shared.txt").write_bytes(EXPECTED_CONTENT + b".")
             self.assertFalse(outcome(before, manifest(root))["passed"])
 
+    def test_disposable_vendor_configs_are_owner_only_on_create_and_rewrite(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "vendor-config.json"
+            adapters._write_private_text(path, "first")
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual("first", path.read_text(encoding="utf-8"))
+
+            adapters._write_private_text(path, "second")
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual("second", path.read_text(encoding="utf-8"))
+
     def test_specs_bind_the_same_complete_input_set(self) -> None:
         for subject in ("claude", "codex", "deepseek", "hermes", "pi"):
             spec = json.loads(
