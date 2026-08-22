@@ -3528,7 +3528,21 @@ class GuardHookTests(unittest.TestCase):
         self.assertTrue(denied["message"])
 
 
-class ClaudeGuardWiringTests(unittest.TestCase):
+class CommandConstructionTests(unittest.TestCase):
+    """Exercise argv construction without requiring vendor CLIs on the host."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        executable = mock.patch.object(
+            adapters,
+            "_executable",
+            side_effect=lambda name: Path("/test-bin") / name,
+        )
+        executable.start()
+        self.addCleanup(executable.stop)
+
+
+class ClaudeGuardWiringTests(CommandConstructionTests):
     def settings(self) -> dict:
         return json.loads(adapters._claude_guard_settings(Path("/tmp/guard_hook.py")))
 
@@ -3646,7 +3660,7 @@ class ClaudeGuardWiringTests(unittest.TestCase):
         self.assertIn("Claude stream does not start with system init", dirty)
 
 
-class CodexGuardWiringTests(unittest.TestCase):
+class CodexGuardWiringTests(CommandConstructionTests):
     def config(self) -> str:
         return adapters._codex_guard_config(Path("/tmp/guard_hook.py"))
 
@@ -3708,7 +3722,7 @@ class CodexGuardWiringTests(unittest.TestCase):
         self.assertIn(complaint, refused)
 
 
-class HermesGuardWiringTests(unittest.TestCase):
+class HermesGuardWiringTests(CommandConstructionTests):
     def rendered(self) -> str:
         source = (adapters.HERE / "hermes_config.yaml").read_text(encoding="utf-8")
         return adapters._hermes_guard_hooks(source, Path("/tmp/guard_hook.py"))
@@ -3802,7 +3816,7 @@ class HermesGuardWiringTests(unittest.TestCase):
         self.assertIn("terminal", argv[argv.index("--toolsets") + 1])
 
 
-class DeepSeekGuardWiringTests(unittest.TestCase):
+class DeepSeekGuardWiringTests(CommandConstructionTests):
     def patched(self) -> str:
         source = (adapters.HERE / "dsh_patch.yml").read_text(encoding="utf-8")
         return adapters._deepseek_guard_patch(source, Path("/tmp/guard_plugin.mjs"))
