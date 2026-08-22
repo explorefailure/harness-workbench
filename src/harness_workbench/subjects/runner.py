@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+from typing import Any
 
 import adapters
 
@@ -58,6 +59,51 @@ def exit_status(
     if interrupted or not evaluable:
         return 3
     return 0 if adapter_passed else 1
+
+
+def experiment_document(
+    subject: str,
+    workload: str,
+    variant: str | None,
+    capture: dict[str, Any],
+) -> dict[str, Any]:
+    """Project one adapter envelope into the public experiment document.
+
+    The outcome is deliberately tri-state. Python's `and` returns an operand,
+    which is the truth table wanted here: a failed adapter proves the combined
+    result false, while a valid adapter paired with an unknown outcome remains
+    unknown. Keeping this projection pure makes every producer-emittable state
+    testable without invoking an external harness.
+    """
+    adapter_passed = capture["verdict"]["passed"]
+    outcome_passed = capture["outcome"]["passed"]
+    evaluable = capture["outcome"].get("evaluable", True)
+    forwarded = list(capture["capture"]["forwarded_signals"])
+    oracle_evidence = capture.get("oracle_evidence")
+    if isinstance(oracle_evidence, dict):
+        for name in ("initial_test", "final_test"):
+            process = oracle_evidence.get(name)
+            if isinstance(process, dict):
+                signals = process.get("forwarded_signals")
+                if isinstance(signals, list):
+                    forwarded.extend(signals)
+    interrupted = bool(forwarded)
+    status = exit_status(adapter_passed, interrupted, evaluable)
+    return {
+        "schema": "cross-harness-experiment-run/v0.1",
+        "subject": subject,
+        "workload": workload,
+        "variant": variant,
+        "verdict": {
+            "passed": adapter_passed and outcome_passed,
+            "adapter_passed": adapter_passed,
+            "outcome_passed": outcome_passed,
+            "evaluable": evaluable,
+            "interrupted": interrupted,
+            "status": status,
+        },
+        "adapter": capture,
+    }
 
 
 def main() -> int:
@@ -122,33 +168,12 @@ def main() -> int:
         print(json.dumps(failure, sort_keys=True))
         retain(failure)
         return 2
-    adapter_passed = capture["verdict"]["passed"]
-    outcome_passed = capture["outcome"]["passed"]
-    # Absent for every workload but `guard`, where it is the whole point.
-    evaluable = capture["outcome"].get("evaluable", True)
-    interrupted = bool(capture["capture"]["forwarded_signals"])
-    status = exit_status(adapter_passed, interrupted, evaluable)
-    document = {
-        "schema": "cross-harness-experiment-run/v0.1",
-        "subject": args.subject,
-        "workload": args.workload,
-        "variant": args.variant,
-        "verdict": {
-            # Kept, and kept named. Readers that want the conjunction can still
-            # have it; what they can no longer do is get it from $? and mistake
-            # a declined task for a broken measurement.
-            "passed": adapter_passed and outcome_passed,
-            "adapter_passed": adapter_passed,
-            "outcome_passed": outcome_passed,
-            "evaluable": evaluable,
-            "interrupted": interrupted,
-            "status": status,
-        },
-        "adapter": capture,
-    }
+    document = experiment_document(
+        args.subject, args.workload, args.variant, capture
+    )
     print(json.dumps(document, sort_keys=True))
     retain(document)
-    return status
+    return document["verdict"]["status"]
 
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ and four more reported a quantity that moves between samples. Prefer
 `freeze` lock without being asked.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # 103 tests, offline
+python3.11 -m unittest -v test_experiment.py     # offline; no subject installed
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject claude --workload guard --variant block \
     --record ../../../measure/guard/claude-block.json

@@ -156,6 +156,17 @@ TAG=v0.1.0-rc.2
 test "$(PYTHONPATH=src python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
+```
+
+The offline subject adapter suite is a separate mandatory source gate:
+
+```sh
+PYTHONPATH=src python -m unittest discover -s src/harness_workbench/subjects -p 'test_experiment.py' -v
+```
+
+Continue with the artifact gate only after both source gates pass:
+
+```sh
 test ! -e build
 test ! -e dist
 RAW_SDIST_DIR="$(mktemp -d)"
@@ -220,7 +231,9 @@ are executable, which every archive satisfies. Rewriting every sdist member to
 
 The two installed-artifact commands are intentionally separate. Each creates
 a clean virtual environment, installs only that artifact, checks installed
-metadata and both command forms, and executes the documented first run. The
+metadata and both command forms, materializes the shipped subject tree, runs
+its offline adapter suite against the installed capture primitive, and executes
+the documented first run. The
 artifact verifier requires exactly one wheel and one normalized sdist,
 verifies their contents and metadata, and rejects generated run evidence.
 

@@ -439,6 +439,53 @@ def capture_bytes(
     return envelope
 
 
+def _bounded_evidence(
+    result: Bounded,
+    *,
+    stdout_limit: int,
+    stderr_limit: int,
+    redactions: Sequence[str] = (),
+    argv: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Serialize one complete bounded-process observation without judging it.
+
+    A return code can be an outcome fact (the repair oracle's red test) or an
+    adapter fault (the subject process).  This function intentionally decides
+    neither.  It preserves the same evidence shape for both so callers cannot
+    accidentally retain a return code while discarding the bound that produced
+    it.
+    """
+    return {
+        "argv": list(result.argv if argv is None else argv),
+        "limits": {
+            "stdout_bytes": stdout_limit,
+            "stderr_bytes": stderr_limit,
+        },
+        "stdout": capture_bytes(
+            result.stdout,
+            redactions=redactions,
+            source_bytes=result.stdout_source_bytes,
+        ),
+        "stderr": capture_bytes(
+            result.stderr,
+            redactions=redactions,
+            source_bytes=result.stderr_source_bytes,
+        ),
+        "returncode": result.returncode,
+        "termination_reason": result.termination_reason,
+        "timed_out": result.timed_out,
+        "overflow": {
+            "stdout": result.stdout_overflow,
+            "stderr": result.stderr_overflow,
+        },
+        "process_group": {
+            "alive_before_cleanup": result.group_alive_before_cleanup,
+            "alive_after_cleanup": result.group_alive_after_cleanup,
+        },
+        "forwarded_signals": list(result.forwarded_signals),
+    }
+
+
 def parse_jsonl(
     raw: bytes, *, objects_only: bool = False
 ) -> tuple[list[Any], list[str]]:

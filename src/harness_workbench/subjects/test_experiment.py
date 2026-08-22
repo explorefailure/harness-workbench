@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import adapters
 import compare as comparator
@@ -20,6 +21,7 @@ from harness_workbench.capture import (
     Bounded,
     capture_bytes,
     credential_values,
+    digest_file,
     manifest,
     redact_bytes,
     run_bounded,
@@ -34,6 +36,16 @@ def jsonl(*events: dict) -> bytes:
     )
 
 
+def _profile_fixture_manifest(workload: str) -> list[dict]:
+    sources = {entry["path"]: entry for entry in manifest(adapters.HERE)}
+    entries = []
+    for source, destination in adapters.WORKLOADS[workload]["workspace"]:
+        entry = dict(sources[source])
+        entry["path"] = destination
+        entries.append(entry)
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
 def _fixture_manifest() -> list[dict]:
     """The workspace as `_fixture` leaves it for the write and guard workloads.
 
@@ -42,10 +54,7 @@ def _fixture_manifest() -> list[dict]:
     neutral placeholder -- it is a workspace that was never set up, which is
     a thing the oracles are supposed to notice.
     """
-    return [
-        {"path": "hook.py", "sha256": "a" * 64},
-        {"path": "task.md", "sha256": "b" * 64},
-    ]
+    return _profile_fixture_manifest("write")
 
 
 class CommonTests(unittest.TestCase):
@@ -233,6 +242,29 @@ class CommonTests(unittest.TestCase):
         self.assertIsNone(verdict["passed"])
         self.assertIsNone(verdict["contained"])
         self.assertEqual(3, subject_runner.exit_status(True, False, evaluable=False))
+
+    def test_guard_oracle_identity_survives_non_evaluability(self) -> None:
+        non_evaluable = guard_outcome(
+            _fixture_manifest(), _fixture_manifest(), variant="block", events=[]
+        )
+        evaluable = guard_outcome(
+            _fixture_manifest(),
+            _fixture_manifest(),
+            variant="block",
+            events=[
+                {"event": "loaded"},
+                {"event": "tool_call", "tool": "write", "decision": "block"},
+            ],
+        )
+        self.assertFalse(non_evaluable["evaluable"])
+        self.assertTrue(evaluable["evaluable"])
+        self.assertEqual(
+            (evaluable["declared_effect"], evaluable["expected_sha256"]),
+            (
+                non_evaluable["declared_effect"],
+                non_evaluable["expected_sha256"],
+            ),
+        )
 
     def test_a_denied_tool_whose_effect_still_landed_is_recorded_not_hidden(
         self,
@@ -1154,7 +1186,12 @@ class ApparatusBaselineTests(unittest.TestCase):
     def test_a_matching_baseline_agrees(self) -> None:
         live = adapters._apparatus()
         self.baseline.write_text(
-            json.dumps({"version": live["version"], "modules": live["modules"]}),
+            json.dumps({
+                "schema": "hwb-subject-apparatus/v0.1",
+                "package": live["package"],
+                "version": live["version"],
+                "modules": live["modules"],
+            }),
             encoding="utf-8",
         )
         self.assertTrue(adapters._apparatus()["baseline"]["agrees"])
@@ -1164,13 +1201,66 @@ class ApparatusBaselineTests(unittest.TestCase):
         drifted = json.loads(json.dumps(live["modules"]))
         drifted["capture"]["sha256"] = "0" * 64
         self.baseline.write_text(
-            json.dumps({"version": "0.0.1-older", "modules": drifted}),
+            json.dumps({
+                "schema": "hwb-subject-apparatus/v0.1",
+                "package": live["package"],
+                "version": "0.0.1-older",
+                "modules": drifted,
+            }),
             encoding="utf-8",
         )
         baseline = adapters._apparatus()["baseline"]
         self.assertFalse(baseline["agrees"])
         self.assertEqual(["capture"], baseline["changed_modules"])
         self.assertEqual("0.0.1-older", baseline["version"])
+
+    def test_malformed_baselines_fail_closed_without_raising(self) -> None:
+        malformed = (
+            [],
+            {"schema": "wrong", "package": "harness_workbench",
+             "version": "0.0.0", "modules": {}},
+            {"schema": "hwb-subject-apparatus/v0.1",
+             "package": "wrong", "version": "0.0.0", "modules": {}},
+            {"schema": "hwb-subject-apparatus/v0.1",
+             "package": "harness_workbench", "version": "0.0.0",
+             "modules": []},
+        )
+        for baseline in malformed:
+            with self.subTest(baseline=baseline):
+                self.baseline.write_text(json.dumps(baseline), encoding="utf-8")
+                try:
+                    state = adapters._apparatus()["baseline"]
+                except (AttributeError, KeyError, TypeError) as error:
+                    self.fail(f"apparatus parsing raised instead of failing closed: {error}")
+                self.assertTrue(state["present"])
+                self.assertFalse(state["agrees"])
+                self.assertTrue(state.get("note"))
+
+    def test_non_utf8_baseline_is_structured_invalid_evidence(self) -> None:
+        self.baseline.write_bytes(b"\xff\xfe\x00")
+        state = adapters._apparatus()["baseline"]
+        self.assertTrue(state["present"])
+        self.assertFalse(state["agrees"])
+        self.assertIn("not readable UTF-8", state["note"])
+
+    def test_invalid_apparatus_stops_before_identity_or_subject_execution(self) -> None:
+        invalid = {
+            "package": "harness_workbench",
+            "version": "0.0.0-test",
+            "modules": {},
+            "baseline": {
+                "present": True,
+                "agrees": False,
+                "note": "baseline schema is invalid",
+            },
+        }
+        with (
+            mock.patch.object(adapters, "_apparatus", return_value=invalid),
+            mock.patch.object(adapters, "_verify_identity") as identity,
+        ):
+            with self.assertRaises(adapters.AdapterError):
+                adapters.capture("claude", "write")
+        identity.assert_not_called()
 
 
 class ExitStatusTests(unittest.TestCase):
@@ -1207,23 +1297,514 @@ class ExitStatusTests(unittest.TestCase):
         self.assertEqual(produced, {0, 1, 3})
 
 
+class GuardCaptureVerdictTests(unittest.TestCase):
+    """The adapter verdict is final only after guard evidence is parsed."""
+
+    @staticmethod
+    def bounded_guard_run(receipt: bytes | None):
+        def run(
+            argv: list[str], *, cwd: Path, env: dict[str, str], **_: object
+        ) -> Bounded:
+            if receipt is not None:
+                Path(env["HWB_GUARD_RECEIPT"]).write_bytes(receipt)
+            return Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        return run
+
+    def capture_guard(self, receipt: bytes | None) -> dict:
+        lifecycle = {
+            "acquisition": "native_jsonl",
+            "completeness": "native_terminal_event",
+            "tool_executions": [],
+        }
+        apparatus = {
+            "package": "harness_workbench",
+            "version": "0.0.0-test",
+            "modules": {},
+            "baseline": {"present": True, "agrees": True},
+        }
+        with (
+            mock.patch.object(
+                adapters,
+                "_verify_identity",
+                return_value={"name": "claude", "model": "test-model"},
+            ),
+            mock.patch.object(adapters, "_claude_guard_settings", return_value="{}"),
+            mock.patch.object(adapters, "_claude_command", return_value=["claude-test"]),
+            mock.patch.object(
+                adapters, "run_bounded", side_effect=self.bounded_guard_run(receipt)
+            ),
+            mock.patch.object(
+                adapters, "_normalize_claude", return_value=(lifecycle, [])
+            ),
+            mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+        ):
+            return adapters.capture("claude", "guard", variant="block")
+
+    def test_malformed_guard_receipt_fails_adapter_and_status(self) -> None:
+        # A valid startup receipt keeps the outcome evaluable; the malformed
+        # second line is an adapter fault discovered after lifecycle capture.
+        record = self.capture_guard(b'{"event":"loaded"}\nnot-json\n')
+        status = subject_runner.exit_status(
+            record["verdict"]["passed"],
+            False,
+            evaluable=record["outcome"]["evaluable"],
+        )
+        self.assertTrue(record["verdict"]["errors"])
+        self.assertEqual((False, 1), (record["verdict"]["passed"], status))
+
+    def test_missing_guard_receipt_fails_adapter_but_refuses_outcome(self) -> None:
+        record = self.capture_guard(None)
+        status = subject_runner.exit_status(
+            record["verdict"]["passed"],
+            False,
+            evaluable=record["outcome"]["evaluable"],
+        )
+        self.assertIn(
+            "guard receipt file was never created", record["verdict"]["errors"]
+        )
+        self.assertEqual(
+            (False, False, 3),
+            (record["verdict"]["passed"], record["outcome"]["evaluable"], status),
+        )
+
+    def test_clean_guard_receipt_preserves_adapter_outcome_separation(self) -> None:
+        # The block-arm oracle complains because the fake subject attempted no
+        # guarded tool. That is an outcome finding, not an adapter fault: the
+        # startup receipt itself is complete and readable.
+        record = self.capture_guard(b'{"event":"loaded"}\n')
+        status = subject_runner.exit_status(
+            record["verdict"]["passed"],
+            False,
+            evaluable=record["outcome"]["evaluable"],
+        )
+        self.assertEqual({"passed": True, "errors": []}, record["verdict"])
+        self.assertTrue(record["outcome"]["evaluable"])
+        self.assertFalse(record["outcome"]["passed"])
+        self.assertEqual(0, status)
+
+
+class RepairCaptureVerdictTests(unittest.TestCase):
+    """The adapter retains and classifies both external oracle processes."""
+
+    @staticmethod
+    def process(
+        returncode: int,
+        *,
+        reason: str | None = None,
+        forwarded: tuple[int, ...] = (),
+    ) -> Bounded:
+        return Bounded(
+            argv=["python3.11", "-m", "unittest", "-v"],
+            returncode=returncode,
+            termination_reason=reason,
+            stdout=b"",
+            stderr=b"",
+            stdout_source_bytes=0,
+            stderr_source_bytes=0,
+            stdout_overflow=False,
+            stderr_overflow=False,
+            group_alive_before_cleanup=False,
+            group_alive_after_cleanup=False,
+            forwarded_signals=forwarded,
+        )
+
+    def capture_repair(self, initial: Bounded) -> dict:
+        lifecycle = {
+            "acquisition": "native_jsonl",
+            "completeness": "native_terminal_event",
+            "tool_executions": [],
+        }
+        apparatus = {
+            "schema": "hwb-subject-apparatus/v0.1",
+            "package": "harness_workbench",
+            "version": "0.0.0-test",
+            "modules": {},
+            "baseline": {"present": True, "agrees": True},
+        }
+        subject = self.process(0)
+        final = self.process(0)
+        with (
+            mock.patch.object(
+                adapters,
+                "_verify_identity",
+                return_value={"name": "claude", "model": "test-model"},
+            ),
+            mock.patch.object(adapters, "_claude_command", return_value=["claude-test"]),
+            mock.patch.object(
+                adapters, "run_bounded", side_effect=[initial, subject, final]
+            ),
+            mock.patch.object(
+                adapters, "_normalize_claude", return_value=(lifecycle, [])
+            ),
+            mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+        ):
+            return adapters.capture(
+                "claude",
+                "repair",
+                stdout_limit=1024,
+                stderr_limit=1024,
+            )
+
+    def test_oracle_timeout_is_retained_as_an_adapter_fault(self) -> None:
+        record = self.capture_repair(
+            self.process(-15, reason="timeout")
+        )
+        self.assertFalse(record["verdict"]["passed"])
+        self.assertTrue(
+            any("initial test bound fired" in error for error in record["verdict"]["errors"]),
+            record["verdict"]["errors"],
+        )
+        evidence = record["oracle_evidence"]["initial_test"]
+        self.assertEqual("timeout", evidence["termination_reason"])
+        self.assertTrue(evidence["timed_out"])
+        self.assertEqual(
+            {"stdout_bytes": 1024, "stderr_bytes": 1024}, evidence["limits"]
+        )
+
+    def test_oracle_signal_marks_the_outer_run_interrupted(self) -> None:
+        record = self.capture_repair(
+            self.process(-15, reason="signalled", forwarded=(2,))
+        )
+        outer = subject_runner.experiment_document(
+            "claude", "repair", None, record
+        )
+        self.assertTrue(outer["verdict"]["interrupted"])
+        self.assertEqual(3, outer["verdict"]["status"])
+
+
 class ContractComparisonTests(unittest.TestCase):
     @staticmethod
-    def stream() -> dict:
+    def stream(raw: bytes = b"") -> dict:
+        return capture_bytes(raw)
+
+    @staticmethod
+    def lifecycle_evidence(
+        subject: str, returncode: int
+    ) -> tuple[bytes, bytes, dict]:
+        stdout = b""
+        sidecar = b""
+        if subject == "claude":
+            events = [
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": "success", "is_error": False},
+            ]
+            stdout = jsonl(*events)
+            lifecycle = {
+                "acquisition": "native_jsonl",
+                "completeness": "native_terminal_event",
+                "event_types": [event["type"] for event in events],
+                "tool_executions": [],
+                "terminal": {"status": "success", "is_error": False},
+            }
+        elif subject == "codex":
+            events = [
+                {"type": "thread.started"},
+                {"type": "turn.started"},
+                {"type": "turn.completed"},
+            ]
+            stdout = jsonl(*events)
+            lifecycle = {
+                "acquisition": "native_jsonl",
+                "completeness": "native_terminal_event",
+                "event_types": [event["type"] for event in events],
+                "tool_executions": [],
+                "terminal": {"status": "turn.completed"},
+            }
+        elif subject == "pi":
+            events = [{"type": "session"}, {"type": "agent_settled"}]
+            stdout = jsonl(*events)
+            lifecycle = {
+                "acquisition": "native_jsonl",
+                "completeness": "native_event_stream",
+                "event_types": [event["type"] for event in events],
+                "tool_executions": [],
+                "terminal": {"status": "agent_settled", "settled": 1},
+            }
+        elif subject == "hermes":
+            lifecycle = {
+                "acquisition": "shell_hook_plus_process",
+                "completeness": "process_boundary_only",
+                "event_types": [],
+                "tool_executions": [],
+                "terminal": {"status": "process_exit", "returncode": returncode},
+            }
+        else:
+            records = [
+                {"type": "session", "version": 0},
+                {"type": "turn/start", "seq": 0},
+                {"type": "request/context", "seq": 1},
+                {
+                    "type": "turn/end", "seq": 2,
+                    "data": {"reason": {"kind": "completed"}},
+                },
+            ]
+            sidecar = jsonl(*records)
+            lifecycle = {
+                "acquisition": "native_persisted_jsonl_plus_process",
+                "completeness": "native_terminal_event",
+                "event_types": [record["type"] for record in records[1:]],
+                "tool_executions": [],
+                "terminal": {"status": "completed", "returncode": returncode},
+            }
+        return stdout, sidecar, lifecycle
+
+    @staticmethod
+    def repair_lifecycle_evidence(
+        subject: str, returncode: int
+    ) -> tuple[bytes, bytes, dict, list[dict]]:
+        effects = (
+            ("command", "python_unittest_v", 1),
+            ("write", None, None),
+            ("command", "python_unittest_v", 0),
+        )
+        names = {
+            "claude": ("bash", "write", "bash"),
+            "codex": ("command_execution", "file_change", "command_execution"),
+            "pi": ("bash", "write", "bash"),
+            "hermes": ("terminal", "write_file", "terminal"),
+            "deepseek": ("bash", "write", "bash"),
+        }[subject]
+        acquisition = {
+            "hermes": "shell_hook",
+            "deepseek": "native_persisted_jsonl",
+        }.get(subject, "native_jsonl")
+        arguments_stage = "subject_proposal" if subject in {"claude", "hermes"} else "subject_event"
+        result_stage = "hook_observer" if subject == "hermes" else "subject_reported"
+        executions = []
+        for index, ((effect_kind, operation, exit_code), tool_name) in enumerate(
+            zip(effects, names)
+        ):
+            execution = {
+                "call_id": f"call-{index}",
+                "tool_name": tool_name,
+                "effect_kind": effect_kind,
+                "operation": operation,
+                "arguments_sha256": f"{index + 1:064x}",
+                "arguments_stage": arguments_stage,
+                "reported_error": (
+                    exit_code == 1 and subject in {"claude", "codex"}
+                ),
+                "result_stage": result_stage,
+                "acquisition": acquisition,
+            }
+            if subject in {"pi", "hermes", "deepseek"}:
+                execution["operation_exit_code"] = exit_code
+            if subject == "hermes":
+                execution["request_id"] = f"request-{index}"
+            executions.append(execution)
+
+        stdout = b""
+        sidecar = b""
+        if subject == "claude":
+            events = [{"type": "system", "subtype": "init"}]
+            for execution in executions:
+                events.append({
+                    "type": "assistant",
+                    "message": {"content": [{
+                        "type": "tool_use", "id": execution["call_id"],
+                        "name": execution["tool_name"], "input": {},
+                    }]},
+                })
+            events.append({"type": "result", "subtype": "success", "is_error": False})
+            stdout = jsonl(*events)
+            terminal = {"status": "success", "is_error": False}
+            profile = ("native_jsonl", "native_terminal_event")
+        elif subject == "codex":
+            events = [{"type": "thread.started"}, {"type": "turn.started"}]
+            events.extend({
+                "type": "item.completed",
+                "item": {"id": execution["call_id"], "type": execution["tool_name"]},
+            } for execution in executions)
+            events.append({"type": "turn.completed"})
+            stdout = jsonl(*events)
+            terminal = {"status": "turn.completed"}
+            profile = ("native_jsonl", "native_terminal_event")
+        elif subject == "pi":
+            events = [{"type": "session"}]
+            for execution in executions:
+                events.extend((
+                    {
+                        "type": "tool_execution_start",
+                        "toolCallId": execution["call_id"],
+                        "toolName": execution["tool_name"],
+                    },
+                    {
+                        "type": "tool_execution_end",
+                        "toolCallId": execution["call_id"],
+                        "toolName": execution["tool_name"],
+                    },
+                ))
+            events.append({"type": "agent_settled"})
+            stdout = jsonl(*events)
+            terminal = {"status": "agent_settled", "settled": 1}
+            profile = ("native_jsonl", "native_event_stream")
+        elif subject == "hermes":
+            events = []
+            for execution in executions:
+                extra = {
+                    "api_request_id": execution["request_id"],
+                    "tool_call_id": execution["call_id"],
+                }
+                events.extend((
+                    {"hook_event_name": "pre_tool_call", "tool_name": execution["tool_name"], "extra": extra},
+                    {"hook_event_name": "post_tool_call", "tool_name": execution["tool_name"], "extra": extra},
+                ))
+            sidecar = jsonl(*events)
+            terminal = {"status": "process_exit", "returncode": returncode}
+            profile = ("shell_hook_plus_process", "process_boundary_only")
+        else:
+            records = [{"type": "session", "version": 0}]
+            events = [{"type": "turn/start", "seq": 0}]
+            for index, execution in enumerate(executions, 1):
+                events.append({
+                    "type": "tool/call", "seq": index,
+                    "data": {
+                        "callId": execution["call_id"],
+                        "name": execution["tool_name"],
+                    },
+                })
+            events.append({
+                "type": "turn/end", "seq": len(events),
+                "data": {"reason": {"kind": "completed"}},
+            })
+            sidecar = jsonl(*(records + events))
+            terminal = {"status": "completed", "returncode": returncode}
+            profile = (
+                "native_persisted_jsonl_plus_process", "native_terminal_event"
+            )
+        lifecycle = {
+            "acquisition": profile[0],
+            "completeness": profile[1],
+            "event_types": [
+                event.get("hook_event_name") if subject == "hermes" else event.get("type")
+                for event in events
+            ],
+            "tool_executions": executions,
+            "terminal": terminal,
+        }
+        return stdout, sidecar, lifecycle, executions
+
+    @staticmethod
+    def capabilities(subject: str) -> dict:
         return {
-            "bytes": 0,
-            "source_bytes": 0,
-            "sha256": hashlib.sha256(b"").hexdigest(),
-            "base64": "",
-            "text": "",
-            "redaction_count": 0,
+            "native_event_stream": subject in {"claude", "codex", "pi"},
+            "hook_event_stream": subject == "hermes",
+            "native_persisted_event_log": subject == "deepseek",
+            "native_terminal_event": subject in {
+                "claude", "codex", "deepseek", "pi"
+            },
+            "correlated_tool_calls": True,
+            "tool_result_status": True,
+            "model_identity": (
+                "hosted_model_label"
+                if subject in {"claude", "codex"}
+                else comparator._active_model_profile()[1]["identity_strength"]
+            ),
         }
 
+    @staticmethod
+    def invocation_argv(subject: str, workload: str = "write") -> list[str]:
+        prompt = adapters.WORKLOADS[workload]["prompt"]
+        model = comparator._declared_subject_identity(subject).get("model")
+        if subject == "claude":
+            tools = (
+                "Write" if workload == "write"
+                else "Write,Bash" if workload == "guard"
+                else "Read,Edit,Bash"
+            )
+            argv = [
+                "claude", "-p", "--output-format", "stream-json", "--verbose",
+                "--no-session-persistence", "--setting-sources", "",
+                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                "--disable-slash-commands", "--tools", tools,
+                "--allowedTools", tools, "--model", model,
+                "--max-budget-usd", "0.05",
+            ]
+            if workload == "guard":
+                argv.extend([
+                    "--permission-mode", "bypassPermissions", "--settings",
+                    "<run-root>/claude_guard_settings.json",
+                ])
+            else:
+                argv.extend(["--safe-mode", "--permission-mode", "dontAsk"])
+            return argv + [prompt]
+        if subject == "codex":
+            config_flag = (
+                "--dangerously-bypass-hook-trust"
+                if workload == "guard" else "--ignore-user-config"
+            )
+            return [
+                "codex", "exec", config_flag, "--json", "--ephemeral",
+                "--ignore-rules", "--skip-git-repo-check", "--sandbox",
+                "workspace-write", "--model", model, "--cd", "<workspace>",
+                prompt,
+            ]
+        if subject == "hermes":
+            return [
+                "hermes", "chat", "--query", prompt, "--quiet", "--provider",
+                "custom", "--model", model, "--toolsets",
+                "file" if workload == "write" else "file,terminal",
+                "--ignore-rules", "--accept-hooks", "--yolo", "--max-turns",
+                "6", "--source", "tool",
+            ]
+        if subject == "pi":
+            tools = (
+                "write" if workload == "write"
+                else "write,bash" if workload == "guard"
+                else "read,edit,bash"
+            )
+            argv = [
+                "pi", "--mode", "json", "--print", "--no-session",
+                "--no-extensions", "--no-skills", "--no-prompt-templates",
+                "--no-context-files", "--no-approve", "--tools", tools,
+                "--provider", "workbench-gateway", "--model", model,
+            ]
+            if workload == "guard":
+                argv.extend(["-e", "<run-root>/guard_extension.ts"])
+            return argv + [
+                "@repair_task.md" if workload == "repair" else "@task.md"
+            ]
+        return [
+            "dsh", "--profile", "headless", "--patch",
+            "<run-root>/dsh_patch.yml", prompt,
+        ]
+
     def outer(self, subject: str, *, passed: bool) -> dict:
-        empty_sha = hashlib.sha256(b"").hexdigest()
+        prompt = adapters.WORKLOADS["write"]["prompt"]
+        inputs = adapters.WORKLOADS["write"]["inputs"]
+        before = _fixture_manifest()
+        after = json.loads(json.dumps(before))
+        if passed:
+            after.append({
+                "path": "shared.txt",
+                "size": len(EXPECTED_CONTENT),
+                "mode": 0o644,
+                "sha256": hashlib.sha256(EXPECTED_CONTENT).hexdigest(),
+            })
+        returncode = 0 if passed else 124
+        stdout_raw, sidecar_raw, lifecycle = self.lifecycle_evidence(
+            subject, returncode
+        )
         capture = {
-            name: self.stream() for name in ("stdout", "stderr", "sidecar")
+            "stdout": self.stream(stdout_raw),
+            "stderr": self.stream(),
+            "sidecar": self.stream(sidecar_raw),
         }
+        capture["sidecar"]["exists"] = subject in {"hermes", "deepseek"}
+        argv = self.invocation_argv(subject)
         capture.update({
             "limits": {
                 "stdout_bytes": 1024,
@@ -1235,44 +1816,263 @@ class ContractComparisonTests(unittest.TestCase):
                 "stderr": False,
                 "sidecar": False,
             },
-            "returncode": 0 if passed else 124,
+            "returncode": returncode,
             "termination_reason": None if passed else "timeout",
             "timed_out": not passed,
+            "process_group": {
+                "alive_before_cleanup": False,
+                "alive_after_cleanup": False,
+            },
+            "forwarded_signals": [],
+            "argv": argv,
         })
+        identity = comparator._declared_subject_identity(subject)
+        _, model_profile = comparator._active_model_profile()
         adapter = {
             "schema": "cross-harness-adapter-run/v0.1",
-            "subject": {"name": subject},
+            "subject": identity,
             "request": {
-                "prompt_sha256": "prompt",
-                "input_digests": {"task.md": "digest"},
-            },
-            "apparatus": {
-                "package": "harness_workbench",
-                "version": "0.0.0-test",
-                "modules": {
-                    "canon": {"file": "canon.py", "sha256": empty_sha},
-                    "capture": {"file": "capture.py", "sha256": empty_sha},
+                "workload": "write",
+                "variant": None,
+                "prompt_sha256": hashlib.sha256(
+                    prompt.encode("utf-8")
+                ).hexdigest(),
+                "input_digests": {
+                    name: digest_file(adapters.HERE / name) for name in inputs
                 },
             },
-            "capabilities": {},
-            "invocation": {},
-            "isolation": {},
-            "capture": capture,
-            "lifecycle": {
-                "acquisition": "native_jsonl",
-                "completeness": "native_terminal_event",
-                "tool_executions": [],
+            "apparatus": {
+                "schema": "hwb-subject-apparatus/v0.1",
+                "package": "harness_workbench",
+                "version": comparator.harness_workbench.__version__,
+                "modules": {
+                    "canon": {
+                        "file": "canon.py",
+                        "sha256": digest_file(
+                            Path(comparator.canon_module.__file__).resolve()
+                        ),
+                    },
+                    "capture": {
+                        "file": "capture.py",
+                        "sha256": digest_file(
+                            Path(comparator.capture_module.__file__).resolve()
+                        ),
+                    },
+                },
+                "baseline": {
+                    "present": True,
+                    "agrees": True,
+                    "version": comparator.harness_workbench.__version__,
+                    "changed_modules": [],
+                },
             },
-            "workspace": {},
-            "verdict": {"passed": passed},
-            "outcome": {"passed": passed, "expected_sha256": "effect"},
+            "capabilities": self.capabilities(subject),
+            "invocation": {
+                "argv": argv,
+                "cwd": "<workspace>",
+                "timeout_seconds": 120,
+                "credential_source": (
+                    "ambient_authenticated_client"
+                    if subject in {"claude", "codex"}
+                    else "none_loopback_model"
+                    if model_profile["kind"] == "local"
+                    else "experiment_scoped_gateway_key"
+                ),
+            },
+            "isolation": {
+                "disposable_workspace": True,
+                "ambient_config": adapters._ambient_config(subject, "write"),
+                "network": (
+                    f"first-party {subject.title()} service"
+                    if subject in {"claude", "codex"}
+                    else "loopback Ollama only"
+                    if model_profile["kind"] == "local"
+                    else f"remote gateway {model_profile['base_url']}"
+                ),
+            },
+            "capture": capture,
+            "lifecycle": lifecycle,
+            "workspace": {"before": before, "after": after},
+            "verdict": {
+                "passed": passed,
+                "errors": [] if passed else ["test measurement fault"],
+            },
+            "outcome": {
+                "passed": passed,
+                "errors": [] if passed else ["test outcome failure"],
+                "declared_effect": "shared.txt",
+                "effect_sha256": (
+                    hashlib.sha256(EXPECTED_CONTENT).hexdigest()
+                    if passed else None
+                ),
+                "expected_sha256": hashlib.sha256(
+                    EXPECTED_CONTENT
+                ).hexdigest(),
+            },
         }
-        return {
-            "schema": "cross-harness-experiment-run/v0.1",
-            "subject": subject,
-            "verdict": {"passed": passed},
-            "adapter": adapter,
+        return subject_runner.experiment_document(
+            subject, "write", None, adapter
+        )
+
+    def guard_outer(
+        self,
+        subject: str,
+        *,
+        evaluable: bool,
+        adapter_passed: bool | None = None,
+        variant: str = "block",
+    ) -> dict:
+        outer = self.outer(subject, passed=True)
+        outer.update({"workload": "guard", "variant": variant})
+        outer["adapter"]["request"].update({
+            "workload": "guard",
+            "variant": variant,
+            "input_digests": {
+                name: digest_file(adapters.HERE / name)
+                for name in adapters.GUARD_INPUTS
+            },
+        })
+        argv = self.invocation_argv(subject, "guard")
+        outer["adapter"]["invocation"]["argv"] = argv
+        outer["adapter"]["capture"]["argv"] = argv
+        outer["adapter"]["isolation"]["ambient_config"] = (
+            adapters._ambient_config(subject, "guard")
+        )
+        events = [
+            {"event": "loaded"},
+            {"event": "tool_call", "tool": "write", "decision": variant},
+        ] if evaluable else []
+        task_outcome = guard_outcome(
+            _fixture_manifest(),
+            _fixture_manifest(),
+            variant=variant,
+            events=events,
+        )
+        if adapter_passed is None:
+            adapter_passed = evaluable
+        outer["adapter"]["outcome"] = task_outcome
+        receipt = jsonl(*events)
+        outer["adapter"]["oracle_evidence"] = {
+            "guard_receipt": capture_bytes(receipt),
+            "events": events,
         }
+        outer["adapter"]["workspace"] = {
+            "before": _fixture_manifest(),
+            "after": _fixture_manifest(),
+        }
+        outer["adapter"]["verdict"] = {
+            "passed": adapter_passed,
+            "errors": [] if adapter_passed else [
+                "guard receipt file was never created"
+            ],
+        }
+        return subject_runner.experiment_document(
+            subject, "guard", variant, outer["adapter"]
+        )
+
+    def repair_outer(self, subject: str) -> dict:
+        outer = self.outer(subject, passed=True)
+        before = _profile_fixture_manifest("repair")
+        after = json.loads(json.dumps(before))
+        next(
+            item for item in after if item["path"] == "slugger.py"
+        )["sha256"] = "c" * 64
+        stdout_raw, sidecar_raw, lifecycle, executions = (
+            self.repair_lifecycle_evidence(subject, 0)
+        )
+        task_outcome = repair_outcome(
+            before,
+            after,
+            initial_test=RepairOutcomeTests.process(1),
+            final_test=RepairOutcomeTests.process(0),
+            tool_executions=executions,
+        )
+        self.assertTrue(task_outcome["passed"], task_outcome["errors"])
+        outer.update({"workload": "repair", "variant": None})
+        outer["adapter"]["request"].update({
+            "workload": "repair",
+            "variant": None,
+            "prompt_sha256": hashlib.sha256(
+                adapters.WORKLOADS["repair"]["prompt"].encode("utf-8")
+            ).hexdigest(),
+            "input_digests": {
+                name: digest_file(adapters.HERE / name)
+                for name in adapters.REPAIR_INPUTS
+            },
+        })
+        argv = self.invocation_argv(subject, "repair")
+        outer["adapter"]["invocation"]["argv"] = argv
+        outer["adapter"]["capture"]["argv"] = argv
+        outer["adapter"]["outcome"] = task_outcome
+        outer["adapter"]["capture"]["stdout"] = self.stream(stdout_raw)
+        outer["adapter"]["capture"]["sidecar"] = self.stream(sidecar_raw)
+        outer["adapter"]["capture"]["sidecar"]["exists"] = subject in {
+            "hermes", "deepseek"
+        }
+        outer["adapter"]["lifecycle"] = lifecycle
+        outer["adapter"]["workspace"] = {"before": before, "after": after}
+        for label, process in (
+            ("initial_test", RepairOutcomeTests.process(1)),
+            ("final_test", RepairOutcomeTests.process(0)),
+        ):
+            outer["adapter"].setdefault("oracle_evidence", {})[label] = {
+                "argv": process.argv,
+                "limits": {"stdout_bytes": 1024, "stderr_bytes": 1024},
+                "stdout": self.stream(),
+                "stderr": self.stream(),
+                "returncode": process.returncode,
+                "termination_reason": process.termination_reason,
+                "timed_out": process.timed_out,
+                "overflow": {"stdout": False, "stderr": False},
+                "process_group": {
+                    "alive_before_cleanup": False,
+                    "alive_after_cleanup": False,
+                },
+                "forwarded_signals": [],
+            }
+        return subject_runner.experiment_document(
+            subject, "repair", None, outer["adapter"]
+        )
+
+    def compare_mutation(self, mutate, *, factory=None) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                outer = (
+                    factory(subject)
+                    if factory is not None
+                    else self.outer(subject, passed=True)
+                )
+                mutate(subject, outer)
+                path = Path(directory) / f"{subject}.json"
+                path.write_text(json.dumps(outer), encoding="utf-8")
+                paths.append(path)
+            return comparator.compare(paths)
+
+    def assert_error_contains(self, fragment: str, errors: list[str]) -> None:
+        self.assertTrue(
+            any(fragment in error for error in errors),
+            f"no error contains {fragment!r}: {errors}",
+        )
+
+    def assert_contract_rejected(
+        self, mutate, expected_error: str, *, factory=None
+    ) -> None:
+        try:
+            result = self.compare_mutation(mutate, factory=factory)
+        except (AttributeError, KeyError, TypeError) as error:
+            self.fail(f"comparator raised instead of failing closed: {error}")
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(expected_error, result["errors"])
+
+    @staticmethod
+    def set_adapter_failure(outer: dict, errors: list[str]) -> None:
+        outer["adapter"]["verdict"] = {"passed": False, "errors": errors}
+        outer["verdict"].update({
+            "passed": False,
+            "adapter_passed": False,
+            "status": 1,
+        })
 
     def test_contract_can_pass_when_one_subject_times_out(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1288,6 +2088,920 @@ class ContractComparisonTests(unittest.TestCase):
         self.assertTrue(result["contract_passed"])
         self.assertTrue(result["subjects"]["hermes"]["timed_out"])
         self.assertFalse(result["subjects"]["hermes"]["outcome_passed"])
+
+    def test_outer_subject_must_bind_the_inner_adapter_subject(self) -> None:
+        result = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["subject"].update(
+                {"name": "pi"}
+            ) if subject == "claude" else None
+        )
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "adapter subject disagrees with outer subject", result["errors"]
+        )
+
+    def test_outer_subject_rejects_malformed_and_unhashable_values(self) -> None:
+        for value in (None, 1, [], {}):
+            with self.subTest(value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer.update({"subject": value})
+                    if subject == "claude" else None,
+                    "outer has an invalid subject",
+                )
+
+    def test_inner_adapter_subject_must_be_present_and_known(self) -> None:
+        for value in (None, "unknown"):
+            with self.subTest(value=value):
+                def mutate(subject: str, outer: dict) -> None:
+                    if subject != "claude":
+                        return
+                    if value is None:
+                        outer["adapter"]["subject"].pop("name")
+                    else:
+                        outer["adapter"]["subject"]["name"] = value
+
+                result = self.compare_mutation(mutate)
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(
+                    "adapter has an invalid subject", result["errors"]
+                )
+
+    def test_inner_adapter_subject_rejects_malformed_shapes(self) -> None:
+        for value in (None, "claude", {"name": 1}):
+            with self.subTest(value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"].update(
+                        {"subject": value}
+                    ) if subject == "claude" else None,
+                    "claude adapter has an invalid subject",
+                )
+
+    def test_passing_adapter_verdict_cannot_carry_errors(self) -> None:
+        def mutate(subject: str, outer: dict) -> None:
+            if subject == "codex":
+                outer["adapter"]["verdict"]["errors"] = [
+                    "malformed guard receipt"
+                ]
+
+        result = self.compare_mutation(mutate)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "adapter verdict contradicts its errors", result["errors"]
+        )
+
+    def test_failing_adapter_verdict_requires_errors(self) -> None:
+        def mutate(subject: str, outer: dict) -> None:
+            if subject == "codex":
+                self.set_adapter_failure(outer, [])
+
+        result = self.compare_mutation(mutate)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "adapter verdict contradicts its errors", result["errors"]
+        )
+
+    def test_adapter_verdict_rejects_malformed_shapes(self) -> None:
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"].update({"verdict": None})
+            if subject == "codex" else None,
+            "codex adapter has an invalid verdict",
+        )
+
+        for value in (None, 1, "yes"):
+            with self.subTest(field="passed", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["verdict"].update(
+                        {"passed": value}
+                    ) if subject == "codex" else None,
+                    "codex adapter verdict has invalid passed",
+                )
+
+        for value in (None, "fault", [1]):
+            with self.subTest(field="errors", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["verdict"].update(
+                        {"errors": value}
+                    ) if subject == "codex" else None,
+                    "codex adapter verdict has invalid errors",
+                )
+
+    def test_outcome_rejects_malformed_shapes_and_states(self) -> None:
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"].update({"outcome": None})
+            if subject == "codex" else None,
+            "codex adapter has an invalid outcome",
+        )
+
+        mutations = (
+            ("errors", None, "outcome has invalid errors"),
+            ("evaluable", 1, "outcome has invalid evaluable"),
+            ("passed", 1, "outcome has invalid passed"),
+        )
+        for field, value, expected in mutations:
+            with self.subTest(field=field, value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["outcome"].update(
+                        {field: value}
+                    ) if subject == "codex" else None,
+                    expected,
+                )
+
+        def contradictory_non_evaluable(subject: str, outer: dict) -> None:
+            if subject == "codex":
+                outer["adapter"]["outcome"].update({
+                    "evaluable": False,
+                    "passed": False,
+                })
+                outer["verdict"].update({
+                    "evaluable": False,
+                    "outcome_passed": False,
+                    "passed": False,
+                    "status": 3,
+                })
+
+        self.assert_contract_rejected(
+            contradictory_non_evaluable,
+            "non-evaluable outcome must have passed null",
+        )
+
+    def test_capture_rejects_malformed_forwarded_signals(self) -> None:
+        for value in (None, "SIGINT", [True], ["2"]):
+            with self.subTest(value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["capture"].update(
+                        {"forwarded_signals": value}
+                    ) if subject == "codex" else None,
+                    "codex has invalid forwarded signals",
+                )
+
+    def test_nested_capture_and_lifecycle_values_fail_closed(self) -> None:
+        cases = (
+            (
+                "stream errors",
+                lambda outer: outer["adapter"]["capture"]["stdout"].update(
+                    {"errors": 1}
+                ),
+                "stdout has invalid errors",
+            ),
+            (
+                "termination reason",
+                lambda outer: outer["adapter"]["capture"].update(
+                    {"termination_reason": []}
+                ),
+                "invalid termination reason",
+            ),
+            (
+                "tool executions",
+                lambda outer: outer["adapter"]["lifecycle"].update(
+                    {"tool_executions": None}
+                ),
+                "invalid tool executions",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                self.assert_contract_rejected(
+                    lambda subject, outer: mutate(outer)
+                    if subject == "pi" else None,
+                    expected,
+                )
+
+    def test_capture_integer_fields_reject_boolean_stand_ins(self) -> None:
+        cases = (
+            (
+                "source bytes",
+                lambda outer: outer["adapter"]["capture"]["stdout"].update(
+                    {"source_bytes": False}
+                ),
+                "invalid source byte count",
+            ),
+            (
+                "limit",
+                lambda outer: outer["adapter"]["capture"]["limits"].update(
+                    {"stdout_bytes": True}
+                ),
+                "invalid capture limits",
+            ),
+            (
+                "return code",
+                lambda outer: outer["adapter"]["capture"].update(
+                    {"returncode": False}
+                ),
+                "invalid return code",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                self.assert_contract_rejected(
+                    lambda subject, outer: mutate(outer)
+                    if subject == "pi" else None,
+                    expected,
+                )
+
+    def test_evaluable_outcome_verdict_must_cohere_with_errors(self) -> None:
+        def passed_with_errors(subject: str, outer: dict) -> None:
+            if subject == "pi":
+                outer["adapter"]["outcome"]["errors"] = [
+                    "declared outcome failure"
+                ]
+
+        result = self.compare_mutation(passed_with_errors)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "outcome verdict contradicts its errors", result["errors"]
+        )
+
+    def test_workload_specific_outcome_profiles_fail_closed(self) -> None:
+        guard_cases = (
+            (
+                "variant",
+                lambda outcome: outcome.update({"variant": "allow"}),
+                "guard outcome variant disagrees with request",
+            ),
+            (
+                "loaded",
+                lambda outcome: outcome.update({"guard_loaded": False}),
+                "guard outcome guard_loaded disagrees with evaluable",
+            ),
+            (
+                "missing evaluable",
+                lambda outcome: outcome.pop("evaluable"),
+                "guard outcome has invalid evaluable",
+            ),
+        )
+        for name, mutate, expected in guard_cases:
+            with self.subTest(guard=name):
+                result = self.compare_mutation(
+                    lambda subject, outer: mutate(outer["adapter"]["outcome"])
+                    if subject == "claude" else None,
+                    factory=lambda subject: self.guard_outer(
+                        subject, evaluable=True
+                    ),
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+        repair_result = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["outcome"].update(
+                {"external_tests": []}
+            ) if subject == "claude" else None,
+            factory=self.repair_outer,
+        )
+        self.assertFalse(repair_result["contract_passed"])
+        self.assert_error_contains(
+            "repair outcome has invalid external_tests",
+            repair_result["errors"],
+        )
+
+    def test_workload_outcome_semantics_fail_closed(self) -> None:
+        write_cases = (
+            (
+                "missing passing effect",
+                lambda outcome: outcome.update({"effect_sha256": None}),
+                "passing write outcome has no effect digest",
+            ),
+            (
+                "mismatched passing effect",
+                lambda outcome: outcome.update({"effect_sha256": "0" * 64}),
+                "passing write outcome effect digest disagrees",
+            ),
+            (
+                "wrong declared effect",
+                lambda outcome: outcome.update({"declared_effect": "other.txt"}),
+                "write outcome has invalid declared_effect",
+            ),
+            (
+                "invalid expected digest",
+                lambda outcome: outcome.update({
+                    "effect_sha256": "not-a-digest",
+                    "expected_sha256": "not-a-digest",
+                }),
+                "write outcome has invalid expected_sha256",
+            ),
+        )
+        for name, mutate, expected in write_cases:
+            with self.subTest(write=name):
+                result = self.compare_mutation(
+                    lambda _subject, outer: mutate(
+                        outer["adapter"]["outcome"]
+                    )
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+        block_cases = (
+            (
+                "no denial",
+                lambda outcome: outcome.update({"denials": 0}),
+                "passing block outcome has no denial",
+            ),
+            (
+                "contradictory containment",
+                lambda outcome: outcome.update({"effect_present": True}),
+                "block outcome contained disagrees with effect_present",
+            ),
+            (
+                "unexpected files",
+                lambda outcome: outcome.update({
+                    "unexpected_files": ["scratch.txt"]
+                }),
+                "passing guard outcome has unexpected files",
+            ),
+        )
+        for name, mutate, expected in block_cases:
+            with self.subTest(block=name):
+                result = self.compare_mutation(
+                    lambda _subject, outer: mutate(
+                        outer["adapter"]["outcome"]
+                    ),
+                    factory=lambda subject: self.guard_outer(
+                        subject, evaluable=True
+                    ),
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+        def forged_allow(subject: str) -> dict:
+            outer = self.guard_outer(
+                subject, evaluable=True, variant="allow"
+            )
+            outer["adapter"]["outcome"].update({
+                "passed": True,
+                "errors": [],
+            })
+            outer["verdict"].update({
+                "passed": True,
+                "outcome_passed": True,
+            })
+            return outer
+
+        allow_result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=forged_allow,
+        )
+        self.assertFalse(allow_result["contract_passed"])
+        self.assert_error_contains(
+            "passing allow outcome did not land effect", allow_result["errors"]
+        )
+
+        repair_cases = (
+            (
+                "missing effect",
+                lambda outcome: outcome.update({"effect_sha256": None}),
+                "passing repair outcome has no effect digest",
+            ),
+            (
+                "indices outside lifecycle",
+                lambda outcome: outcome["subject_sequence"].update({
+                    "failed_command_index": 100,
+                    "mutation_index": 101,
+                    "passing_command_index": 102,
+                }),
+                "repair outcome sequence is outside lifecycle evidence",
+            ),
+        )
+        for name, mutate, expected in repair_cases:
+            with self.subTest(repair=name):
+                result = self.compare_mutation(
+                    lambda _subject, outer: mutate(
+                        outer["adapter"]["outcome"]
+                    ),
+                    factory=self.repair_outer,
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+    def test_passing_adapter_cannot_contradict_capture_faults(self) -> None:
+        cases = (
+            (
+                "nonzero exit",
+                lambda capture: capture.update({"returncode": 1}),
+                "adapter verdict passed despite capture fault",
+            ),
+            (
+                "timeout",
+                lambda capture: capture.update({
+                    "returncode": 124,
+                    "termination_reason": "timeout",
+                    "timed_out": True,
+                }),
+                "adapter verdict passed despite capture fault",
+            ),
+            (
+                "orphaned overflow",
+                lambda capture: capture["overflow"].update({"stdout": True}),
+                "stdout overflow disagrees with termination reason",
+            ),
+            (
+                "bounded overflow",
+                lambda capture: (
+                    capture["overflow"].update({"stdout": True}),
+                    capture["stdout"].update({"source_bytes": 2048}),
+                    capture.update({
+                        "returncode": -15,
+                        "termination_reason": "stdout_limit",
+                    }),
+                ),
+                "adapter verdict passed despite capture fault",
+            ),
+            (
+                "process leak",
+                lambda capture: capture["process_group"].update({
+                    "alive_after_cleanup": True
+                }),
+                "adapter verdict passed despite capture fault",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                result = self.compare_mutation(
+                    lambda subject, outer: mutate(outer["adapter"]["capture"])
+                    if subject == "codex" else None
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+        apparatus_result = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["apparatus"][
+                "baseline"
+            ].update({
+                "agrees": False,
+                "changed_modules": ["capture"],
+            }) if subject == "codex" else None
+        )
+        self.assertFalse(apparatus_result["contract_passed"])
+        self.assert_error_contains(
+            "adapter verdict passed despite apparatus drift",
+            apparatus_result["errors"],
+        )
+
+    def test_hidden_capture_faults_fail_closed(self) -> None:
+        def excess_source(subject: str, outer: dict) -> None:
+            if subject == "codex":
+                outer["adapter"]["capture"]["stdout"]["source_bytes"] = 2048
+
+        result = self.compare_mutation(excess_source)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "stdout overflow disagrees with source bytes", result["errors"]
+        )
+
+        def absent_sidecar_with_bytes(subject: str, outer: dict) -> None:
+            if subject != "codex":
+                return
+            sidecar = outer["adapter"]["capture"]["sidecar"]
+            sidecar.update({
+                "exists": False,
+                "base64": "eA==",
+                "bytes": 1,
+                "source_bytes": 1,
+                "sha256": hashlib.sha256(b"x").hexdigest(),
+            })
+
+        result = self.compare_mutation(absent_sidecar_with_bytes)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "absent sidecar carries captured bytes", result["errors"]
+        )
+
+        def signal_zero(subject: str, outer: dict) -> None:
+            if subject != "codex":
+                return
+            outer["adapter"]["capture"]["forwarded_signals"] = [0]
+            outer["verdict"].update({"interrupted": True, "status": 3})
+
+        result = self.compare_mutation(signal_zero)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "invalid forwarded signals", result["errors"]
+        )
+
+        def failed_without_errors(subject: str, outer: dict) -> None:
+            if subject == "pi":
+                outer["adapter"]["outcome"].update({
+                    "passed": False,
+                    "errors": [],
+                })
+                outer["verdict"].update({
+                    "passed": False,
+                    "outcome_passed": False,
+                })
+
+        result = self.compare_mutation(failed_without_errors)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "outcome verdict contradicts its errors", result["errors"]
+        )
+
+    def test_honest_negative_adapter_verdict_is_structurally_valid(self) -> None:
+        def mutate(subject: str, outer: dict) -> None:
+            if subject == "codex":
+                self.set_adapter_failure(outer, ["measurement fault"])
+
+        result = self.compare_mutation(mutate)
+        self.assertTrue(result["contract_passed"], result["errors"])
+        self.assertEqual(0, result["subjects"]["codex"]["adapter_passed"])
+
+    def test_refusal_status_is_valid_when_bound_to_inner_evidence(self) -> None:
+        # All five records describe one real comparison: the same guard arm,
+        # prompt, inputs, and outcome oracle. Only Claude lacks its startup
+        # receipt, which is an honest negative/refusal rather than a reason to
+        # pretend the other four ran a different workload.
+        non_evaluable_result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=lambda subject: self.guard_outer(
+                subject, evaluable=subject != "claude"
+            ),
+        )
+        self.assertTrue(
+            non_evaluable_result["contract_passed"],
+            non_evaluable_result["errors"],
+        )
+
+        def interrupted(subject: str, outer: dict) -> None:
+            if subject == "claude":
+                outer["adapter"]["capture"]["forwarded_signals"] = [2]
+                outer["verdict"].update({"interrupted": True, "status": 3})
+
+        interrupted_result = self.compare_mutation(interrupted)
+        self.assertTrue(
+            interrupted_result["contract_passed"], interrupted_result["errors"]
+        )
+
+    def test_real_repair_outcomes_are_comparable_without_a_golden_digest(self) -> None:
+        result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=self.repair_outer,
+        )
+        self.assertTrue(result["contract_passed"], result["errors"])
+
+    def test_readable_empty_guard_receipt_preserves_unknown(self) -> None:
+        result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=lambda subject: self.guard_outer(
+                subject,
+                evaluable=subject != "claude",
+                adapter_passed=True,
+            ),
+        )
+        self.assertTrue(result["contract_passed"], result["errors"])
+
+    def test_guard_outcome_is_bound_to_retained_receipt_evidence(self) -> None:
+        missing = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"].pop("oracle_evidence"),
+            factory=lambda subject: self.guard_outer(subject, evaluable=True),
+        )
+        self.assertFalse(missing["contract_passed"])
+        self.assert_error_contains(
+            "guard has invalid oracle evidence", missing["errors"]
+        )
+
+        contradicted = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["outcome"].update({
+                "calls_seen": 0,
+            }) if subject == "codex" else None,
+            factory=lambda subject: self.guard_outer(subject, evaluable=True),
+        )
+        self.assertFalse(contradicted["contract_passed"])
+        self.assert_error_contains(
+            "guard outcome calls_seen disagrees with receipt",
+            contradicted["errors"],
+        )
+
+    def test_lifecycle_claims_are_bound_to_subject_raw_evidence(self) -> None:
+        result = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"].update({
+                "lifecycle": {
+                    "acquisition": "fabricated-acquisition",
+                    "completeness": "fabricated-completeness",
+                    "event_types": [],
+                    "tool_executions": [{"anything": ["goes"]}],
+                    "terminal": {},
+                }
+            })
+        )
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains("lifecycle has invalid acquisition", result["errors"])
+        self.assertIsNone(
+            self.guard_outer(
+                "claude", evaluable=False, adapter_passed=True
+            )["verdict"]["passed"]
+        )
+
+    def test_outer_workload_and_variant_must_bind_the_adapter_request(self) -> None:
+        for field, value in (("workload", "repair"), ("variant", "block")):
+            with self.subTest(field=field):
+                result = self.compare_mutation(
+                    lambda subject, outer: outer.update({field: value})
+                    if subject == "pi" else None
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(
+                    f"outer {field} disagrees with adapter request",
+                    result["errors"],
+                )
+
+    def test_contract_requires_one_workload_and_variant_across_subjects(self) -> None:
+        def different_workload(subject: str, outer: dict) -> None:
+            if subject == "pi":
+                repair = self.repair_outer(subject)
+                outer.clear()
+                outer.update(repair)
+
+        workload_result = self.compare_mutation(different_workload)
+        self.assertFalse(workload_result["contract_passed"])
+        self.assert_error_contains(
+            "subjects did not run the same workload", workload_result["errors"]
+        )
+
+        def different_variant(subject: str, outer: dict) -> None:
+            if subject == "pi":
+                allow = self.guard_outer(
+                    subject, evaluable=True, variant="allow"
+                )
+                outer.clear()
+                outer.update(allow)
+
+        variant_result = self.compare_mutation(
+            different_variant,
+            factory=lambda subject: self.guard_outer(subject, evaluable=True),
+        )
+        self.assertFalse(variant_result["contract_passed"])
+        self.assert_error_contains(
+            "subjects did not run the same workload variant",
+            variant_result["errors"],
+        )
+
+    def test_adapter_request_rejects_malformed_shapes(self) -> None:
+        mutations = (
+            ("workload", 1, "adapter request has invalid workload"),
+            ("variant", [], "adapter request has invalid variant"),
+            ("prompt_sha256", None, "adapter request has invalid prompt_sha256"),
+            ("input_digests", [], "adapter request has invalid input_digests"),
+        )
+        for field, value, expected in mutations:
+            with self.subTest(field=field):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["request"].update(
+                        {field: value}
+                    ) if subject == "pi" else None,
+                    expected,
+                )
+
+    def test_required_request_execution_and_workspace_facts_cannot_be_fabricated(
+        self,
+    ) -> None:
+        def fabricate_credential_route(adapter: dict) -> None:
+            current = adapter["invocation"]["credential_source"]
+            if current == "none_loopback_model":
+                credential = "experiment_scoped_gateway_key"
+                network = "remote gateway https://fabricated.invalid/v1"
+            else:
+                credential = "none_loopback_model"
+                network = "loopback Ollama only"
+            adapter["invocation"]["credential_source"] = credential
+            adapter["isolation"]["network"] = network
+
+        cases = (
+            (
+                "prompt",
+                lambda adapter: adapter["request"].update({
+                    "prompt_sha256": "0" * 64,
+                }),
+                "prompt digest disagrees with workload profile",
+            ),
+            (
+                "inputs",
+                lambda adapter: adapter["request"].update({"input_digests": {}}),
+                "input universe disagrees with workload profile",
+            ),
+            (
+                "invocation",
+                lambda adapter: adapter.update({"invocation": {}}),
+                "adapter has invalid invocation",
+            ),
+            (
+                "fabricated invocation",
+                lambda adapter: (
+                    adapter["invocation"].update({
+                        "argv": ["fabricated-executable", "--pretend"]
+                    }),
+                    adapter["capture"].update({
+                        "argv": ["fabricated-executable", "--pretend"]
+                    }),
+                ),
+                "adapter has invalid invocation",
+            ),
+            (
+                "fabricated model identity",
+                lambda adapter: adapter["subject"].update({
+                    "model": "fabricated-model"
+                }),
+                "adapter identity disagrees with declarations",
+            ),
+            (
+                "fabricated executable path",
+                lambda adapter: (
+                    adapter["invocation"]["argv"].__setitem__(
+                        0, "/fabricated/bin/pi"
+                    ),
+                    adapter["capture"]["argv"].__setitem__(
+                        0, "/fabricated/bin/pi"
+                    ),
+                ),
+                "adapter has invalid invocation",
+            ),
+            (
+                "isolation",
+                lambda adapter: adapter.update({"isolation": {}}),
+                "adapter has invalid isolation",
+            ),
+            (
+                "fabricated isolation",
+                lambda adapter: adapter["isolation"].update({
+                    "ambient_config": "fabricated isolation claim"
+                }),
+                "adapter has invalid isolation",
+            ),
+            (
+                "fabricated credential route",
+                fabricate_credential_route,
+                "adapter has invalid invocation",
+            ),
+            (
+                "workspace",
+                lambda adapter: adapter.update({"workspace": {}}),
+                "adapter has invalid workspace",
+            ),
+        )
+        for name, mutation, expected in cases:
+            with self.subTest(name=name):
+                self.assert_contract_rejected(
+                    lambda subject, outer: mutation(outer["adapter"])
+                    if subject == "pi" else None,
+                    expected,
+                )
+
+    def test_passing_workspace_cannot_hide_undeclared_or_changed_files(self) -> None:
+        extra = {
+            "path": "undeclared.txt",
+            "size": 1,
+            "mode": 0o644,
+            "sha256": hashlib.sha256(b"x").hexdigest(),
+        }
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"]["workspace"]["after"].append(
+                extra
+            ) if subject == "pi" else None,
+            "write outcome disagrees with exact workspace",
+        )
+
+        def change_fixture(subject: str, outer: dict) -> None:
+            if subject != "pi":
+                return
+            task = next(
+                entry for entry in outer["adapter"]["workspace"]["after"]
+                if entry["path"] == "task.md"
+            )
+            task.update({
+                "size": 1,
+                "sha256": hashlib.sha256(b"x").hexdigest(),
+            })
+
+        self.assert_contract_rejected(
+            change_fixture,
+            "workspace fixture entries changed",
+        )
+
+    def test_repair_oracle_process_evidence_is_complete_and_bound(self) -> None:
+        cases = (
+            (
+                "timeout",
+                lambda process: process.update({
+                    "returncode": -15,
+                    "termination_reason": "timeout",
+                    "timed_out": True,
+                }),
+                "passed despite repair oracle process fault",
+            ),
+            (
+                "overflow",
+                lambda process: (
+                    process["stdout"].update({"source_bytes": 1025}),
+                    process["overflow"].update({"stdout": True}),
+                    process.update({"termination_reason": "stdout_limit"}),
+                ),
+                "passed despite repair oracle process fault",
+            ),
+            (
+                "returncode binding",
+                lambda process: process.update({"returncode": 2}),
+                "repair outcome initial return code disagrees with oracle evidence",
+            ),
+        )
+        for name, mutation, expected in cases:
+            with self.subTest(name=name):
+                self.assert_contract_rejected(
+                    lambda subject, outer: mutation(
+                        outer["adapter"]["oracle_evidence"]["initial_test"]
+                    ) if subject == "pi" else None,
+                    expected,
+                    factory=self.repair_outer,
+                )
+
+    def test_honest_repair_oracle_fault_is_a_valid_negative_measurement(self) -> None:
+        def fault(subject: str, outer: dict) -> None:
+            if subject != "pi":
+                return
+            process = outer["adapter"]["oracle_evidence"]["initial_test"]
+            process.update({"termination_reason": "timeout", "timed_out": True})
+            outer["adapter"]["outcome"].update({
+                "passed": False,
+                "errors": ["external initial test was not red"],
+            })
+            outer["adapter"]["verdict"] = {
+                "passed": False,
+                "errors": ["initial test bound fired: timeout"],
+            }
+            replacement = subject_runner.experiment_document(
+                subject, "repair", None, outer["adapter"]
+            )
+            outer.clear()
+            outer.update(replacement)
+
+        result = self.compare_mutation(fault, factory=self.repair_outer)
+        self.assertTrue(result["contract_passed"], result["errors"])
+        self.assertEqual(0, result["subjects"]["pi"]["adapter_passed"])
+        self.assertEqual(1, result["subjects"]["pi"]["timed_out"])
+
+    def test_outer_verdict_rejects_malformed_shapes_and_types(self) -> None:
+        self.assert_contract_rejected(
+            lambda subject, outer: outer.update({"verdict": None})
+            if subject == "hermes" else None,
+            "hermes has an invalid outer verdict",
+        )
+
+        for field in (
+            "passed",
+            "adapter_passed",
+            "outcome_passed",
+            "evaluable",
+            "interrupted",
+            "status",
+        ):
+            with self.subTest(missing=field):
+                def remove(subject: str, outer: dict) -> None:
+                    if subject == "hermes":
+                        outer["verdict"].pop(field)
+
+                self.assert_contract_rejected(
+                    remove, f"outer verdict is missing {field}"
+                )
+
+        boolean_fields = (
+            "passed",
+            "adapter_passed",
+            "outcome_passed",
+            "evaluable",
+            "interrupted",
+        )
+        for field in boolean_fields:
+            with self.subTest(numeric_boolean=field):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["verdict"].update({field: 1})
+                    if subject == "hermes" else None,
+                    f"outer verdict has invalid {field}",
+                )
+
+        for value in (False, 3.0, "3"):
+            with self.subTest(status=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["verdict"].update(
+                        {"status": value}
+                    ) if subject == "hermes" else None,
+                    "outer verdict has invalid status",
+                )
+
+    def test_outer_summary_must_match_the_inner_verdicts_and_status(self) -> None:
+        contradictions = {
+            "adapter_passed": False,
+            "outcome_passed": False,
+            "passed": False,
+            "evaluable": False,
+            "interrupted": True,
+            "status": 1,
+        }
+        for field, value in contradictions.items():
+            with self.subTest(field=field):
+                result = self.compare_mutation(
+                    lambda subject, outer: outer["verdict"].update({field: value})
+                    if subject == "hermes" else None
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(
+                    f"outer verdict {field} disagrees",
+                    result["errors"],
+                )
 
     def test_refused_sidecar_is_reported_as_a_refusal_not_as_corruption(
         self,
@@ -1316,6 +3030,7 @@ class ContractComparisonTests(unittest.TestCase):
                 "returncode": 0,
                 "termination_reason": None,
                 "timed_out": False,
+                "forwarded_signals": [],
             },
             errors,
         )
@@ -1348,6 +3063,7 @@ class ContractComparisonTests(unittest.TestCase):
                 "returncode": 0,
                 "termination_reason": None,
                 "timed_out": False,
+                "forwarded_signals": [],
             },
             errors,
         )
@@ -1366,15 +3082,92 @@ class ContractComparisonTests(unittest.TestCase):
                 outer = self.outer(subject, passed=True)
                 if subject == "deepseek":
                     outer["adapter"]["apparatus"]["modules"]["canon"] = {
-                        "file": "canon.py", "sha256": "other",
+                        "file": "canon.py", "sha256": "f" * 64,
                     }
                 path = Path(directory) / f"{subject}.json"
                 path.write_text(json.dumps(outer), encoding="utf-8")
                 paths.append(path)
             result = comparator.compare(paths)
         self.assertFalse(result["contract_passed"])
-        self.assertIn(
-            "subjects were not captured by the same apparatus", result["errors"]
+        self.assert_error_contains(
+            "adapter apparatus modules disagrees with comparator", result["errors"]
+        )
+
+    def test_malformed_apparatus_and_capabilities_fail_closed(self) -> None:
+        capabilities_result = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["capabilities"].update({
+                "native_event_stream": [True]
+            }) if subject == "pi" else None
+        )
+        self.assertFalse(capabilities_result["contract_passed"])
+        self.assert_error_contains(
+            "pi adapter has invalid capabilities",
+            capabilities_result["errors"],
+        )
+
+        apparatus_result = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"].update({
+                "apparatus": {"baseline": []}
+            })
+        )
+        self.assertFalse(apparatus_result["contract_passed"])
+        self.assert_error_contains(
+            "adapter has invalid apparatus", apparatus_result["errors"]
+        )
+
+    def test_impossible_apparatus_and_capabilities_fail_closed(self) -> None:
+        apparatus_cases = (
+            (
+                "empty version",
+                lambda apparatus: apparatus.update({"version": ""}),
+                "invalid apparatus version",
+            ),
+            (
+                "empty module file",
+                lambda apparatus: apparatus["modules"]["capture"].update({
+                    "file": ""
+                }),
+                "invalid apparatus module capture",
+            ),
+            (
+                "invalid module digest",
+                lambda apparatus: apparatus["modules"]["capture"].update({
+                    "sha256": "not-a-digest"
+                }),
+                "invalid apparatus module capture",
+            ),
+            (
+                "contradictory agreement",
+                lambda apparatus: apparatus["baseline"].update({
+                    "agrees": True,
+                    "changed_modules": ["capture"],
+                }),
+                "apparatus baseline agreement contradicts changed modules",
+            ),
+        )
+        for name, mutate, expected in apparatus_cases:
+            with self.subTest(apparatus=name):
+                result = self.compare_mutation(
+                    lambda _subject, outer: mutate(
+                        outer["adapter"]["apparatus"]
+                    )
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
+        def impossible_capabilities(_subject: str, outer: dict) -> None:
+            outer["adapter"]["capabilities"].update({
+                "native_event_stream": True,
+                "hook_event_stream": True,
+                "native_persisted_event_log": True,
+                "native_terminal_event": True,
+                "model_identity": "",
+            })
+
+        result = self.compare_mutation(impossible_capabilities)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "adapter capabilities disagree with subject", result["errors"]
         )
 
     def sampled_run_dir(self, root: Path, subject: str, draws: list[dict]) -> Path:
@@ -1391,7 +3184,30 @@ class ContractComparisonTests(unittest.TestCase):
         }
         (path / "record.json").write_text(
             json.dumps({
+                "schema": "hwbrun/v0.1",
+                "run_id": subject,
+                "run_class": "single",
+                "spec_digest": "sha256:" + "0" * 64,
+                "seam_contract": ">=0.2.0,<0.3.0",
+                "started_at": "2026-08-20T00:00:00Z",
+                "ended_at": "2026-08-20T00:00:00Z",
+                "status": "completed",
+                "features": [
+                    {
+                        "name": name,
+                        "version": "0.0.0-test",
+                        "digest": "sha256:" + f"{index + 1:064x}",
+                        "power": "observe",
+                        "seams": [],
+                        "status": "ok",
+                        "failed_at_step": None,
+                        "order": index,
+                    }
+                    for index, name in enumerate(("freeze", "receipt"))
+                ],
+                "gates": [],
                 "steps": [{"id": "s"}],
+                "attempt_artifact_contract": "attempt-artifacts/0.1",
                 "extras": {
                     "freeze": {"digests": bound, "drifted": False},
                     "receipt": {"bound": {"inputs": bound}},
@@ -1399,12 +3215,33 @@ class ContractComparisonTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
+        seals = []
         for index, outer in enumerate(draws):
             attempt = path / "steps" / "s" / "attempts" / str(index)
             attempt.mkdir()
-            (attempt / "stdout.bin").write_text(
-                json.dumps(outer), encoding="utf-8"
-            )
+            stdout = json.dumps(outer).encode("utf-8")
+            stderr = b""
+            (attempt / "stdout.bin").write_bytes(stdout)
+            (attempt / "stderr.bin").write_bytes(stderr)
+            seals.append({
+                "stdout_bytes": len(stdout),
+                "stdout_digest": "sha256:" + hashlib.sha256(stdout).hexdigest(),
+                "stderr_bytes": len(stderr),
+                "stderr_digest": "sha256:" + hashlib.sha256(stderr).hexdigest(),
+            })
+        (path / "attempts.jsonl").write_text(
+            "".join(
+                json.dumps({
+                    "step_id": "s",
+                    "n": index,
+                    "started": "2026-08-20T00:00:00Z",
+                    "duration_ms": 0,
+                    **seals[index],
+                }) + "\n"
+                for index in range(len(draws))
+            ),
+            encoding="utf-8",
+        )
         return path
 
     def test_every_draw_of_a_sampled_subject_is_read(self) -> None:
@@ -1423,7 +3260,101 @@ class ContractComparisonTests(unittest.TestCase):
             result = comparator.compare(paths)
         self.assertFalse(result["contract_passed"])
         self.assertIn("codex draw 1 stdout digest disagrees", result["errors"])
-        self.assertEqual(result["subjects"]["codex"]["draws"], 2)
+        # Only normalized draws may reach the summary. The diagnostic proves
+        # the second draw was read; excluding it proves malformed evidence was
+        # not subsequently treated as a measurement.
+        self.assertEqual(result["subjects"]["codex"]["draws"], 1)
+
+    def test_sampled_evidence_shape_must_not_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                good = self.outer(subject, passed=True)
+                draws = [good, json.loads(json.dumps(good))]
+                if subject == "pi":
+                    draws[1]["adapter"]["lifecycle"]["acquisition"] = (
+                        "hook_jsonl"
+                    )
+                paths.append(self.sampled_run_dir(root, subject, draws))
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "pi draw 1 lifecycle has invalid acquisition", result["errors"]
+        )
+
+    def test_noncanonical_attempt_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                outer = self.outer(subject, passed=True)
+                path = self.sampled_run_dir(root, subject, [outer])
+                if subject == "codex":
+                    alias = path / "steps" / "s" / "attempts" / "00"
+                    alias.mkdir()
+                    forged = json.loads(json.dumps(outer))
+                    forged["adapter"]["capture"]["stdout"]["sha256"] = "forged"
+                    (alias / "stdout.bin").write_text(
+                        json.dumps(forged), encoding="utf-8"
+                    )
+                paths.append(path)
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "noncanonical attempt directory", result["errors"]
+        )
+
+    def test_sampled_attempt_store_requires_contiguous_matching_entries(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                outer = self.outer(subject, passed=True)
+                path = self.sampled_run_dir(root, subject, [outer, outer])
+                if subject == "codex":
+                    attempts = path / "steps" / "s" / "attempts"
+                    (attempts / "1").rename(attempts / "2")
+                paths.append(path)
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "attempt directories disagree with attempts.jsonl", result["errors"]
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                outer = self.outer(subject, passed=True)
+                path = self.sampled_run_dir(root, subject, [outer])
+                if subject == "codex":
+                    alias = path / "steps" / "s" / "attempts" / "00"
+                    alias.write_text("not a directory", encoding="utf-8")
+                paths.append(path)
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "invalid attempt entry", result["errors"]
+        )
+
+    def test_sampled_attempt_store_binds_both_artifacts_to_their_seals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for subject in sorted(comparator.SUBJECTS):
+                path = self.sampled_run_dir(
+                    root, subject, [self.outer(subject, passed=True)]
+                )
+                if subject == "codex":
+                    artifact = path / "steps" / "s" / "attempts" / "0" / "stderr.bin"
+                    artifact.write_bytes(b"forged")
+                paths.append(path)
+            result = comparator.compare(paths)
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains("stderr seal disagrees", result["errors"])
 
     def test_draw_counts_are_reported_rather_than_reduced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

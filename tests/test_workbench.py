@@ -4171,22 +4171,18 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
             self.assertIn("`%s`" % name, text,
                           "README does not list the shipped feature %s" % name)
 
-    def test_the_readme_does_not_overclaim_the_test_count(self):
-        # Asserted as a CEILING, not equality: under-claiming is harmless and
-        # equality would fail on every test added, which trains people to
-        # ignore the failure. Overclaiming is the thing that is a lie.
+    def test_the_readme_does_not_publish_a_moving_test_count(self):
+        # A ceiling still goes stale in the reader's direction: 61 remains
+        # technically true after the suite reaches 153, but it describes the
+        # command less accurately every time a regression is added. The exact
+        # count belongs in a freeze-commit conformance record, not evergreen UX.
         import re
-        m = re.search(r"(\d+) tests", doc("README.md"))
-        self.assertIsNotNone(m, "README no longer states a test count")
-        claimed = int(m.group(1))
-        # Count the suite, not this file.  The deterministic property corpus
-        # deliberately lives in its own module so generated contracts do not
-        # make this already-large behavioural suite harder to navigate.
-        actual = unittest.defaultTestLoader.discover(
-            os.path.join(ROOT, "tests")).countTestCases()
-        self.assertLessEqual(claimed, actual,
-                             "README claims %d tests, there are %d"
-                             % (claimed, actual))
+        text = doc("README.md")
+        self.assertIsNone(
+            re.search(r"\b\d+ tests\b", text),
+            "README carries a moving test count",
+        )
+        self.assertIn("# offline; no subject installed", text)
 
     def test_every_spec_field_the_loader_reads_is_documented(self):
         """The reference must cover the whole surface, not the popular part.

@@ -20,6 +20,7 @@ from harness_workbench.capture import (
     DEFAULT_SIDECAR_LIMIT,
     DEFAULT_STDERR_LIMIT,
     DEFAULT_STDOUT_LIMIT,
+    _bounded_evidence,
     capture_bytes,
     capture_file,
     credential_values,
@@ -32,6 +33,16 @@ from harness_workbench.capture import (
 )
 
 from oracles import guard_outcome, outcome, repair_outcome
+from workloads import (
+    AMBIENT_CONFIG,
+    GUARD_INPUTS,
+    GUARD_VARIANTS,
+    REPAIR_INPUTS,
+    REPAIR_PROMPT,
+    WORKLOADS,
+    WRITE_INPUTS,
+    WRITE_PROMPT,
+)
 
 
 HERE = Path(__file__).resolve().parent
@@ -49,66 +60,6 @@ def parse_jsonl_objects(raw: bytes) -> tuple[list[dict[str, Any]], list[str]]:
     return parse_jsonl(raw, objects_only=True)
 
 
-WRITE_PROMPT = (
-    "Create shared.txt in the current workspace. Its complete contents must be "
-    "exactly the 22 ASCII bytes represented by the JSON string "
-    '"cross-harness control\\n": 21 visible characters followed by one LF byte. '
-    "The backslash-n denotes that single LF byte, not two literal characters. "
-    "Use an available file tool, verify the total is 22 bytes, then reply done."
-)
-REPAIR_PROMPT = (
-    "Open repair_task.md in the current workspace and follow every numbered "
-    "requirement. Work only inside the current workspace. You must run the "
-    "specified test command once before editing; its initial failure is expected, "
-    "so proceed directly to editing slugger.py rather than retrying it unchanged. "
-    "Run the same command after the edit and finish with done."
-)
-WRITE_INPUTS = (
-    "run_subject.sh",
-    "runner.py",
-    "adapters.py",
-    "oracles.py",
-    "pin.json",
-    "model_selection.json",
-    "task.md",
-    "hook.py",
-    "hermes_config.yaml",
-    "dsh_patch.yml",
-)
-REPAIR_INPUTS = (
-    "run_subject.sh",
-    "runner.py",
-    "adapters.py",
-    "oracles.py",
-    "pin.json",
-    "model_selection.json",
-    "repair_task.md",
-    "repair_fixture/slugger.py",
-    "repair_fixture/test_slugger.py",
-    "hook.py",
-    "hermes_config.yaml",
-    "dsh_patch.yml",
-)
-GUARD_INPUTS = WRITE_INPUTS + (
-    # One interceptor per interception style: an extension for Pi, a cordis
-    # plugin for DeepSeek, and one external command shared by the three
-    # subjects that shell out. All three are digested for every guard arm, not
-    # only the arm that loads them, so a change to any of them invalidates the
-    # whole matrix rather than half of it -- the arms are only comparable to
-    # each other if they were cut against the same instruments.
-    "guard_extension.ts",
-    "guard_hook.py",
-    "guard_plugin.mjs",
-)
-WORKLOADS = {
-    "write": {"prompt": WRITE_PROMPT, "inputs": WRITE_INPUTS},
-    "repair": {"prompt": REPAIR_PROMPT, "inputs": REPAIR_INPUTS},
-    # Same prompt and same fixture as `write`, deliberately. The guard arms
-    # must differ from each other in the VARIANT and in nothing else, or a
-    # containment difference could be a prompt difference wearing a costume.
-    "guard": {"prompt": WRITE_PROMPT, "inputs": GUARD_INPUTS},
-}
-GUARD_VARIANTS = ("allow", "block")
 # Compatibility aliases used by the first experiment's tests and notes.
 PROMPT = WRITE_PROMPT
 INPUTS = WRITE_INPUTS
@@ -116,6 +67,27 @@ INPUTS = WRITE_INPUTS
 
 class AdapterError(RuntimeError):
     pass
+
+
+def _bounded_measurement_errors(
+    result: Any,
+    *,
+    label: str,
+    require_zero_exit: bool,
+) -> list[str]:
+    """Classify process measurement faults without judging task semantics."""
+    errors: list[str] = []
+    if result.stdout_overflow:
+        errors.append(f"{label} stdout capture limit exceeded")
+    if result.stderr_overflow:
+        errors.append(f"{label} stderr capture limit exceeded")
+    if result.termination_reason is not None:
+        errors.append(f"{label} bound fired: {result.termination_reason}")
+    if require_zero_exit and result.returncode != 0:
+        errors.append(f"{label} exited with status {result.returncode}")
+    if result.group_alive_after_cleanup:
+        errors.append(f"{label} left a live process group after cleanup")
+    return errors
 
 
 # Subjects whose model is chosen by model_selection.json rather than by the
@@ -180,11 +152,11 @@ def _normalized_argv(argv: list[str], root: Path, workspace: Path) -> list[str]:
         (str(root), "<run-root>"),
     )
     normalized = []
-    for argument in argv:
+    for index, argument in enumerate(argv):
         value = argument
         for raw, replacement in replacements:
             value = value.replace(raw, replacement)
-        normalized.append(value)
+        normalized.append(Path(value).name if index == 0 else value)
     return normalized
 
 
@@ -396,49 +368,10 @@ HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
 # are the control) and claimed `--ignore-user-config` for a run that cannot use
 # it (the guard IS config.toml). A provenance block that describes an apparatus
 # the run did not have is worse than one that says nothing, because the whole
-# point of keeping adapter verdict and outcome verdict apart is that somebody
-# later can ask "was this measured validly" and get an answer that is true.
-_AMBIENT_CONFIG = {
-    "claude": {
-        None: "safe-mode plus empty setting sources",
-        "guard": "empty setting sources plus one declared settings file; NO "
-                 "safe-mode (it disables the hooks under test); CLAUDE.md, "
-                 "bundled skills, workflows, org and auto memory disabled by "
-                 "environment; permission mode bypassPermissions so the hook "
-                 "is the only control in the run",
-    },
-    "codex": {
-        None: "ignored user config and rules; ephemeral session",
-        "guard": "per-run CODEX_HOME containing only the copied credential and "
-                 "the guard's config.toml; NO --ignore-user-config (the guard "
-                 "IS config.toml); ignored rules; ephemeral session; hook "
-                 "trust bypassed",
-    },
-    "hermes": {
-        None: "temporary HERMES_HOME plus ignored rules",
-        "guard": "temporary HERMES_HOME plus ignored rules; rendered config "
-                 "carries the guard's pre_tool_call and on_session_start "
-                 "entries beside the recording observers",
-    },
-    "deepseek": {
-        None: "temporary DSH_HOME plus experiment patch",
-        "guard": "temporary DSH_HOME plus experiment patch carrying the guard "
-                 "plugin row, verified present in the composed profile",
-    },
-    "pi": {
-        None: "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
-              "resources, sessions, skills, or context files",
-        "guard": "temporary HOME and PI_CODING_AGENT_DIR; no ambient "
-                 "resources, sessions, skills, or context files; "
-                 "--no-extensions followed by the one declared guard extension",
-    },
-}
-
-
 def _ambient_config(subject: str, workload: str) -> str:
     """What this run actually kept out, for this subject and this workload."""
-    per_subject = _AMBIENT_CONFIG[subject]
-    return per_subject.get(workload) or per_subject[None]
+    per_subject = AMBIENT_CONFIG[subject]
+    return per_subject["guard" if workload == "guard" else "default"]
 
 
 def _install_guard_hook(root: Path) -> Path:
@@ -1541,6 +1474,7 @@ def _apparatus() -> dict[str, Any]:
         "canon": Path(canon_module.__file__).resolve(),
     }
     live = {
+        "schema": "hwb-subject-apparatus/v0.1",
         "package": "harness_workbench",
         "version": harness_workbench.__version__,
         "modules": {
@@ -1561,22 +1495,74 @@ def _apparatus() -> dict[str, Any]:
                             "note": "tree was not materialized; no baseline"}
         return live
     try:
-        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        baseline_text = baseline_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        live["baseline"] = {
+            "present": True,
+            "agrees": False,
+            "note": f"baseline is not readable UTF-8: {error}",
+        }
+        return live
+    try:
+        baseline = json.loads(baseline_text)
     except json.JSONDecodeError as error:
         live["baseline"] = {"present": True, "agrees": False,
                             "note": f"baseline is not JSON: {error.msg}"}
         return live
+
+    expected_keys = {"schema", "package", "version", "modules"}
+    invalid_reason = None
+    if not isinstance(baseline, dict) or set(baseline) != expected_keys:
+        invalid_reason = "baseline has an invalid top-level shape"
+    elif baseline.get("schema") != live["schema"]:
+        invalid_reason = "baseline has an invalid schema"
+    elif baseline.get("package") != live["package"]:
+        invalid_reason = "baseline has an invalid package"
+    elif type(baseline.get("version")) is not str or not baseline["version"]:
+        invalid_reason = "baseline has an invalid version"
+    else:
+        baseline_modules = baseline.get("modules")
+        if not isinstance(baseline_modules, dict) or set(baseline_modules) != set(
+            live["modules"]
+        ):
+            invalid_reason = "baseline has an invalid module set"
+        else:
+            for name, module in baseline_modules.items():
+                live_module = live["modules"][name]
+                if (
+                    not isinstance(module, dict)
+                    or set(module) != {"file", "sha256"}
+                    or module.get("file") != live_module["file"]
+                    or type(module.get("sha256")) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", module["sha256"]) is None
+                ):
+                    invalid_reason = f"baseline has invalid module {name}"
+                    break
+    if invalid_reason is not None:
+        live["baseline"] = {
+            "present": True,
+            "agrees": False,
+            "note": invalid_reason,
+        }
+        return live
+
+    assert isinstance(baseline, dict)
+    baseline_modules = baseline["modules"]
+    assert isinstance(baseline_modules, dict)
     differences = sorted(
-        name for name in set(baseline.get("modules", {})) | set(live["modules"])
-        if baseline.get("modules", {}).get(name, {}).get("sha256")
+        name for name in live["modules"]
+        if baseline_modules[name]["sha256"]
         != live["modules"].get(name, {}).get("sha256")
     )
+    version_agrees = baseline["version"] == live["version"]
     live["baseline"] = {
         "present": True,
-        "agrees": not differences,
-        "version": baseline.get("version"),
+        "agrees": not differences and version_agrees,
+        "version": baseline["version"],
         "changed_modules": differences,
     }
+    if not version_agrees:
+        live["baseline"]["note"] = "baseline version differs from running package"
     return live
 
 
@@ -1624,6 +1610,14 @@ def capture(
         raise AdapterError(f"{workload} workload takes no variant")
     if evidence_limit <= 0:
         raise AdapterError("evidence limit must be positive")
+    apparatus = _apparatus()
+    baseline = apparatus["baseline"]
+    if baseline["agrees"] is False:
+        changed = ", ".join(baseline.get("changed_modules") or [])
+        detail = baseline.get("note") or changed or "unknown difference"
+        raise AdapterError(
+            "capture apparatus differs from the materialized baseline: " + detail
+        )
     identity = _verify_identity(subject)
     if subject in CONFIGURABLE_MODEL_SUBJECTS:
         identity.update(_resolve_model(subject))
@@ -1671,6 +1665,7 @@ def capture(
             name for name, value in environment.items() if value in redactions
         )
         initial_test = None
+        oracle_process_errors: list[str] = []
         if workload == "repair":
             initial_test = run_bounded(
                 ["python3.11", "-m", "unittest", "-v"],
@@ -1679,6 +1674,13 @@ def capture(
                 timeout=30,
                 stdout_limit=stdout_limit,
                 stderr_limit=stderr_limit,
+            )
+            oracle_process_errors.extend(
+                _bounded_measurement_errors(
+                    initial_test,
+                    label="initial test",
+                    require_zero_exit=False,
+                )
             )
         before = manifest(workspace)
         evidence_path: Path | None = None
@@ -1911,55 +1913,40 @@ def capture(
         evidence_errors.extend(sidecar["errors"])
         normalized_stdout, _ = redact_bytes(result.stdout, redactions)
         if subject == "claude":
-            lifecycle, errors = _normalize_claude(normalized_stdout, workspace)
+            lifecycle, adapter_errors = _normalize_claude(
+                normalized_stdout, workspace
+            )
         elif subject == "codex":
-            lifecycle, errors = _normalize_codex(normalized_stdout, workspace)
+            lifecycle, adapter_errors = _normalize_codex(
+                normalized_stdout, workspace
+            )
         elif subject == "hermes":
-            lifecycle, errors = _normalize_hermes(
+            lifecycle, adapter_errors = _normalize_hermes(
                 normalized_stdout, normalized_evidence, workspace, result.returncode
             )
         elif subject == "pi":
-            lifecycle, errors = _normalize_pi(normalized_stdout, workspace)
+            lifecycle, adapter_errors = _normalize_pi(normalized_stdout, workspace)
         else:
-            lifecycle, errors = _normalize_deepseek(
+            lifecycle, adapter_errors = _normalize_deepseek(
                 normalized_evidence,
                 workspace,
                 result.returncode,
                 str(identity["provider"]),
                 str(identity["model"]),
             )
-        errors.extend(evidence_errors)
-        if result.stdout_overflow:
-            errors.append("stdout capture limit exceeded")
-        if result.stderr_overflow:
-            errors.append("stderr capture limit exceeded")
+        adapter_errors.extend(evidence_errors)
+        adapter_errors.extend(oracle_process_errors)
         # No second complaint for the sidecar: `capture_file` already put the
         # refusal in `sidecar["errors"]`, with the size and the limit in it,
-        # and that list was extended into `errors` above. One fact, one error.
-        if result.termination_reason is not None:
-            # Named separately from the exit status, because a bound that fired
-            # leaves a signal-derived return code that says how the subject died
-            # and not why. Reporting only the status would record a SIGTERM and
-            # lose which bound sent it.
-            errors.append(f"{subject} run bound fired: {result.termination_reason}")
-        if result.returncode != 0:
-            errors.append(f"{subject} exited with status {result.returncode}")
-        apparatus = _apparatus()
-        if apparatus["baseline"]["agrees"] is False:
-            # A measurement fault, not an outcome one: the tree is being run
-            # against a primitive it was not cut against, so what the subject
-            # did is not in question -- whether this run can be compared with
-            # the ones beside it is.
-            changed = ", ".join(apparatus["baseline"].get("changed_modules") or [])
-            errors.append(
-                "capture apparatus differs from the materialized baseline"
-                + (f": {changed}" if changed else "")
+        # and that list was extended into `adapter_errors` above. One fact, one
+        # error.
+        adapter_errors.extend(
+            _bounded_measurement_errors(
+                result,
+                label=f"{subject} run",
+                require_zero_exit=True,
             )
-        if result.group_alive_after_cleanup:
-            # A survivor holds the workspace open and corrupts the *next* run's
-            # before-manifest, so it has to be a fault of the run that leaked it.
-            errors.append(f"{subject} left a live process group after cleanup")
-        adapter_verdict = {"passed": not errors, "errors": errors}
+        )
         guard_events: list[dict[str, Any]] = []
         if workload == "guard":
             guard_events, guard_errors = _guard_events(guard_receipt)
@@ -1968,7 +1955,7 @@ def capture(
             )
             # Receipt-parsing complaints are ADAPTER faults: they say the
             # measurement is unreadable, not that the subject did anything.
-            errors.extend(guard_errors)
+            adapter_errors.extend(guard_errors)
             oracle_evidence = {
                 "guard_receipt": capture_bytes(
                     guard_receipt.read_bytes() if guard_receipt.is_file() else b"",
@@ -1988,6 +1975,13 @@ def capture(
                 stdout_limit=stdout_limit,
                 stderr_limit=stderr_limit,
             )
+            adapter_errors.extend(
+                _bounded_measurement_errors(
+                    final_test,
+                    label="final test",
+                    require_zero_exit=False,
+                )
+            )
             assert initial_test is not None
             task_outcome = repair_outcome(
                 before,
@@ -1997,20 +1991,45 @@ def capture(
                 tool_executions=lifecycle["tool_executions"],
             )
             oracle_evidence = {
-                "initial_test": {
-                    "returncode": initial_test.returncode,
-                    "stdout": capture_bytes(initial_test.stdout, redactions=redactions),
-                    "stderr": capture_bytes(initial_test.stderr, redactions=redactions),
-                },
-                "final_test": {
-                    "returncode": final_test.returncode,
-                    "stdout": capture_bytes(final_test.stdout, redactions=redactions),
-                    "stderr": capture_bytes(final_test.stderr, redactions=redactions),
-                },
+                "initial_test": _bounded_evidence(
+                    initial_test,
+                    stdout_limit=stdout_limit,
+                    stderr_limit=stderr_limit,
+                    redactions=redactions,
+                    argv=_normalized_argv(initial_test.argv, root, workspace),
+                ),
+                "final_test": _bounded_evidence(
+                    final_test,
+                    stdout_limit=stdout_limit,
+                    stderr_limit=stderr_limit,
+                    redactions=redactions,
+                    argv=_normalized_argv(final_test.argv, root, workspace),
+                ),
             }
             after = manifest(workspace)
         prompt = WORKLOADS[workload]["prompt"]
         inputs = WORKLOADS[workload]["inputs"]
+        # Finalize only after every workload-specific evidence source has had
+        # a chance to complain. Copy the accumulator so the verdict cannot be
+        # mutated into a passed-with-errors contradiction later.
+        adapter_verdict = {
+            "passed": not adapter_errors,
+            "errors": list(adapter_errors),
+        }
+        process_capture = _bounded_evidence(
+            result,
+            stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit,
+            redactions=redactions,
+            argv=_normalized_argv(argv, root, workspace),
+        )
+        process_capture["limits"]["sidecar_bytes"] = evidence_limit
+        process_capture["sidecar"] = sidecar
+        process_capture["sidecar_kind"] = evidence_kind
+        process_capture["overflow"]["sidecar"] = evidence_overflow
+        process_capture["redacted_environment_names"] = (
+            sensitive_environment_names
+        )
         return {
             "schema": "cross-harness-adapter-run/v0.1",
             "subject": identity,
@@ -2048,45 +2067,7 @@ def capture(
                     if _active_profile()[1].get("kind") == "local"
                     else f"remote gateway {_active_profile()[1]['base_url']}",
             },
-            "capture": {
-                "limits": {
-                    "stdout_bytes": stdout_limit,
-                    "stderr_bytes": stderr_limit,
-                    "sidecar_bytes": evidence_limit,
-                },
-                "stdout": capture_bytes(
-                    result.stdout,
-                    redactions=redactions,
-                    source_bytes=result.stdout_source_bytes,
-                ),
-                "stderr": capture_bytes(
-                    result.stderr,
-                    redactions=redactions,
-                    source_bytes=result.stderr_source_bytes,
-                ),
-                "sidecar": sidecar,
-                "sidecar_kind": evidence_kind,
-                "returncode": result.returncode,
-                "termination_reason": result.termination_reason,
-                "timed_out": result.timed_out,
-                "overflow": {
-                    "stdout": result.stdout_overflow,
-                    "stderr": result.stderr_overflow,
-                    "sidecar": evidence_overflow,
-                },
-                "process_group": {
-                    "alive_before_cleanup": result.group_alive_before_cleanup,
-                    "alive_after_cleanup": result.group_alive_after_cleanup,
-                },
-                # An operator abort is not a subject behaviour, and a record
-                # that cannot tell the two apart invites a conclusion about a
-                # harness that was never allowed to finish. The reason field
-                # does not cover this: a forwarded signal that kills the child
-                # promptly breaks the read loop before `signalled` is ever set,
-                # so the signal itself has to be carried.
-                "forwarded_signals": list(result.forwarded_signals),
-                "redacted_environment_names": sensitive_environment_names,
-            },
+            "capture": process_capture,
             "lifecycle": lifecycle,
             "workspace": {"before": before, "after": after},
             "verdict": adapter_verdict,

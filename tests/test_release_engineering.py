@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +37,148 @@ def _glob_matches(relative: str, glob: str) -> bool:
         return False
     return all(fnmatch.fnmatch(p, g) for p, g in zip(parts, pattern))
 
+
+def _yaml_job(text: str, name: str) -> str:
+    """Extract one two-space GitHub Actions job without accepting a substring."""
+    lines = text.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line == f"  {name}:"),
+        None,
+    )
+    if start is None:
+        raise ValueError(f"workflow has no {name!r} job")
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def _yaml_named_steps(job: str, name: str) -> list[dict[str, str]]:
+    """Read named step keys from the small workflow subset this repository owns."""
+    lines = job.splitlines()
+    starts = [
+        index for index, line in enumerate(lines)
+        if line == f"      - name: {name}"
+    ]
+    steps: list[dict[str, str]] = []
+    for start in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if lines[index].startswith("      - "):
+                end = index
+                break
+        fields = {"name": name}
+        for line in lines[start + 1:end]:
+            match = re.fullmatch(
+                r"        ([A-Za-z0-9_-]+)\s*:(?:\s+(.*))?", line
+            )
+            if match:
+                fields[match.group(1)] = match.group(2) or ""
+        steps.append(fields)
+    return steps
+
+
+def _shell_fences(markdown: str) -> list[list[str]]:
+    """Return literal lines from fenced ``sh`` blocks only."""
+    fences: list[list[str]] = []
+    current: list[str] | None = None
+    in_comment = False
+    for raw_line in markdown.splitlines():
+        line = raw_line
+        if current is None:
+            if in_comment:
+                if "-->" not in line:
+                    continue
+                line = line.split("-->", 1)[1]
+                in_comment = False
+            while "<!--" in line:
+                before, after = line.split("<!--", 1)
+                if "-->" in after:
+                    line = before + after.split("-->", 1)[1]
+                else:
+                    line = before
+                    in_comment = True
+                    break
+            if line == "```sh":
+                current = []
+        elif line == "```":
+            fences.append(current)
+            current = None
+        else:
+            current.append(line)
+    if current is not None:
+        raise ValueError("unterminated sh fence")
+    return fences
+
+
+def _source_gate_errors(workflow: str, releasing: str, command: str) -> list[str]:
+    """Explain why either claimed source gate would not execute the suite."""
+    errors: list[str] = []
+    if workflow.splitlines().count("  test:") != 1:
+        errors.append("workflow has no unique test job")
+    try:
+        job = _yaml_job(workflow, "test")
+    except ValueError as error:
+        return [str(error)]
+    os_line = "        os: [ubuntu-latest, macos-latest]"
+    python_line = '        python-version: ["3.11", "3.12", "3.13", "3.14"]'
+    if (
+        job.splitlines().count(os_line) != 1
+        or job.splitlines().count(python_line) != 1
+        or len(re.findall(r"^        os\s*:", job, flags=re.MULTILINE)) != 1
+        or len(re.findall(
+            r"^        python-version\s*:", job, flags=re.MULTILINE
+        )) != 1
+        or job.splitlines().count("    runs-on: ${{ matrix.os }}") != 1
+    ):
+        errors.append("source gate is not attached to the supported matrix")
+    if re.search(r"^    continue-on-error\s*:", job, flags=re.MULTILINE):
+        errors.append("source matrix job forgives failure")
+    if re.search(r"^    if\s*:", job, flags=re.MULTILINE):
+        errors.append("source matrix job is conditional")
+    if re.search(r"^    needs\s*:", job, flags=re.MULTILINE):
+        errors.append("source matrix job depends on another job")
+    if re.search(
+        r"^        (?:include|exclude)\s*:", job, flags=re.MULTILINE
+    ):
+        errors.append("source matrix changes the declared compatibility cells")
+    steps = _yaml_named_steps(job, "Run offline subject adapter suite")
+    if len(steps) != 1:
+        errors.append("source matrix has no unique offline subject step")
+    else:
+        step = steps[0]
+        if step.get("run") != command:
+            errors.append("offline subject step does not run the exact command")
+        if "if" in step:
+            errors.append("offline subject step is conditional")
+        if step.get("continue-on-error") is not None:
+            errors.append("offline subject step forgives failure")
+
+    try:
+        section = releasing.split(
+            "## 2. Run the source and artifact gate", 1
+        )[1].split("\n## 3. ", 1)[0]
+        fences = _shell_fences(section)
+    except (IndexError, ValueError) as error:
+        errors.append(f"release source gate cannot be parsed: {error}")
+    else:
+        # A one-line shell fence is executable by construction. Requiring the
+        # gate to own its fence removes shell reachability from this proof:
+        # there is nowhere to hide an `if`, function, heredoc, continuation,
+        # short-circuit, subshell, or prior `exit`.
+        occurrences = fences.count([command])
+        if occurrences != 1:
+            errors.append("release source gate lacks one executable command line")
+    return errors
+
 import harness_workbench  # noqa: E402
 import normalize_sdist  # noqa: E402
 import release_checksums  # noqa: E402
 import verify_release_artifacts  # noqa: E402
+import verify_installed_artifact  # noqa: E402
 import verify_release_tag  # noqa: E402
 
 
@@ -143,6 +282,97 @@ class TestReleaseChecksums(unittest.TestCase):
         (self.dist / "duplicate.whl").write_bytes(b"other")
         with self.assertRaises(release_checksums.ChecksumError):
             release_checksums.write(self.dist)
+
+
+class TestInstalledArtifactSubjectGate(unittest.TestCase):
+    def test_sdist_is_built_offline_with_the_pinned_caller_backend(self):
+        release_requirements = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]["optional-dependencies"]["release"]
+        self.assertIn(
+            "setuptools==" + verify_installed_artifact.PINNED_BUILD_BACKEND,
+            release_requirements,
+        )
+        with tempfile.TemporaryDirectory(prefix="hwb-sdist-install-") as raw:
+            work = Path(raw)
+            artifact = work / "harness_workbench-0.1.0rc2.tar.gz"
+            artifact.write_bytes(b"sdist")
+            env = {"PYTHONNOUSERSITE": "1"}
+
+            def build(argv, *, cwd, env):
+                wheelhouse = Path(argv[argv.index("--wheel-dir") + 1])
+                (wheelhouse / "harness_workbench-0.1.0rc2-py3-none-any.whl").write_bytes(
+                    b"wheel"
+                )
+                return mock.Mock(stdout="")
+
+            with (
+                mock.patch.object(
+                    verify_installed_artifact.importlib.metadata,
+                    "version",
+                    return_value=verify_installed_artifact.PINNED_BUILD_BACKEND,
+                ),
+                mock.patch.object(
+                    verify_installed_artifact, "run", side_effect=build
+                ) as run,
+            ):
+                wheel = verify_installed_artifact.prepare_installable_artifact(
+                    artifact, work, env
+                )
+
+            argv = run.call_args.args[0]
+            self.assertEqual(sys.executable, argv[0])
+            self.assertIn("--no-index", argv)
+            self.assertIn("--no-deps", argv)
+            self.assertIn("--no-build-isolation", argv)
+            self.assertEqual("1", run.call_args.kwargs["env"]["PIP_NO_INDEX"])
+            self.assertEqual(".whl", wheel.suffix)
+
+    def test_sdist_rejects_an_unpinned_caller_backend(self):
+        with tempfile.TemporaryDirectory(prefix="hwb-sdist-install-") as raw:
+            work = Path(raw)
+            artifact = work / "harness_workbench-0.1.0rc2.tar.gz"
+            artifact.write_bytes(b"sdist")
+            with mock.patch.object(
+                verify_installed_artifact.importlib.metadata,
+                "version",
+                return_value="84.0.0",
+            ):
+                with self.assertRaisesRegex(SystemExit, "requires setuptools"):
+                    verify_installed_artifact.prepare_installable_artifact(
+                        artifact, work, {}
+                    )
+
+    def test_clean_install_materializes_and_runs_the_offline_subject_suite(self):
+        with tempfile.TemporaryDirectory(prefix="hwb-installed-subjects-") as raw:
+            work = Path(raw)
+            env = {"PYTHONNOUSERSITE": "1"}
+            with mock.patch.object(verify_installed_artifact, "run") as run:
+                verify_installed_artifact.verify_materialized_subjects(
+                    "/venv/bin/hwb", "/venv/bin/python", work, env
+                )
+
+            destination = work / "subjects"
+            self.assertEqual(2, run.call_count)
+            self.assertEqual(
+                [
+                    "/venv/bin/hwb", "subjects", "--into", str(destination)
+                ],
+                run.call_args_list[0].args[0],
+            )
+            self.assertEqual(
+                [
+                    "/venv/bin/python",
+                    "-m", "unittest", "discover",
+                    "-s", str(destination),
+                    "-p", "test_experiment.py",
+                    "-v",
+                ],
+                run.call_args_list[1].args[0],
+            )
+            for call in run.call_args_list:
+                self.assertEqual(work, call.kwargs["cwd"])
+                self.assertIs(env, call.kwargs["env"])
 
 
 class TestSourceDistributionPrivacy(unittest.TestCase):
@@ -653,6 +883,253 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertIn(
             'python tools/verify_release_tag.py "$GITHUB_REF_NAME"', workflow
         )
+
+    def test_offline_subject_suite_is_in_each_source_gate(self):
+        """The shipped adapter tree must travel with the supported source matrix.
+
+        The subject tests deliberately live beside the materialized subject tree,
+        outside the repository suite's discovery root. Checking the whole workflow
+        would let the command drift into the one-off package job while every
+        OS/Python compatibility cell stopped running it, so this reads only the
+        matrix job. The maintainer procedure is scoped to its offline source gate
+        for the same reason: a later example is not release protection.
+        """
+        command = (
+            "PYTHONPATH=src python -m unittest discover "
+            "-s src/harness_workbench/subjects -p 'test_experiment.py' -v"
+        )
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            [],
+            _source_gate_errors(workflow, releasing, command),
+            "both source gates must execute the exact suite without conditions",
+        )
+
+        mutations = (
+            (
+                "duplicate test job override",
+                workflow.replace(
+                    "\n  package:",
+                    "\n  test:\n    runs-on: ubuntu-latest\n    steps: []\n\n  package:",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "duplicate empty OS matrix key",
+                workflow.replace(
+                    "        os: [ubuntu-latest, macos-latest]",
+                    "        os: [ubuntu-latest, macos-latest]\n        os: []",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "disabled CI step",
+                workflow.replace(
+                    "      - name: Run offline subject adapter suite\n"
+                    f"        run: {command}",
+                    "      - name: Run offline subject adapter suite\n"
+                    "        if: ${{ false }}\n"
+                    f"        run: {command}",
+                ),
+                releasing,
+            ),
+            (
+                "forgiven CI step",
+                workflow.replace(
+                    f"        run: {command}",
+                    f"        run: {command}\n        continue-on-error: true",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "disabled CI step with spaced key",
+                workflow.replace(
+                    "      - name: Run offline subject adapter suite\n"
+                    f"        run: {command}",
+                    "      - name: Run offline subject adapter suite\n"
+                    "        if : ${{ false }}\n"
+                    f"        run: {command}",
+                ),
+                releasing,
+            ),
+            (
+                "disabled CI job",
+                workflow.replace(
+                    "  test:\n",
+                    "  test:\n    if: ${{ false }}\n",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "disabled CI job with spaced key",
+                workflow.replace(
+                    "  test:\n",
+                    "  test:\n    if : ${{ false }}\n",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "skipped CI prerequisite",
+                workflow.replace(
+                    "  test:\n",
+                    "  test:\n    needs: disabled-prerequisite\n",
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "excluded CI matrix",
+                workflow.replace(
+                    '        python-version: ["3.11", "3.12", "3.13", "3.14"]',
+                    '        python-version: ["3.11", "3.12", "3.13", "3.14"]\n'
+                    "        exclude:\n"
+                    "          - os: ubuntu-latest\n"
+                    '            python-version: "3.11"',
+                    1,
+                ),
+                releasing,
+            ),
+            (
+                "commented release command",
+                workflow,
+                releasing.replace(command, f"# {command}", 1),
+            ),
+            (
+                "HTML-commented release fence",
+                workflow,
+                releasing.replace(
+                    f"```sh\n{command}\n```",
+                    f"<!--\n```sh\n{command}\n```\n-->",
+                    1,
+                ),
+            ),
+            (
+                "unreachable release command",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"if false; then\n  {command}\nfi",
+                    1,
+                ),
+            ),
+            (
+                "multiline unreachable release command",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"if false\nthen\n  {command}\nfi",
+                    1,
+                ),
+            ),
+            (
+                "continued unreachable release command",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"false && \\\n{command}",
+                    1,
+                ),
+            ),
+            (
+                "uninvoked release function",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"offline_gate() {{\n{command}\n}}",
+                    1,
+                ),
+            ),
+            (
+                "hyphenated uninvoked release function",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"offline-gate() {{\n{command}\n}}",
+                    1,
+                ),
+            ),
+            (
+                "release heredoc body",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"cat <<'GATE'\n{command}\nGATE",
+                    1,
+                ),
+            ),
+            (
+                "numeric release heredoc body",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"cat <<'123'\n{command}\n123",
+                    1,
+                ),
+            ),
+            (
+                "short-circuited release group",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"false && (\n{command}\n)",
+                    1,
+                ),
+            ),
+            (
+                "release command after exit",
+                workflow,
+                releasing.replace(
+                    command,
+                    f"exit 0\n{command}",
+                    1,
+                ),
+            ),
+        )
+        for name, mutated_workflow, mutated_releasing in mutations:
+            with self.subTest(mutation=name):
+                self.assertTrue(
+                    _source_gate_errors(
+                        mutated_workflow, mutated_releasing, command
+                    ),
+                    f"{name} bypassed the source-gate proof",
+                )
+
+    def test_evergreen_subject_commands_do_not_freeze_test_counts(self):
+        """Adding a regression test must not make the usage docs false."""
+        surfaces = (
+            ROOT / "README.md",
+            ROOT / "src" / "harness_workbench" / "subjects" / "README.md",
+        )
+        for path in surfaces:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotRegex(
+                    text,
+                    r"unittest[^\n]*#\s*\d+\s+tests",
+                    "evergreen commands must not carry moving suite counts",
+                )
+                self.assertIn("# offline; no subject installed", text)
+
+    def test_shared_contract_counts_all_five_subjects(self):
+        contract = (
+            ROOT
+            / "src"
+            / "harness_workbench"
+            / "subjects"
+            / "SHARED_ADAPTER_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("the five sealed discovery records", contract)
+        self.assertIn("Final five-subject", contract)
+        self.assertNotIn("the four sealed discovery records", contract)
+        self.assertNotIn("Final four-subject", contract)
 
     def test_execution_trust_boundary_and_replay_copy_are_explicit(self):
         required = {

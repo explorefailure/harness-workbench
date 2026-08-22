@@ -48,6 +48,42 @@ class DigestTests(unittest.TestCase):
             )
 
 
+class BoundedEvidenceTests(unittest.TestCase):
+    def test_complete_process_observation_is_serialized_without_a_verdict(self):
+        result = capture.Bounded(
+            argv=["tool", "--secret", "credential-value"],
+            returncode=-15,
+            termination_reason="timeout",
+            stdout=b"credential-value",
+            stderr=b"problem",
+            stdout_source_bytes=32,
+            stderr_source_bytes=7,
+            stdout_overflow=True,
+            stderr_overflow=False,
+            group_alive_before_cleanup=True,
+            group_alive_after_cleanup=False,
+            forwarded_signals=(2,),
+        )
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=16,
+            stderr_limit=8,
+            redactions=("credential-value",),
+            argv=("tool", "<redacted-argument>"),
+        )
+        self.assertEqual(["tool", "<redacted-argument>"], evidence["argv"])
+        self.assertEqual(
+            {"stdout_bytes": 16, "stderr_bytes": 8}, evidence["limits"]
+        )
+        self.assertEqual(32, evidence["stdout"]["source_bytes"])
+        self.assertNotIn("credential-value", evidence["stdout"]["text"])
+        self.assertEqual("timeout", evidence["termination_reason"])
+        self.assertTrue(evidence["timed_out"])
+        self.assertEqual({"stdout": True, "stderr": False}, evidence["overflow"])
+        self.assertEqual([2], evidence["forwarded_signals"])
+        self.assertNotIn("passed", evidence)
+
+
 class ManifestTests(unittest.TestCase):
     def test_manifest_preserves_unicode_nested_path_mode_and_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

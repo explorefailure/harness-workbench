@@ -37,6 +37,7 @@
         "runner.py",
         "adapters.py",
         "oracles.py",
+        "workloads.py",
         "pin.json",
         "model_selection.json",
         "task.md",

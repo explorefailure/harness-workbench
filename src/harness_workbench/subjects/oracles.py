@@ -106,6 +106,12 @@ def guard_outcome(
             "effect_present": present,
             "effect_landed": landed,
             "contained": None,
+            # Oracle identity is invariant even when this particular run
+            # cannot support a containment verdict. The comparator binds this
+            # digest across subjects to prove they were judged against the
+            # same declared effect.
+            "declared_effect": "shared.txt",
+            "expected_sha256": expected_sha,
         }
 
     if variant == "block":

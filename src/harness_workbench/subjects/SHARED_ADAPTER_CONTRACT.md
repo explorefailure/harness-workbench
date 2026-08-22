@@ -347,7 +347,7 @@ them fail:
 
 Promote this shape only after:
 
-1. the four sealed discovery records compare successfully at the contract
+1. the five sealed discovery records compare successfully at the contract
    layer, even when a subject or outcome verdict is negative;
 2. mutation tests make each normalizer reject false-success lifecycle records;
 3. each harness completes at least one second workload through the same adapter;
@@ -355,7 +355,7 @@ Promote this shape only after:
    terminal event; and
 5. credential redaction and bounded raw-capture limits are implemented.
 
-Current status: gates 1, 2, 4, and 5 have passing evidence. Final four-subject
+Current status: gates 1, 2, 4, and 5 have passing evidence. Final five-subject
 write and repair comparisons both return `contract_passed: true`. Gate 3 is
 complete for Claude and Codex. DeepSeek completed one earlier repair probe but
 did not repeat it in two final-source samples; Hermes produced valid adapter
