@@ -109,7 +109,10 @@ class Bounded:
 
     `*_source_bytes` is what the subject tried to emit; `stdout`/`stderr` are
     what was kept. Without the pair, a truncated capture and a quiet subject
-    look identical.
+    look identical. `termination_reason` names the bound that initiated
+    termination. Overflow flags remain independent observations because a
+    process can emit past one or both stream limits while handling the timeout
+    or forwarded signal that already began teardown.
     """
 
     argv: list[str]

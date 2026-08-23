@@ -12,13 +12,14 @@
 // This writes `loaded` at registration, before any model output exists. A run
 // with no `loaded` line is NOT_EVALUABLE, never a pass and never a fail.
 import { appendFileSync } from "node:fs";
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type GuardMode = "block" | "allow";
 
-const SCHEMA = "cross-harness-guard-event/v0.2";
-const CAPABILITY = "__HWB_GUARD_CAPABILITY__";
+const SCHEMA = "cross-harness-guard-event/v0.3";
+const PRIVATE_MODULUS = "__HWB_GUARD_PRIVATE_MODULUS__";
+const PRIVATE_EXPONENT = "__HWB_GUARD_PRIVATE_EXPONENT__";
 const RUN_ID = "__HWB_GUARD_RUN_ID__";
 const GUARDED_TOOL = "write";
 
@@ -49,6 +50,30 @@ function required(name: string): string {
   return value;
 }
 
+function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  let result = 1n;
+  let value = base % modulus;
+  let power = exponent;
+  while (power > 0n) {
+    if ((power & 1n) === 1n) result = (result * value) % modulus;
+    value = (value * value) % modulus;
+    power >>= 1n;
+  }
+  return result;
+}
+
+function sign(canonicalEvent: string): string {
+  const modulus = BigInt(`0x${PRIVATE_MODULUS}`);
+  const privateExponent = BigInt(`0x${PRIVATE_EXPONENT}`);
+  const byteWidth = Math.ceil(PRIVATE_MODULUS.length / 2);
+  const digestInfo = "3031300d060960864801650304020105000420" +
+    createHash("sha256").update(canonicalEvent).digest("hex");
+  const padding = "ff".repeat(byteWidth - digestInfo.length / 2 - 3);
+  const encoded = BigInt(`0x0001${padding}00${digestInfo}`);
+  return modPow(encoded, privateExponent, modulus)
+    .toString(16).padStart(byteWidth * 2, "0");
+}
+
 function guardMode(): GuardMode {
   const value = required("HWB_GUARD_MODE");
   if (value !== "block" && value !== "allow") {
@@ -67,12 +92,11 @@ export default function registerGuard(pi: ExtensionAPI) {
       subject: "pi",
       mode,
       run_id: RUN_ID,
-      capability_id: createHash("sha256").update(CAPABILITY).digest("hex"),
+      key_id: createHash("sha256")
+        .update(Buffer.from(PRIVATE_MODULUS, "hex")).digest("hex"),
       ...event,
     };
-    const signature = createHmac("sha256", CAPABILITY)
-      .update(canonical(authenticated))
-      .digest("hex");
+    const signature = sign(canonical(authenticated));
     appendFileSync(
       receiptPath,
       `${JSON.stringify({ ...authenticated, signature })}\n`,

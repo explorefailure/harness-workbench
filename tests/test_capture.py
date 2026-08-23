@@ -424,6 +424,26 @@ class BoundedRunTests(unittest.TestCase):
         # The real signal-derived status, not a synthesized 124.
         self.assertNotEqual(124, result.returncode)
 
+    def test_timeout_retains_later_stdout_and_stderr_overflow(self):
+        for descriptor, stream in ((1, "stdout"), (2, "stderr")):
+            with self.subTest(stream=stream):
+                result = self._run(
+                    "import os,signal,time; "
+                    f"signal.signal(signal.SIGTERM, lambda *_: "
+                    f"(os.write({descriptor}, b'x' * 4096), exit(0))); "
+                    "time.sleep(30)",
+                    timeout=0.3,
+                    stdout_limit=128,
+                    stderr_limit=128,
+                    termination_grace=1.0,
+                )
+                self.assertEqual(capture.TIMEOUT, result.termination_reason)
+                self.assertTrue(result.timed_out)
+                self.assertTrue(getattr(result, f"{stream}_overflow"))
+                self.assertGreater(
+                    getattr(result, f"{stream}_source_bytes"), 128
+                )
+
     def test_child_ignoring_sigterm_is_escalated_and_still_bounded(self):
         started = time.monotonic()
         result = self._run(

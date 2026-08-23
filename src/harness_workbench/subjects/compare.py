@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -876,8 +877,19 @@ def verify_process_evidence(
             errors.append(
                 f"{label} {stream} limit reason lacks overflow evidence"
             )
+    # Timeout/signal teardown can itself provoke output. The initiating reason
+    # remains timeout/signalled while the independently measured stream flags
+    # report any later overflow. A stream-limit reason, by contrast, must name
+    # exactly the stream(s) whose limit initiated termination.
+    allows_later_overflow = termination_reason in (
+        capture_module.TIMEOUT, capture_module.SIGNALLED,
+    )
     for stream in ("stdout", "stderr"):
-        if overflow_map.get(stream) is True and stream not in reason_streams:
+        if (
+            overflow_map.get(stream) is True
+            and stream not in reason_streams
+            and not allows_later_overflow
+        ):
             errors.append(
                 f"{label} {stream} overflow disagrees with termination reason"
             )
@@ -1019,17 +1031,65 @@ def _stored_capture_bytes(
 
 def verify_guard_oracle_evidence(
     label: str,
+    subject: str | None,
+    mode: Any,
     oracle_evidence: Any,
     outcome: dict[str, Any],
     errors: list[str],
 ) -> bool | None:
-    """Bind the guard summary to the receipt bytes retained by the adapter."""
+    """Authenticate retained receipts with a retained, non-signing public key."""
     started = len(errors)
     if not isinstance(oracle_evidence, dict) or set(oracle_evidence) != {
-        "guard_receipt", "events"
+        "authentication", "guard_receipt", "events"
     }:
         errors.append(f"{label} guard has invalid oracle evidence")
         return None
+    authentication = oracle_evidence.get("authentication")
+    expected_auth_keys = {
+        "schema", "algorithm", "subject", "mode", "run_id", "key_id",
+        "public_key",
+    }
+    if (
+        not isinstance(authentication, dict)
+        or set(authentication) != expected_auth_keys
+    ):
+        errors.append(f"{label} guard has invalid authentication proof")
+        return True
+    public_key = authentication.get("public_key")
+    if not isinstance(public_key, dict) or set(public_key) != {"n", "e"}:
+        errors.append(f"{label} guard has invalid public key")
+        return True
+    import adapters as adapter_module
+
+    if subject not in adapter_module.GUARD_TOOLS or mode not in GUARD_VARIANTS:
+        errors.append(f"{label} guard authentication has invalid subject or mode")
+        return True
+
+    expected_authentication = {
+        "schema": adapter_module.GUARD_AUTH_SCHEMA,
+        "algorithm": adapter_module.GUARD_SIGNATURE_ALGORITHM,
+        "subject": subject,
+        "mode": mode,
+        "run_id": authentication.get("run_id"),
+        "key_id": adapter_module._guard_key_id(public_key),
+        "public_key": public_key,
+    }
+    run_id = authentication.get("run_id")
+    modulus = public_key.get("n")
+    modulus_is_2048_bit = (
+        type(modulus) is str
+        and re.fullmatch(r"[0-9a-f]{512}", modulus) is not None
+        and int(modulus, 16).bit_length() == 2048
+    )
+    if (
+        authentication != expected_authentication
+        or type(run_id) is not str
+        or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+        or not modulus_is_2048_bit
+        or public_key.get("e") != 65537
+    ):
+        errors.append(f"{label} guard authentication proof disagrees with run")
+        return True
     raw = _stored_capture_bytes(
         f"{label} guard receipt", oracle_evidence.get("guard_receipt"), errors
     )
@@ -1044,8 +1104,72 @@ def verify_guard_oracle_evidence(
     parsed_events, complaints = parse_jsonl(raw, objects_only=True)
     if declared_events != parsed_events:
         errors.append(f"{label} guard events disagree with receipt bytes")
-    loaded = any(event.get("event") == "loaded" for event in parsed_events)
-    calls = [event for event in parsed_events if event.get("event") == "tool_call"]
+    guarded_tool, shell_tool = adapter_module.GUARD_TOOLS[subject]
+    authenticated_events: list[dict[str, Any]] = []
+    common = {
+        "schema": adapter_module.GUARD_RECEIPT_SCHEMA,
+        "subject": subject,
+        "mode": mode,
+        "run_id": run_id,
+        "key_id": authentication["key_id"],
+    }
+    for index, event in enumerate(parsed_events, start=1):
+        expected_shape = {
+            "schema", "subject", "mode", "run_id", "key_id", "event",
+            "signature",
+        }
+        if event.get("event") == "loaded":
+            expected_shape |= {"guarded_tool", "shell_tool", "pid"}
+        elif event.get("event") == "tool_call":
+            expected_shape |= {"tool", "decision"}
+            if subject in {"pi", "deepseek"}:
+                expected_shape.add("tool_call_id")
+        if (
+            set(event) != expected_shape
+            or any(event.get(field) != value for field, value in common.items())
+            or not adapter_module._verify_guard_event_signature(event, public_key)
+        ):
+            errors.append(f"{label} guard receipt line {index} is unauthenticated")
+            continue
+        if event["event"] == "loaded":
+            if (
+                event.get("guarded_tool") != guarded_tool
+                or event.get("shell_tool") != shell_tool
+                or type(event.get("pid")) is not int
+                or isinstance(event.get("pid"), bool)
+                or event["pid"] <= 0
+            ):
+                errors.append(f"{label} guard receipt line {index} has invalid startup")
+                continue
+        else:
+            tool = event.get("tool")
+            expected_decision = mode if tool == guarded_tool else "not_guarded"
+            if (
+                type(tool) is not str
+                or not tool
+                or event.get("decision") != expected_decision
+                or (
+                    subject in {"pi", "deepseek"}
+                    and (
+                        type(event.get("tool_call_id")) is not str
+                        or not event["tool_call_id"]
+                    )
+                )
+            ):
+                errors.append(f"{label} guard receipt line {index} is incoherent")
+                continue
+        authenticated_events.append(event)
+    loaded_events = [
+        event for event in authenticated_events if event["event"] == "loaded"
+    ]
+    if len(loaded_events) > 1 or (
+        authenticated_events and authenticated_events[0]["event"] != "loaded"
+    ):
+        errors.append(f"{label} guard receipt has invalid startup lifecycle")
+    loaded = len(loaded_events) == 1
+    calls = [
+        event for event in authenticated_events if event.get("event") == "tool_call"
+    ]
     denials = sum(event.get("decision") == "block" for event in calls)
     tools = sorted({event.get("tool") for event in calls if type(event.get("tool")) is str})
     expected = {
@@ -1060,7 +1184,7 @@ def verify_guard_oracle_evidence(
         errors.append(f"{label} guard outcome tools disagree with receipt")
     if len(errors) != started:
         return None
-    return bool(complaints)
+    return bool(complaints or len(errors) != started)
 
 
 def _capture_raw(capture: dict[str, Any], stream: str) -> bytes | None:
@@ -1124,35 +1248,36 @@ def _lifecycle_projection(
     raw = _capture_raw(capture, stream)
     if raw is None:
         return None
-    events, complaints = parse_jsonl(raw, objects_only=True)
-    if complaints:
-        return {}, complaints
+    events, _ = parse_jsonl(raw, objects_only=True)
     workspace = _raw_workspace(events)
     # Lazy import avoids making the comparator's declarations depend on adapter
     # initialization while still sharing the exact normalization mechanism.
     import adapters as adapter_module
 
     if subject == "claude":
-        return adapter_module._normalize_claude(raw, workspace)
-    if subject == "codex":
-        return adapter_module._normalize_codex(raw, workspace)
-    if subject == "pi":
-        return adapter_module._normalize_pi(raw, workspace)
-    if subject == "hermes":
+        normalized, complaints = adapter_module._normalize_claude(raw, workspace)
+    elif subject == "codex":
+        normalized, complaints = adapter_module._normalize_codex(raw, workspace)
+    elif subject == "pi":
+        normalized, complaints = adapter_module._normalize_pi(raw, workspace)
+    elif subject == "hermes":
         stdout = _capture_raw(capture, "stdout")
         if stdout is None:
             return None
-        return adapter_module._normalize_hermes(
+        normalized, complaints = adapter_module._normalize_hermes(
             stdout, raw, workspace, capture.get("returncode")
         )
-    identity = _declared_subject_identity("deepseek")
-    return adapter_module._normalize_deepseek(
-        raw,
-        workspace,
-        capture.get("returncode"),
-        str(identity["provider"]),
-        str(identity["model"]),
-    )
+    else:
+        identity = _declared_subject_identity("deepseek")
+        normalized, complaints = adapter_module._normalize_deepseek(
+            raw,
+            workspace,
+            capture.get("returncode"),
+            str(identity["provider"]),
+            str(identity["model"]),
+        )
+    normalized["normalizer_errors"] = list(complaints)
+    return normalized, complaints
 
 
 def verify_lifecycle(
@@ -1160,6 +1285,7 @@ def verify_lifecycle(
     subject: str | None,
     lifecycle: dict[str, Any],
     capture: dict[str, Any],
+    verdict_errors: Any,
     errors: list[str],
 ) -> LifecycleState | None:
     acquisition = lifecycle.get("acquisition")
@@ -1196,13 +1322,20 @@ def verify_lifecycle(
         errors.append(f"{label} lifecycle has invalid tool executions")
         valid = False
     if set(lifecycle) != {
-        "acquisition", "completeness", "event_types", "tool_executions", "terminal"
+        "acquisition", "completeness", "event_types", "normalizer_errors",
+        "tool_executions", "terminal"
     }:
         errors.append(f"{label} lifecycle has invalid shape")
         valid = False
     event_types = lifecycle.get("event_types")
+    normalizer_errors = lifecycle.get("normalizer_errors")
     terminal = lifecycle.get("terminal")
-    if type(event_types) is not list or not isinstance(terminal, dict):
+    if (
+        type(event_types) is not list
+        or type(normalizer_errors) is not list
+        or any(type(complaint) is not str for complaint in normalizer_errors)
+        or not isinstance(terminal, dict)
+    ):
         errors.append(f"{label} lifecycle has invalid event or terminal evidence")
         valid = False
     projection = (
@@ -1216,13 +1349,15 @@ def verify_lifecycle(
     elif lifecycle != projection[0]:
         errors.append(f"{label} lifecycle disagrees with retained raw evidence")
         valid = False
-    # JSONL format complaints prevent any projection. Subject-semantic
-    # complaints (a failed terminal, an incomplete call) are already retained
-    # by the adapter verdict and may be the honest result of a bounded run; the
-    # normalized facts must still match even when that verdict is false.
-    if projection is not None and projection[0] == {} and projection[1]:
-        errors.append(f"{label} lifecycle raw evidence is malformed")
-        valid = False
+    if projection is not None and projection[1]:
+        if type(verdict_errors) is not list or any(
+            verdict_errors.count(complaint) < projection[1].count(complaint)
+            for complaint in set(projection[1])
+        ):
+            errors.append(
+                f"{label} verdict omits retained normalizer complaints"
+            )
+            valid = False
     if type(executions) is list and subject in expected_profiles:
         expected_keys = {
             "call_id", "tool_name", "effect_kind", "operation",
@@ -2066,6 +2201,8 @@ def compare(paths: list[Path]) -> dict[str, Any]:
             elif raw_workload == "guard":
                 guard_oracle_fault = verify_guard_oracle_evidence(
                     label,
+                    inner_subject,
+                    raw_variant,
                     adapter.get("oracle_evidence"),
                     adapter["outcome"],
                     errors,
@@ -2081,6 +2218,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
                 inner_subject,
                 adapter["lifecycle"],
                 adapter["capture"],
+                adapter["verdict"].get("errors"),
                 errors,
             )
             verify_outcome_lifecycle(

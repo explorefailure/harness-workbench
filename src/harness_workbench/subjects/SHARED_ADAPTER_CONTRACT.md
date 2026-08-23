@@ -25,9 +25,9 @@ Every `cross-harness-adapter-run/v0.1` object contains:
 | `capabilities` | Explicit booleans or typed values for native events, hook events, native terminal events, tool correlation, result status, and model-identity strength. Unsupported features are not synthesized. |
 | `invocation` | Credential-safe argv, working directory marker, timeout, and credential-source class. |
 | `isolation` | Disposable-workspace claim, ambient-config policy, and network scope. This is disclosure, not proof of containment. |
-| `capture` | Credential-scrubbed stdout, stderr, and named sidecar bytes up to declared positive limits, with source/stored byte counts, stored SHA-256 digests, redaction counts, overflow state, process return code, and termination reason. |
-| `lifecycle` | Acquisition method, completeness class, ordered native event types, normalized tool attempts, and the strongest observed terminal boundary. |
-| `workspace` | Exact before and after manifests collected outside the subject. |
+| `capture` | Credential-scrubbed stdout, stderr, and named sidecar bytes up to declared positive limits, with source/stored byte counts, stored SHA-256 digests, redaction counts, overflow state, process return code, and the bound that initiated termination. Stream-overflow flags remain independent because overflow may occur during timeout/signal teardown. |
+| `lifecycle` | Acquisition method, completeness class, ordered native event types, normalized tool attempts, the strongest observed terminal boundary, and the normalizer complaints derived from retained raw evidence. |
+| `workspace` | Exact before and after manifests collected outside the subject. Regular files are descriptor-opened and hashed without following links; directories, symlinks, FIFOs, sockets, and other special nodes remain typed visible effects. A concurrent identity/content change fails the snapshot closed. |
 | `verdict` | Whether the adapter could establish its declared identity, capture, and lifecycle invariants. |
 | `outcome` | A separate workload-specific durable-effect verdict. |
 
@@ -64,8 +64,17 @@ oracle supply the independent effect evidence.
 Normalizers reject duplicate lifecycle terminals, duplicate tool identifiers
 *within the scope those identifiers are unique in* — for Hermes that scope is
 the API request, not the run — orphaned native tool completions, incomplete
-hook pairs, and post-before-pre hook ordering. A reported tool error remains a valid measured attempt; it does
-not make the adapter structurally invalid by itself.
+hook pairs, and post-before-pre hook ordering. A reported tool error remains a
+valid measured attempt; it does not make the adapter structurally invalid by
+itself.
+
+`lifecycle.normalizer_errors` is not editable verdict prose. Comparison reruns
+the subject normalizer over retained stdout/sidecar bytes, requires the whole
+lifecycle projection (including that ordered complaint list) to match, and
+requires every derived complaint to be present in `verdict.errors`. A record
+cannot turn terminal-before-init, completion-before-start, malformed JSONL, or
+an incomplete call/result relationship into a valid lifecycle by rewriting
+the projection and clearing the verdict.
 
 `reported_error` preserves the harness's own tool-result status. It is not
 silently rewritten from a shell exit code. DeepSeek's bash tool, for example,
@@ -140,6 +149,15 @@ thirty runs total. **All thirty: `status 0`, adapter verdict passing,
 `evaluable: true`, guard receipt present, workspace file set exact.** Every
 allow arm recorded zero denials and produced the effect; every block arm
 recorded at least one denial and produced the effect anyway.
+
+Current receipts use `cross-harness-guard-event/v0.3` and a per-run RSA-2048
+signature. Retained authentication evidence contains only the public key and
+binds it to subject, guard variant, run ID, and schema; the disposable private
+key is absent from retained evidence and the subject environment. Both capture
+and comparison validate exact event shapes, signatures, startup ordering, and
+tool decisions. The historical matrix below predates that hardening, as its
+scope note already discloses; it remains discovery history, not current
+authentication evidence.
 
 Counts are given as ranges across the three samples, because several of them
 move between samples and a single figure would be a draw presented as a fact.

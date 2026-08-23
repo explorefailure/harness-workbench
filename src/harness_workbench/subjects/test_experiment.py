@@ -107,6 +107,34 @@ class CommonTests(unittest.TestCase):
             (root / "two.txt").write_text("two", encoding="utf-8")
             self.assertEqual(manifest(root), adapters.workspace_manifest(root))
 
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "O_NOFOLLOW is unsupported")
+    def test_workspace_manifest_fails_closed_on_file_to_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "workspace"
+            root.mkdir()
+            victim = root / "victim.txt"
+            victim.write_bytes(b"inside")
+            outside = parent / "outside-secret.txt"
+            outside.write_bytes(b"outside-secret")
+            original_open = os.open
+            swapped = False
+
+            def swap_before_open(path: object, flags: int, *args: object, **kwargs: object):
+                nonlocal swapped
+                if path == "victim.txt" and kwargs.get("dir_fd") is not None:
+                    victim.unlink()
+                    victim.symlink_to(outside)
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(adapters.os, "open", side_effect=swap_before_open):
+                with self.assertRaisesRegex(
+                    adapters.AdapterError, "workspace changed during snapshot"
+                ):
+                    adapters.workspace_manifest(root)
+            self.assertTrue(swapped)
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO creation is unsupported")
     def test_workspace_manifest_exposes_fifo_without_opening_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -583,6 +611,91 @@ class CommonTests(unittest.TestCase):
             self.assertNotIn(secret, serialized)
         self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
         self.assertGreater(record["capture"]["stderr"]["redaction_count"], 0)
+
+    def test_codex_auth_rotation_cannot_diverge_copy_from_redactions(self) -> None:
+        old_token = "auth-snapshot-token-before-rotation"
+        new_token = "auth-source-token-after-rotation"
+        observed_copy: dict[str, object] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            source = codex_home / "auth.json"
+            source.write_text(json.dumps({"token": old_token}), encoding="utf-8")
+            original_values = adapters._credential_file_values
+
+            def rotate_after_snapshot(raw: bytes, *, source: Path) -> tuple[str, ...]:
+                values = original_values(raw, source=source)
+                source.write_text(json.dumps({"token": new_token}), encoding="utf-8")
+                return values
+
+            def run(
+                argv: list[str], *, cwd: Path, env: dict[str, str], **_: object
+            ) -> Bounded:
+                copied = Path(env["CODEX_HOME"]) / "auth.json"
+                observed_copy["bytes"] = copied.read_bytes()
+                observed_copy["mode"] = copied.stat().st_mode & 0o777
+                raw = old_token.encode("utf-8")
+                return Bounded(
+                    argv=argv,
+                    returncode=0,
+                    termination_reason=None,
+                    stdout=raw,
+                    stderr=b"",
+                    stdout_source_bytes=len(raw),
+                    stderr_source_bytes=0,
+                    stdout_overflow=False,
+                    stderr_overflow=False,
+                    group_alive_before_cleanup=False,
+                    group_alive_after_cleanup=False,
+                )
+
+            lifecycle = {
+                "acquisition": "native_jsonl",
+                "completeness": "native_terminal_event",
+                "event_types": [],
+                "tool_executions": [],
+                "terminal": {},
+            }
+            apparatus = {
+                "schema": "hwb-subject-apparatus/v0.1",
+                "package": "harness_workbench",
+                "version": "0.0.0-test",
+                "modules": {},
+                "baseline": {"present": True, "agrees": True},
+            }
+            with (
+                mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
+                mock.patch.object(
+                    adapters,
+                    "_verify_identity",
+                    return_value={"name": "codex", "model": "test-model"},
+                ),
+                mock.patch.object(
+                    adapters,
+                    "_credential_file_values",
+                    side_effect=rotate_after_snapshot,
+                ),
+                mock.patch.object(adapters, "_codex_guard_config", return_value=""),
+                mock.patch.object(adapters, "_codex_command", return_value=["codex-test"]),
+                mock.patch.object(adapters, "run_bounded", side_effect=run),
+                mock.patch.object(
+                    adapters, "_normalize_codex", return_value=(lifecycle, [])
+                ),
+                mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+            ):
+                record = adapters.capture("codex", "guard", variant="block")
+
+            self.assertEqual(
+                json.dumps({"token": new_token}), source.read_text(encoding="utf-8")
+            )
+        self.assertEqual(
+            json.dumps({"token": old_token}).encode("utf-8"),
+            observed_copy["bytes"],
+        )
+        self.assertEqual(0o600, observed_copy["mode"])
+        serialized = json.dumps(record)
+        self.assertNotIn(old_token, serialized)
+        self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
 
     def test_the_hermes_hook_scrubber_is_not_handed_an_empty_list(self) -> None:
         # The second layer, which was switched off. The hook scrubs values
@@ -1574,8 +1687,11 @@ class ExitStatusTests(unittest.TestCase):
 class GuardCaptureVerdictTests(unittest.TestCase):
     """The adapter verdict is final only after guard evidence is parsed."""
 
-    CAPABILITY = "ab" * 32
     RUN_ID = "cd" * 16
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.PUBLIC_KEY, cls.PRIVATE_KEY = adapters._generate_guard_keypair()
 
     @classmethod
     def signed_event(cls, **values: object) -> dict:
@@ -1591,14 +1707,12 @@ class GuardCaptureVerdictTests(unittest.TestCase):
             "subject": "claude",
             "mode": "block",
             "run_id": cls.RUN_ID,
-            "capability_id": hashlib.sha256(
-                cls.CAPABILITY.encode("ascii")
-            ).hexdigest(),
+            "key_id": adapters._guard_key_id(cls.PUBLIC_KEY),
             **lifecycle,
             **values,
         }
         event["signature"] = adapters._guard_event_signature(
-            event, cls.CAPABILITY
+            event, cls.PRIVATE_KEY
         )
         return event
 
@@ -1607,22 +1721,22 @@ class GuardCaptureVerdictTests(unittest.TestCase):
         return jsonl(*events)
 
     @staticmethod
-    def bounded_guard_run(receipt: bytes | None):
+    def bounded_guard_run(receipt: bytes | None, emitted: bytes = b""):
         def run(
             argv: list[str], *, cwd: Path, env: dict[str, str], **_: object
         ) -> Bounded:
-            self_capability = GuardCaptureVerdictTests.CAPABILITY
-            if "HWB_GUARD_CAPABILITY" in env or self_capability in env.values():
-                raise AssertionError("guard capability leaked into subject environment")
+            private_values = GuardCaptureVerdictTests.PRIVATE_KEY.values()
+            if any(value in env.values() for value in private_values):
+                raise AssertionError("guard private key leaked into subject environment")
             if receipt is not None:
                 Path(env["HWB_GUARD_RECEIPT"]).write_bytes(receipt)
             return Bounded(
                 argv=argv,
                 returncode=0,
                 termination_reason=None,
-                stdout=b"",
+                stdout=emitted,
                 stderr=b"",
-                stdout_source_bytes=0,
+                stdout_source_bytes=len(emitted),
                 stderr_source_bytes=0,
                 stdout_overflow=False,
                 stderr_overflow=False,
@@ -1632,7 +1746,7 @@ class GuardCaptureVerdictTests(unittest.TestCase):
 
         return run
 
-    def capture_guard(self, receipt: bytes | None) -> dict:
+    def capture_guard(self, receipt: bytes | None, emitted: bytes = b"") -> dict:
         lifecycle = {
             "acquisition": "native_jsonl",
             "completeness": "native_terminal_event",
@@ -1653,19 +1767,37 @@ class GuardCaptureVerdictTests(unittest.TestCase):
             mock.patch.object(adapters, "_claude_guard_settings", return_value="{}"),
             mock.patch.object(adapters, "_claude_command", return_value=["claude-test"]),
             mock.patch.object(
-                adapters, "run_bounded", side_effect=self.bounded_guard_run(receipt)
+                adapters,
+                "run_bounded",
+                side_effect=self.bounded_guard_run(receipt, emitted),
             ),
             mock.patch.object(
                 adapters, "_normalize_claude", return_value=(lifecycle, [])
             ),
-            mock.patch.object(adapters, "_apparatus", return_value=apparatus),
-            mock.patch.object(
-                adapters.secrets,
-                "token_hex",
-                side_effect=[self.CAPABILITY, self.RUN_ID],
+                mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+                mock.patch.object(
+                    adapters,
+                    "_generate_guard_keypair",
+                    return_value=(self.PUBLIC_KEY, self.PRIVATE_KEY),
+                ),
+                mock.patch.object(
+                    adapters.secrets,
+                    "token_hex",
+                    return_value=self.RUN_ID,
             ),
         ):
             return adapters.capture("claude", "guard", variant="block")
+
+    def test_private_signing_exponent_is_redacted_if_subject_echoes_source(
+        self,
+    ) -> None:
+        private_exponent = self.PRIVATE_KEY["d"]
+        record = self.capture_guard(
+            self.receipt(self.signed_event(event="loaded")),
+            private_exponent.encode("ascii"),
+        )
+        self.assertNotIn(private_exponent, json.dumps(record))
+        self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
 
     def test_malformed_guard_receipt_fails_adapter_and_status(self) -> None:
         # A valid startup receipt keeps the outcome evaluable; the malformed
@@ -1730,14 +1862,14 @@ class GuardCaptureVerdictTests(unittest.TestCase):
             event = self.signed_event(event="loaded")
             event[field] = value
             event["signature"] = adapters._guard_event_signature(
-                event, self.CAPABILITY
+                event, self.PRIVATE_KEY
             )
             with self.subTest(field=field):
                 record = self.capture_guard(self.receipt(event))
                 self.assertFalse(record["outcome"]["evaluable"])
                 self.assertFalse(record["verdict"]["passed"])
 
-    def test_every_guard_is_materialized_with_the_same_run_capability(self) -> None:
+    def test_every_guard_is_materialized_with_the_same_run_signing_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for source_name in (
@@ -1749,13 +1881,19 @@ class GuardCaptureVerdictTests(unittest.TestCase):
                     installed = adapters._materialize_guard(
                         source_name,
                         root / source_name,
-                        capability=self.CAPABILITY,
+                        private_key=self.PRIVATE_KEY,
                         run_id=self.RUN_ID,
                     )
                     rendered = installed.read_text(encoding="utf-8")
-                    self.assertNotIn(adapters.GUARD_CAPABILITY_PLACEHOLDER, rendered)
+                    self.assertNotIn(
+                        adapters.GUARD_PRIVATE_MODULUS_PLACEHOLDER, rendered
+                    )
+                    self.assertNotIn(
+                        adapters.GUARD_PRIVATE_EXPONENT_PLACEHOLDER, rendered
+                    )
                     self.assertNotIn(adapters.GUARD_RUN_ID_PLACEHOLDER, rendered)
-                    self.assertIn(self.CAPABILITY, rendered)
+                    self.assertIn(self.PRIVATE_KEY["n"], rendered)
+                    self.assertIn(self.PRIVATE_KEY["d"], rendered)
                     self.assertIn(self.RUN_ID, rendered)
                     self.assertIn(adapters.GUARD_RECEIPT_SCHEMA, rendered)
                     self.assertEqual(0o600, installed.stat().st_mode & 0o777)
@@ -1851,6 +1989,14 @@ class RepairCaptureVerdictTests(unittest.TestCase):
 
 
 class ContractComparisonTests(unittest.TestCase):
+    GUARD_RUN_ID = "34" * 16
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.GUARD_PUBLIC_KEY, cls.GUARD_PRIVATE_KEY = (
+            adapters._generate_guard_keypair()
+        )
+
     @staticmethod
     def stream(raw: bytes = b"") -> dict:
         return capture_bytes(raw)
@@ -1899,31 +2045,58 @@ class ContractComparisonTests(unittest.TestCase):
                 "terminal": {"status": "agent_settled", "settled": 1},
             }
         elif subject == "hermes":
-            lifecycle = {
-                "acquisition": "shell_hook_plus_process",
-                "completeness": "process_boundary_only",
-                "event_types": [],
-                "tool_executions": [],
-                "terminal": {"status": "process_exit", "returncode": returncode},
-            }
+            def hook(name: str, *, status: str | None = None) -> dict:
+                extra = {
+                    "tool_call_id": "call-1",
+                    "api_request_id": "session:turn:api:1",
+                    "telemetry_schema_version": adapters.HERMES_TELEMETRY_SCHEMA,
+                }
+                if status is not None:
+                    extra["status"] = status
+                return {
+                    "hook_event_name": name,
+                    "tool_name": "write_file",
+                    "tool_input": {
+                        "path": "/workspace/shared.txt",
+                        "content": EXPECTED_CONTENT.decode("utf-8"),
+                    },
+                    "extra": extra,
+                }
+            stdout = b"done\n"
+            sidecar = jsonl(
+                hook("pre_tool_call"),
+                hook("post_tool_call", status="ok"),
+            )
+            lifecycle, _ = adapters._normalize_hermes(
+                stdout, sidecar, Path("/workspace"), returncode
+            )
         else:
+            identity = comparator._declared_subject_identity("deepseek")
             records = [
-                {"type": "session", "version": 0},
+                {"type": "session", "version": 0, "cwd": "/workspace"},
                 {"type": "turn/start", "seq": 0},
-                {"type": "request/context", "seq": 1},
+                {
+                    "type": "request/context",
+                    "seq": 1,
+                    "data": {
+                        "provider": identity["provider"],
+                        "model": identity["model"],
+                    },
+                },
                 {
                     "type": "turn/end", "seq": 2,
                     "data": {"reason": {"kind": "completed"}},
                 },
             ]
             sidecar = jsonl(*records)
-            lifecycle = {
-                "acquisition": "native_persisted_jsonl_plus_process",
-                "completeness": "native_terminal_event",
-                "event_types": [record["type"] for record in records[1:]],
-                "tool_executions": [],
-                "terminal": {"status": "completed", "returncode": returncode},
-            }
+            lifecycle, _ = adapters._normalize_deepseek(
+                sidecar,
+                Path("/workspace"),
+                returncode,
+                str(identity["provider"]),
+                str(identity["model"]),
+            )
+        lifecycle["normalizer_errors"] = []
         return stdout, sidecar, lifecycle
 
     @staticmethod
@@ -2122,6 +2295,7 @@ class ContractComparisonTests(unittest.TestCase):
             )
         if complaints:
             raise AssertionError(f"invalid {subject} repair fixture: {complaints}")
+        lifecycle["normalizer_errors"] = []
         executions = lifecycle["tool_executions"]
         return stdout, sidecar, lifecycle, executions
 
@@ -2254,6 +2428,10 @@ class ContractComparisonTests(unittest.TestCase):
             "forwarded_signals": [],
             "argv": argv,
         })
+        projection = comparator._lifecycle_projection(subject, capture)
+        if projection is None:
+            raise AssertionError(f"missing {subject} lifecycle projection")
+        lifecycle, normalizer_complaints = projection
         identity = comparator._declared_subject_identity(subject)
         _, model_profile = comparator._active_model_profile()
         adapter = {
@@ -2323,7 +2501,10 @@ class ContractComparisonTests(unittest.TestCase):
             "workspace": {"before": before, "after": after},
             "verdict": {
                 "passed": passed,
-                "errors": [] if passed else ["test measurement fault"],
+                "errors": [] if passed else [
+                    *normalizer_complaints,
+                    "test measurement fault",
+                ],
             },
             "outcome": {
                 "passed": passed,
@@ -2366,10 +2547,39 @@ class ContractComparisonTests(unittest.TestCase):
         outer["adapter"]["isolation"]["ambient_config"] = (
             adapters._ambient_config(subject, "guard")
         )
-        events = [
-            {"event": "loaded"},
-            {"event": "tool_call", "tool": "write", "decision": variant},
+        guarded_tool, shell_tool = adapters.GUARD_TOOLS[subject]
+        raw_events = [
+            {
+                "event": "loaded",
+                "guarded_tool": guarded_tool,
+                "shell_tool": shell_tool,
+                "pid": 1234,
+            },
+            {
+                "event": "tool_call",
+                "tool": guarded_tool,
+                "decision": variant,
+                **(
+                    {"tool_call_id": "call-1"}
+                    if subject in {"pi", "deepseek"}
+                    else {}
+                ),
+            },
         ] if evaluable else []
+        events = []
+        for raw_event in raw_events:
+            event = {
+                "schema": adapters.GUARD_RECEIPT_SCHEMA,
+                "subject": subject,
+                "mode": variant,
+                "run_id": self.GUARD_RUN_ID,
+                "key_id": adapters._guard_key_id(self.GUARD_PUBLIC_KEY),
+                **raw_event,
+            }
+            event["signature"] = adapters._guard_event_signature(
+                event, self.GUARD_PRIVATE_KEY
+            )
+            events.append(event)
         task_outcome = guard_outcome(
             _fixture_manifest(),
             _fixture_manifest(),
@@ -2381,6 +2591,12 @@ class ContractComparisonTests(unittest.TestCase):
         outer["adapter"]["outcome"] = task_outcome
         receipt = jsonl(*events)
         outer["adapter"]["oracle_evidence"] = {
+            "authentication": adapters._guard_authentication(
+                subject=subject,
+                mode=variant,
+                run_id=self.GUARD_RUN_ID,
+                public_key=self.GUARD_PUBLIC_KEY,
+            ),
             "guard_receipt": capture_bytes(receipt),
             "events": events,
         }
@@ -2396,6 +2612,30 @@ class ContractComparisonTests(unittest.TestCase):
         }
         return subject_runner.experiment_document(
             subject, "guard", variant, outer["adapter"]
+        )
+
+    def invalid_normalizer_outer(self, subject: str) -> dict:
+        """One honest negative whose complaints come only from retained raw."""
+        outer = self.outer(subject, passed=True)
+        adapter = outer["adapter"]
+        stream = "sidecar" if subject in {"hermes", "deepseek"} else "stdout"
+        if subject == "claude":
+            raw = jsonl(
+                {"type": "result", "subtype": "success", "is_error": False},
+                {"type": "system", "subtype": "init"},
+            )
+        else:
+            prior = comparator._capture_raw(adapter["capture"], stream)
+            assert prior is not None
+            raw = prior + b"not-json\n"
+        adapter["capture"][stream].update(capture_bytes(raw))
+        projection = comparator._lifecycle_projection(subject, adapter["capture"])
+        if projection is None or not projection[1]:
+            raise AssertionError(f"{subject} invalid fixture produced no complaint")
+        adapter["lifecycle"] = projection[0]
+        adapter["verdict"] = {"passed": False, "errors": list(projection[1])}
+        return subject_runner.experiment_document(
+            subject, "write", None, adapter
         )
 
     def repair_outer(self, subject: str) -> dict:
@@ -2985,6 +3225,77 @@ class ContractComparisonTests(unittest.TestCase):
             apparatus_result["errors"],
         )
 
+    def test_timeout_can_faithfully_precede_each_stream_overflow(self) -> None:
+        baseline = self.outer("codex", passed=True)["adapter"]["capture"]
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream):
+                evidence = json.loads(json.dumps(baseline))
+                limit = evidence["limits"][f"{stream}_bytes"]
+                evidence[stream]["source_bytes"] = limit + 1
+                evidence["overflow"][stream] = True
+                evidence.update({
+                    "returncode": -15,
+                    "termination_reason": "timeout",
+                    "timed_out": True,
+                })
+                errors: list[str] = []
+                state = comparator.verify_capture("codex", evidence, errors)
+                self.assertEqual([], errors)
+                self.assertIsNotNone(state)
+                assert state is not None
+                self.assertTrue(state.timed_out)
+                self.assertTrue(state.measurement_fault)
+
+    def test_capture_rejects_malformed_multiple_bound_claims(self) -> None:
+        cases = (
+            (
+                "timeout flag",
+                lambda evidence: evidence.update({
+                    "termination_reason": "timeout", "timed_out": False
+                }),
+                "timeout flag disagrees",
+            ),
+            (
+                "overflow without source bytes",
+                lambda evidence: (
+                    evidence.update({
+                        "termination_reason": "timeout", "timed_out": True
+                    }),
+                    evidence["overflow"].update({"stdout": True}),
+                ),
+                "stdout overflow disagrees with source bytes",
+            ),
+            (
+                "extra overflow under stream reason",
+                lambda evidence: (
+                    evidence.update({"termination_reason": "stdout_limit"}),
+                    evidence["overflow"].update({
+                        "stdout": True, "stderr": True
+                    }),
+                    evidence["stdout"].update({
+                        "source_bytes": evidence["limits"]["stdout_bytes"] + 1
+                    }),
+                    evidence["stderr"].update({
+                        "source_bytes": evidence["limits"]["stderr_bytes"] + 1
+                    }),
+                ),
+                "stderr overflow disagrees with termination reason",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                evidence = json.loads(json.dumps(
+                    self.outer("codex", passed=True)["adapter"]["capture"]
+                ))
+                mutate(evidence)
+                errors: list[str] = []
+                self.assertIsNone(
+                    comparator.verify_capture("codex", evidence, errors)
+                )
+                self.assertTrue(
+                    any(expected in error for error in errors), errors
+                )
+
     def test_hidden_capture_faults_fail_closed(self) -> None:
         def excess_source(subject: str, outer: dict) -> None:
             if subject == "codex":
@@ -3121,6 +3432,78 @@ class ContractComparisonTests(unittest.TestCase):
             contradicted["errors"],
         )
 
+    def test_comparator_rejects_schema_less_unsigned_guard_receipts(self) -> None:
+        def forge(subject: str, outer: dict) -> None:
+            if subject != "codex":
+                return
+            unsigned = [
+                {"event": "loaded"},
+                {
+                    "event": "tool_call",
+                    "tool": "apply_patch",
+                    "decision": "block",
+                },
+            ]
+            evidence = outer["adapter"]["oracle_evidence"]
+            evidence["events"] = unsigned
+            evidence["guard_receipt"] = capture_bytes(jsonl(*unsigned))
+
+        result = self.compare_mutation(
+            forge,
+            factory=lambda subject: self.guard_outer(subject, evaluable=True),
+        )
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains("receipt line 1 is unauthenticated", result["errors"])
+
+    def test_comparator_rejects_forged_guard_binding_and_signature(self) -> None:
+        mutations = (
+            (
+                "subject",
+                lambda evidence: evidence["authentication"].update({
+                    "subject": "claude"
+                }),
+                "authentication proof disagrees with run",
+            ),
+            (
+                "mode",
+                lambda evidence: evidence["authentication"].update({
+                    "mode": "allow"
+                }),
+                "authentication proof disagrees with run",
+            ),
+            (
+                "run id",
+                lambda evidence: evidence["authentication"].update({
+                    "run_id": "00" * 16
+                }),
+                "receipt line 1 is unauthenticated",
+            ),
+            (
+                "signature",
+                lambda evidence: (
+                    evidence["events"][0].update({"signature": "0" * 512}),
+                    evidence.update({
+                        "guard_receipt": capture_bytes(
+                            jsonl(*evidence["events"])
+                        )
+                    }),
+                ),
+                "receipt line 1 is unauthenticated",
+            ),
+        )
+        for name, mutation, expected in mutations:
+            with self.subTest(name=name):
+                result = self.compare_mutation(
+                    lambda subject, outer: mutation(
+                        outer["adapter"]["oracle_evidence"]
+                    ) if subject == "codex" else None,
+                    factory=lambda subject: self.guard_outer(
+                        subject, evaluable=True
+                    ),
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
+
     def test_lifecycle_claims_are_bound_to_subject_raw_evidence(self) -> None:
         result = self.compare_mutation(
             lambda _subject, outer: outer["adapter"].update({
@@ -3139,6 +3522,48 @@ class ContractComparisonTests(unittest.TestCase):
             self.guard_outer(
                 "claude", evaluable=False, adapter_passed=True
             )["verdict"]["passed"]
+        )
+
+    def test_retained_normalizer_complaints_are_bound_to_lifecycle_and_verdict(
+        self,
+    ) -> None:
+        honest = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=self.invalid_normalizer_outer,
+        )
+        self.assertTrue(honest["contract_passed"], honest["errors"])
+
+        cleared = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"]["verdict"].update({
+                "errors": ["forged unrelated adapter error"]
+            }),
+            factory=self.invalid_normalizer_outer,
+        )
+        self.assertFalse(cleared["contract_passed"])
+        self.assert_error_contains(
+            "verdict omits retained normalizer complaints", cleared["errors"]
+        )
+
+        added = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"]["lifecycle"][
+                "normalizer_errors"
+            ].append("forged extra complaint"),
+            factory=self.invalid_normalizer_outer,
+        )
+        self.assertFalse(added["contract_passed"])
+        self.assert_error_contains(
+            "lifecycle disagrees with retained raw evidence", added["errors"]
+        )
+
+        mutated = self.compare_mutation(
+            lambda _subject, outer: outer["adapter"]["lifecycle"][
+                "normalizer_errors"
+            ].__setitem__(0, "forged replacement complaint"),
+            factory=self.invalid_normalizer_outer,
+        )
+        self.assertFalse(mutated["contract_passed"])
+        self.assert_error_contains(
+            "lifecycle disagrees with retained raw evidence", mutated["errors"]
         )
 
     def test_every_execution_fact_is_rederived_from_retained_raw(self) -> None:
@@ -3923,8 +4348,11 @@ class GuardHookTests(unittest.TestCase):
     function while the harnesses test a program.
     """
 
-    CAPABILITY = "ef" * 32
     RUN_ID = "12" * 16
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.PUBLIC_KEY, cls.PRIVATE_KEY = adapters._generate_guard_keypair()
 
     def run_hook(
         self, subject: str, event: str, payload: dict | None, mode: str | None
@@ -3935,7 +4363,7 @@ class GuardHookTests(unittest.TestCase):
             installed = adapters._materialize_guard(
                 "guard_hook.py",
                 root / "guard_hook.py",
-                capability=self.CAPABILITY,
+                private_key=self.PRIVATE_KEY,
                 run_id=self.RUN_ID,
             )
             environment = dict(os.environ)
@@ -4029,7 +4457,7 @@ class GuardHookTests(unittest.TestCase):
                 self.assertEqual(self.RUN_ID, events[0]["run_id"])
                 self.assertEqual(
                     adapters._guard_event_signature(
-                        events[0], self.CAPABILITY
+                        events[0], self.PRIVATE_KEY
                     ),
                     events[0]["signature"],
                 )

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
@@ -42,8 +41,9 @@ import sys
 from typing import Any
 
 
-SCHEMA = "cross-harness-guard-event/v0.2"
-CAPABILITY = "__HWB_GUARD_CAPABILITY__"
+SCHEMA = "cross-harness-guard-event/v0.3"
+PRIVATE_MODULUS = "__HWB_GUARD_PRIVATE_MODULUS__"
+PRIVATE_EXPONENT = "__HWB_GUARD_PRIVATE_EXPONENT__"
 RUN_ID = "__HWB_GUARD_RUN_ID__"
 DENIAL_REASON = "Harness Workbench guard denied the write tool"
 
@@ -98,7 +98,7 @@ def _emit(receipt: Path, subject: str, mode: str, event: dict[str, Any]) -> None
         "subject": subject,
         "mode": mode,
         "run_id": RUN_ID,
-        "capability_id": hashlib.sha256(CAPABILITY.encode("ascii")).hexdigest(),
+        "key_id": hashlib.sha256(bytes.fromhex(PRIVATE_MODULUS)).hexdigest(),
         **event,
     }
     canonical = json.dumps(
@@ -107,9 +107,20 @@ def _emit(receipt: Path, subject: str, mode: str, event: dict[str, Any]) -> None
         sort_keys=True,
         separators=(",", ":"),
     )
-    signature = hmac.new(
-        CAPABILITY.encode("ascii"), canonical.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    modulus = int(PRIVATE_MODULUS, 16)
+    byte_width = (modulus.bit_length() + 7) // 8
+    digest_info = bytes.fromhex(
+        "3031300d060960864801650304020105000420"
+    ) + hashlib.sha256(canonical.encode("utf-8")).digest()
+    encoded = (
+        b"\x00\x01"
+        + b"\xff" * (byte_width - len(digest_info) - 3)
+        + b"\x00"
+        + digest_info
+    )
+    signature = pow(
+        int.from_bytes(encoded, "big"), int(PRIVATE_EXPONENT, 16), modulus
+    ).to_bytes(byte_width, "big").hex()
     line = json.dumps(
         {**authenticated, "signature": signature},
         ensure_ascii=False,

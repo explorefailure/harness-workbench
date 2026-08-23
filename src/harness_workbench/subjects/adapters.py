@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
@@ -50,8 +49,11 @@ from workloads import (
 
 HERE = Path(__file__).resolve().parent
 
-GUARD_RECEIPT_SCHEMA = "cross-harness-guard-event/v0.2"
-GUARD_CAPABILITY_PLACEHOLDER = "__HWB_GUARD_CAPABILITY__"
+GUARD_RECEIPT_SCHEMA = "cross-harness-guard-event/v0.3"
+GUARD_AUTH_SCHEMA = "cross-harness-guard-auth/v0.1"
+GUARD_SIGNATURE_ALGORITHM = "rsa-pkcs1v15-sha256"
+GUARD_PRIVATE_MODULUS_PLACEHOLDER = "__HWB_GUARD_PRIVATE_MODULUS__"
+GUARD_PRIVATE_EXPONENT_PLACEHOLDER = "__HWB_GUARD_PRIVATE_EXPONENT__"
 GUARD_RUN_ID_PLACEHOLDER = "__HWB_GUARD_RUN_ID__"
 GUARD_TOOLS = {
     "claude": ("Write", "Bash"),
@@ -382,41 +384,138 @@ def workspace_manifest(root: Path) -> list[dict[str, Any]]:
     represented by path, mode, and an explicit kind; none is opened or followed.
     """
     entries: list[dict[str, Any]] = []
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
 
-    def visit(directory: Path) -> None:
-        with os.scandir(directory) as iterator:
-            children = sorted(iterator, key=lambda child: child.name)
-        for child in children:
-            path = Path(child.path)
-            node_stat = child.stat(follow_symlinks=False)
+    if nofollow == 0 or directory_flag == 0:
+        raise AdapterError(
+            "workspace snapshot requires descriptor-relative no-follow traversal"
+        )
+
+    def identity(node_stat: os.stat_result) -> tuple[int, ...]:
+        return (
+            node_stat.st_dev,
+            node_stat.st_ino,
+            node_stat.st_mode,
+            node_stat.st_size,
+            node_stat.st_mtime_ns,
+            node_stat.st_ctime_ns,
+        )
+
+    def changed(path: str, error: OSError | None = None) -> AdapterError:
+        detail = f": {error}" if error is not None else ""
+        return AdapterError(f"workspace changed during snapshot at {path}{detail}")
+
+    def open_at(name: str, flags: int, directory_fd: int, path: str) -> int:
+        try:
+            return os.open(name, flags | nofollow | cloexec, dir_fd=directory_fd)
+        except OSError as error:
+            raise changed(path, error) from error
+
+    def visit(directory_fd: int, prefix: str) -> None:
+        try:
+            initial_directory = os.fstat(directory_fd)
+            names = sorted(os.listdir(directory_fd))
+        except OSError as error:
+            raise changed(prefix or ".", error) from error
+        for name in names:
+            relative = f"{prefix}/{name}" if prefix else name
+            try:
+                before_open = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+            except OSError as error:
+                raise changed(relative, error) from error
             entry: dict[str, Any] = {
-                "path": path.relative_to(root).as_posix(),
-                "mode": stat.S_IMODE(node_stat.st_mode),
+                "path": relative,
+                "mode": stat.S_IMODE(before_open.st_mode),
             }
-            if stat.S_ISREG(node_stat.st_mode):
-                entry.update({
-                    "size": node_stat.st_size,
-                    "sha256": digest_file(path),
-                })
-            elif stat.S_ISDIR(node_stat.st_mode):
-                entry["kind"] = "directory"
-            elif stat.S_ISLNK(node_stat.st_mode):
+            if stat.S_ISREG(before_open.st_mode):
+                descriptor = open_at(name, os.O_RDONLY, directory_fd, relative)
+                try:
+                    opened = os.fstat(descriptor)
+                    if not stat.S_ISREG(opened.st_mode) or (
+                        opened.st_dev, opened.st_ino
+                    ) != (before_open.st_dev, before_open.st_ino):
+                        raise changed(relative)
+                    digest = hashlib.sha256()
+                    size = 0
+                    while True:
+                        chunk = os.read(descriptor, 1024 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        digest.update(chunk)
+                    after_read = os.fstat(descriptor)
+                    if (
+                        identity(opened) != identity(after_read)
+                        or size != opened.st_size
+                    ):
+                        raise changed(relative)
+                    entry.update({
+                        "size": size,
+                        "sha256": digest.hexdigest(),
+                    })
+                finally:
+                    os.close(descriptor)
+            elif stat.S_ISDIR(before_open.st_mode):
+                descriptor = open_at(
+                    name,
+                    os.O_RDONLY | directory_flag,
+                    directory_fd,
+                    relative,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    if not stat.S_ISDIR(opened.st_mode) or (
+                        opened.st_dev, opened.st_ino
+                    ) != (before_open.st_dev, before_open.st_ino):
+                        raise changed(relative)
+                    entry["kind"] = "directory"
+                    entries.append(entry)
+                    visit(descriptor, relative)
+                    if identity(opened) != identity(os.fstat(descriptor)):
+                        raise changed(relative)
+                finally:
+                    os.close(descriptor)
+                continue
+            elif stat.S_ISLNK(before_open.st_mode):
                 entry["kind"] = "symlink"
-            elif stat.S_ISFIFO(node_stat.st_mode):
+            elif stat.S_ISFIFO(before_open.st_mode):
                 entry["kind"] = "fifo"
-            elif stat.S_ISSOCK(node_stat.st_mode):
+            elif stat.S_ISSOCK(before_open.st_mode):
                 entry["kind"] = "socket"
-            elif stat.S_ISBLK(node_stat.st_mode):
+            elif stat.S_ISBLK(before_open.st_mode):
                 entry["kind"] = "block_device"
-            elif stat.S_ISCHR(node_stat.st_mode):
+            elif stat.S_ISCHR(before_open.st_mode):
                 entry["kind"] = "character_device"
             else:
                 entry["kind"] = "other"
+            try:
+                if identity(before_open) != identity(os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )):
+                    raise changed(relative)
+            except OSError as error:
+                raise changed(relative, error) from error
             entries.append(entry)
-            if stat.S_ISDIR(node_stat.st_mode):
-                visit(path)
+        try:
+            if names != sorted(os.listdir(directory_fd)) or identity(
+                initial_directory
+            ) != identity(os.fstat(directory_fd)):
+                raise changed(prefix or ".")
+        except OSError as error:
+            raise changed(prefix or ".", error) from error
 
-    visit(root)
+    try:
+        root_fd = os.open(root, os.O_RDONLY | directory_flag | nofollow | cloexec)
+    except OSError as error:
+        raise changed(".", error) from error
+    try:
+        visit(root_fd, "")
+    finally:
+        os.close(root_fd)
     return sorted(entries, key=lambda entry: entry["path"])
 
 
@@ -442,11 +541,164 @@ def _write_private_text(path: Path, text: str) -> None:
         handle.write(text)
 
 
+def _write_private_bytes(path: Path, data: bytes) -> None:
+    """Write one already-snapshotted secret file with owner-only permissions."""
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    with os.fdopen(descriptor, "wb") as handle:
+        # The bytes are the exact credential snapshot whose values were added
+        # to the capture redaction set; never reopen a mutable source path.
+        # codeql[py/clear-text-storage-sensitive-data]
+        handle.write(data)
+
+
 GUARD_HOOK_INTERPRETER = "python3.11"
 # Codex refuses to run a hook it has no persisted `trusted_hash` for, and
 # announces that stand-down as an `error` item on its own stream. Named once so
 # the flag and the stream check that forgives its notice cannot drift apart.
 HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
+
+
+_RSA_SHA256_DIGEST_INFO = bytes.fromhex(
+    "3031300d060960864801650304020105000420"
+)
+
+
+def _is_probable_prime(candidate: int, *, rounds: int = 32) -> bool:
+    """Miller-Rabin for the per-run receipt signing key."""
+    small_primes = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47)
+    for prime in small_primes:
+        if candidate == prime:
+            return True
+        if candidate % prime == 0:
+            return False
+    divisor = candidate - 1
+    power = 0
+    while divisor % 2 == 0:
+        power += 1
+        divisor //= 2
+    for _ in range(rounds):
+        base = secrets.randbelow(candidate - 3) + 2
+        value = pow(base, divisor, candidate)
+        if value in (1, candidate - 1):
+            continue
+        for _ in range(power - 1):
+            value = pow(value, 2, candidate)
+            if value == candidate - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _generate_rsa_prime() -> int:
+    while True:
+        candidate = secrets.randbits(1024) | (1 << 1023) | 1
+        if _is_probable_prime(candidate):
+            return candidate
+
+
+def _guard_key_id(public_key: dict[str, Any]) -> str:
+    modulus = public_key.get("n")
+    if type(modulus) is not str:
+        return ""
+    try:
+        raw = bytes.fromhex(modulus)
+    except ValueError:
+        return ""
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _generate_guard_keypair() -> tuple[dict[str, Any], dict[str, str]]:
+    """Create one RSA-2048 key used only for this disposable guard run."""
+    public_exponent = 65537
+    while True:
+        prime_one = _generate_rsa_prime()
+        prime_two = _generate_rsa_prime()
+        if prime_one == prime_two:
+            continue
+        modulus = prime_one * prime_two
+        totient = (prime_one - 1) * (prime_two - 1)
+        if modulus.bit_length() == 2048 and totient % public_exponent:
+            break
+    private_exponent = pow(public_exponent, -1, totient)
+    modulus_hex = f"{modulus:x}"
+    return (
+        {"n": modulus_hex, "e": public_exponent},
+        {"n": modulus_hex, "d": f"{private_exponent:x}"},
+    )
+
+
+def _guard_signature_payload(event: dict[str, Any], byte_width: int) -> bytes:
+    unsigned = {key: value for key, value in event.items() if key != "signature"}
+    canonical = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest_info = _RSA_SHA256_DIGEST_INFO + hashlib.sha256(canonical).digest()
+    padding_size = byte_width - len(digest_info) - 3
+    if padding_size < 8:
+        raise ValueError("RSA modulus is too short for a SHA-256 signature")
+    return b"\x00\x01" + (b"\xff" * padding_size) + b"\x00" + digest_info
+
+
+def _guard_event_signature(
+    event: dict[str, Any], private_key: dict[str, str]
+) -> str:
+    modulus = int(private_key["n"], 16)
+    private_exponent = int(private_key["d"], 16)
+    byte_width = (modulus.bit_length() + 7) // 8
+    encoded = _guard_signature_payload(event, byte_width)
+    signature = pow(int.from_bytes(encoded, "big"), private_exponent, modulus)
+    return signature.to_bytes(byte_width, "big").hex()
+
+
+def _verify_guard_event_signature(
+    event: dict[str, Any], public_key: dict[str, Any]
+) -> bool:
+    try:
+        modulus_hex = public_key["n"]
+        public_exponent = public_key["e"]
+        signature_hex = event["signature"]
+        if (
+            type(modulus_hex) is not str
+            or type(public_exponent) is not int
+            or public_exponent != 65537
+            or type(signature_hex) is not str
+        ):
+            return False
+        modulus = int(modulus_hex, 16)
+        byte_width = (modulus.bit_length() + 7) // 8
+        if modulus.bit_length() != 2048 or len(signature_hex) != byte_width * 2:
+            return False
+        signature = int(signature_hex, 16)
+        if signature >= modulus:
+            return False
+        recovered = pow(signature, public_exponent, modulus).to_bytes(
+            byte_width, "big"
+        )
+        return recovered == _guard_signature_payload(event, byte_width)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _guard_authentication(
+    *, subject: str, mode: str, run_id: str, public_key: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "schema": GUARD_AUTH_SCHEMA,
+        "algorithm": GUARD_SIGNATURE_ALGORITHM,
+        "subject": subject,
+        "mode": mode,
+        "run_id": run_id,
+        "key_id": _guard_key_id(public_key),
+        "public_key": public_key,
+    }
 
 
 # The isolation the record DISCLOSES, per subject and per workload. Two of these
@@ -466,34 +718,38 @@ def _materialize_guard(
     source_name: str,
     installed: Path,
     *,
-    capability: str,
+    private_key: dict[str, str],
     run_id: str,
 ) -> Path:
-    """Write one run-bound guard without publishing its signing key in env.
+    """Write one run-bound guard without publishing its private key in env.
 
     Guard subjects deliberately retain a shell, and that shell inherits the
     receipt path and mode.  Those values therefore cannot authenticate a
-    receipt.  The signing capability is materialized into the per-run guard
+    receipt.  The signing key is materialized into the per-run guard
     source instead; it is absent from the subject environment and the retained
     evidence, while the adapter keeps its own copy for verification.
     """
     source = (HERE / source_name).read_text(encoding="utf-8")
-    if source.count(GUARD_CAPABILITY_PLACEHOLDER) != 1:
-        raise AdapterError(
-            f"{source_name} does not contain exactly one guard capability placeholder"
-        )
-    if source.count(GUARD_RUN_ID_PLACEHOLDER) != 1:
-        raise AdapterError(
-            f"{source_name} does not contain exactly one guard run-id placeholder"
-        )
-    rendered = source.replace(GUARD_CAPABILITY_PLACEHOLDER, capability).replace(
-        GUARD_RUN_ID_PLACEHOLDER, run_id
-    )
+    replacements = {
+        GUARD_PRIVATE_MODULUS_PLACEHOLDER: private_key["n"],
+        GUARD_PRIVATE_EXPONENT_PLACEHOLDER: private_key["d"],
+        GUARD_RUN_ID_PLACEHOLDER: run_id,
+    }
+    for placeholder in replacements:
+        if source.count(placeholder) != 1:
+            raise AdapterError(
+                f"{source_name} does not contain exactly one {placeholder} placeholder"
+            )
+    rendered = source
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
     _write_private_text(installed, rendered)
     return installed
 
 
-def _install_guard_hook(root: Path, *, capability: str, run_id: str) -> Path:
+def _install_guard_hook(
+    root: Path, *, private_key: dict[str, str], run_id: str
+) -> Path:
     """Put the shared guard command beside the run and return its path.
 
     Beside the run and never inside the workspace. All three command-hook
@@ -504,7 +760,7 @@ def _install_guard_hook(root: Path, *, capability: str, run_id: str) -> Path:
     """
     installed = root / "guard_hook.py"
     return _materialize_guard(
-        "guard_hook.py", installed, capability=capability, run_id=run_id
+        "guard_hook.py", installed, private_key=private_key, run_id=run_id
     )
 
 
@@ -1712,7 +1968,7 @@ def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
     return paths[0], []
 
 
-def _credential_file_values(path: Path) -> tuple[str, ...]:
+def _credential_file_values(raw: bytes, *, source: Path) -> tuple[str, ...]:
     """Collect credential-file strings before any process can echo them.
 
     Codex's isolated guard home must copy ``auth.json``. Those values need not
@@ -1721,10 +1977,10 @@ def _credential_file_values(path: Path) -> tuple[str, ...]:
     token field names is brittle across client credential-format changes.
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(raw.decode("utf-8", errors="strict"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise AdapterError(
-            f"credential file is not readable JSON: {path}: {error}"
+            f"credential file is not readable JSON: {source}: {error}"
         ) from error
 
     found: set[str] = set()
@@ -1744,24 +2000,13 @@ def _credential_file_values(path: Path) -> tuple[str, ...]:
     return tuple(sorted(found, key=len, reverse=True))
 
 
-def _guard_event_signature(event: dict[str, Any], capability: str) -> str:
-    unsigned = {key: value for key, value in event.items() if key != "signature"}
-    canonical = json.dumps(
-        unsigned,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hmac.new(capability.encode("ascii"), canonical, hashlib.sha256).hexdigest()
-
-
 def _guard_events(
     path: Path,
     *,
     subject: str,
     mode: str,
     run_id: str,
-    capability: str,
+    public_key: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Whatever the interceptor wrote about itself, and complaints about it.
 
@@ -1774,15 +2019,29 @@ def _guard_events(
         return [], ["guard receipt file was never created"]
     parsed, errors = parse_jsonl_objects(path.read_bytes())
     events: list[dict[str, Any]] = []
-    capability_id = hashlib.sha256(capability.encode("ascii")).hexdigest()
     expected = {
         "schema": GUARD_RECEIPT_SCHEMA,
         "subject": subject,
         "mode": mode,
         "run_id": run_id,
-        "capability_id": capability_id,
+        "key_id": _guard_key_id(public_key),
     }
     for index, event in enumerate(parsed, start=1):
+        expected_shape = {
+            "schema", "subject", "mode", "run_id", "key_id", "event",
+            "signature",
+        }
+        if event.get("event") == "loaded":
+            expected_shape |= {"guarded_tool", "shell_tool", "pid"}
+        elif event.get("event") == "tool_call":
+            expected_shape |= {"tool", "decision"}
+            if subject in {"pi", "deepseek"}:
+                expected_shape.add("tool_call_id")
+        if set(event) != expected_shape:
+            errors.append(
+                f"guard receipt line {index} has an invalid event shape"
+            )
+            continue
         for field, value in expected.items():
             if event.get(field) != value:
                 errors.append(
@@ -1791,12 +2050,9 @@ def _guard_events(
                 )
                 break
         else:
-            signature = event.get("signature")
-            if not isinstance(signature, str) or not hmac.compare_digest(
-                signature, _guard_event_signature(event, capability)
-            ):
+            if not _verify_guard_event_signature(event, public_key):
                 errors.append(
-                    f"guard receipt line {index} has an invalid capability signature"
+                    f"guard receipt line {index} has an invalid public-key signature"
                 )
                 continue
             event_name = event.get("event")
@@ -1832,7 +2088,16 @@ def _guard_events(
                     )
                     continue
                 expected_decision = mode if tool == guarded_tool else "not_guarded"
-                if event.get("decision") != expected_decision:
+                if (
+                    event.get("decision") != expected_decision
+                    or (
+                        subject in {"pi", "deepseek"}
+                        and (
+                            not isinstance(event.get("tool_call_id"), str)
+                            or not event["tool_call_id"]
+                        )
+                    )
+                ):
                     errors.append(
                         f"guard receipt line {index} has incoherent decision"
                     )
@@ -1893,14 +2158,16 @@ def capture(
         # after-manifest would make the instrumentation part of the effect it
         # is supposed to be measuring.
         guard_receipt = root / "guard-receipt.jsonl"
-        guard_capability: str | None = None
+        guard_public_key: dict[str, Any] | None = None
+        guard_private_key: dict[str, str] | None = None
         guard_run_id: str | None = None
         if workload == "guard":
-            guard_capability = secrets.token_hex(32)
+            guard_public_key, guard_private_key = _generate_guard_keypair()
             guard_run_id = secrets.token_hex(16)
             environment["HWB_GUARD_MODE"] = str(variant)
             environment["HWB_GUARD_RECEIPT"] = str(guard_receipt)
         codex_credential: Path | None = None
+        codex_credential_snapshot: bytes | None = None
         credential_file_redactions: tuple[str, ...] = ()
         if subject == "codex" and workload == "guard":
             source_home = Path(
@@ -1912,10 +2179,19 @@ def capture(
                     f"codex credential not found at {codex_credential}; the guard"
                     " arm cannot authenticate from an isolated CODEX_HOME"
                 )
+            try:
+                codex_credential_snapshot = codex_credential.read_bytes()
+            except OSError as error:
+                raise AdapterError(
+                    f"codex credential is not readable: {codex_credential}: {error}"
+                ) from error
             # Derive this before the repair pre-test and the subject process so
             # every evidence envelope shares the complete auth-file redaction
             # set, including values found nowhere in the environment.
-            credential_file_redactions = _credential_file_values(codex_credential)
+            credential_file_redactions = _credential_file_values(
+                codex_credential_snapshot,
+                source=codex_credential,
+            )
         if subject in CONFIGURABLE_MODEL_SUBJECTS:
             # The generic OpenAI-compatible provider requires a key-shaped value
             # even though the pinned Ollama endpoint does not authenticate it.
@@ -1939,7 +2215,13 @@ def capture(
             for name in {key_name, str(identity["model_subject_key_env"])}:
                 environment[name] = secret
         redactions = tuple(sorted(
-            set(credential_values(environment)) | set(credential_file_redactions),
+            set(credential_values(environment))
+            | set(credential_file_redactions)
+            | (
+                {guard_private_key["d"]}
+                if guard_private_key is not None
+                else set()
+            ),
             key=len,
             reverse=True,
         ))
@@ -1970,12 +2252,12 @@ def capture(
         if subject == "claude":
             guard_settings: Path | None = None
             if workload == "guard":
-                assert guard_capability is not None and guard_run_id is not None
+                assert guard_private_key is not None and guard_run_id is not None
                 guard_settings = root / "claude_guard_settings.json"
                 guard_settings.write_text(
                     _claude_guard_settings(_install_guard_hook(
                         root,
-                        capability=guard_capability,
+                        private_key=guard_private_key,
                         run_id=guard_run_id,
                     )),
                     encoding="utf-8",
@@ -2006,7 +2288,7 @@ def capture(
             argv = _claude_command(identity, workload, guard_settings)
         elif subject == "codex":
             if workload == "guard":
-                assert guard_capability is not None and guard_run_id is not None
+                assert guard_private_key is not None and guard_run_id is not None
                 codex_home = root / "codex-home"
                 codex_home.mkdir()
                 # Only the credential is carried over from the host home, and
@@ -2016,20 +2298,20 @@ def capture(
                 # scored as a perfectly contained block arm. Copying one file
                 # keeps every other ambient thing (config.toml, AGENTS.md,
                 # sessions, plugins) out by simply not being there.
-                # `copy2` carries the source mode across, and the source is
-                # 0600 -- but that is the source's property, not this copy's
-                # guarantee. Set it explicitly so the copy is owner-only even
-                # if the original is ever loosened. `.gitignore` covers the
+                # The bytes were snapshotted once before redactions were
+                # derived. Writing that same snapshot here closes the rotation
+                # window where a newly copied token was absent from the
+                # redaction set. The new file is created owner-only regardless
+                # of the source mode. `.gitignore` covers the
                 # `.hwb-*` root for the case no code here can reach: a SIGKILL
                 # that skips cleanup and leaves this file in the working tree.
                 copied = codex_home / "auth.json"
-                assert codex_credential is not None
-                shutil.copy2(codex_credential, copied)
-                copied.chmod(0o600)
+                assert codex_credential_snapshot is not None
+                _write_private_bytes(copied, codex_credential_snapshot)
                 (codex_home / "config.toml").write_text(
                     _codex_guard_config(_install_guard_hook(
                         root,
-                        capability=guard_capability,
+                        private_key=guard_private_key,
                         run_id=guard_run_id,
                     )),
                     encoding="utf-8",
@@ -2061,12 +2343,12 @@ def capture(
                 secret,
             )
             if workload == "guard":
-                assert guard_capability is not None and guard_run_id is not None
+                assert guard_private_key is not None and guard_run_id is not None
                 hermes_config = _hermes_guard_hooks(
                     hermes_config,
                     _install_guard_hook(
                         root,
-                        capability=guard_capability,
+                        private_key=guard_private_key,
                         run_id=guard_run_id,
                     ),
                 )
@@ -2114,7 +2396,7 @@ def capture(
             environment["PI_CODING_AGENT_DIR"] = str(pi_config)
             extension: Path | None = None
             if workload == "guard":
-                assert guard_capability is not None and guard_run_id is not None
+                assert guard_private_key is not None and guard_run_id is not None
                 # Copied beside the run rather than into the workspace: an
                 # interceptor sitting in the workspace would appear in both
                 # manifests and become part of the effect the oracle measures.
@@ -2122,7 +2404,7 @@ def capture(
                 _materialize_guard(
                     "guard_extension.ts",
                     extension,
-                    capability=guard_capability,
+                    private_key=guard_private_key,
                     run_id=guard_run_id,
                 )
             argv = _pi_command(identity, workload, extension)
@@ -2155,7 +2437,7 @@ def capture(
             evidence_kind = "native_persisted_session_jsonl"
             guard_plugin: Path | None = None
             if workload == "guard":
-                assert guard_capability is not None and guard_run_id is not None
+                assert guard_private_key is not None and guard_run_id is not None
                 # Beside the run, never in the workspace: a plugin sitting in
                 # the workspace would appear in both manifests and become part
                 # of the effect it exists to observe.
@@ -2163,7 +2445,7 @@ def capture(
                 _materialize_guard(
                     "guard_plugin.mjs",
                     guard_plugin,
-                    capability=guard_capability,
+                    private_key=guard_private_key,
                     run_id=guard_run_id,
                 )
             argv = _deepseek_command(root, workload, guard_plugin)
@@ -2237,6 +2519,10 @@ def capture(
                 str(identity["provider"]),
                 str(identity["model"]),
             )
+        # Normalizer complaints are part of the raw-evidence projection, not
+        # free-form verdict prose. Retain them beside that projection before
+        # unrelated capture/oracle faults are appended to the adapter verdict.
+        lifecycle["normalizer_errors"] = list(adapter_errors)
         adapter_errors.extend(evidence_errors)
         adapter_errors.extend(oracle_process_errors)
         # No second complaint for the sidecar: `capture_file` already put the
@@ -2252,13 +2538,13 @@ def capture(
         )
         guard_events: list[dict[str, Any]] = []
         if workload == "guard":
-            assert guard_capability is not None and guard_run_id is not None
+            assert guard_public_key is not None and guard_run_id is not None
             guard_events, guard_errors = _guard_events(
                 guard_receipt,
                 subject=subject,
                 mode=str(variant),
                 run_id=guard_run_id,
-                capability=guard_capability,
+                public_key=guard_public_key,
             )
             task_outcome = guard_outcome(
                 before, after, variant=str(variant), events=guard_events
@@ -2267,6 +2553,12 @@ def capture(
             # measurement is unreadable, not that the subject did anything.
             adapter_errors.extend(guard_errors)
             oracle_evidence = {
+                "authentication": _guard_authentication(
+                    subject=subject,
+                    mode=str(variant),
+                    run_id=guard_run_id,
+                    public_key=guard_public_key,
+                ),
                 "guard_receipt": capture_bytes(
                     guard_receipt.read_bytes() if guard_receipt.is_file() else b"",
                     redactions=redactions,

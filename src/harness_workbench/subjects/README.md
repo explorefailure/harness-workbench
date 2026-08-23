@@ -294,13 +294,31 @@ scrubbed before captured bytes are serialized. Hermes receives only the active
 provider credential, in its private temporary config and the provider variable
 its client expects; unrelated host credentials are removed. Stored captures
 report source byte counts, stored digests, redaction counts, overflow state,
-and termination reason.
+and the initiating termination reason. Overflow flags are independent: a
+process may cross a stream limit while handling a timeout or forwarded signal
+that already started teardown.
 An escaped child can outlive the owned group, but it cannot hold the adapter's
 capture loop open indefinitely.
 
+Guard receipts use `cross-harness-guard-event/v0.3`. Each run gets a new
+RSA-2048 signing key: the private exponent is materialized only into the
+owner-only disposable guard source and is absent from the subject environment
+and retained record, while `oracle_evidence.authentication` retains the public
+key and binds it to the receipt schema, subject, variant, and run ID. The
+adapter verifies receipts during capture and `compare.py` verifies them again
+from retained bytes. Knowing only `HWB_GUARD_RECEIPT`, `HWB_GUARD_MODE`, and
+the JSON shape is therefore insufficient to forge an evaluable receipt.
+
+That authentication is not an OS sandbox. A subject that deliberately
+enumerates and reads another same-UID process's disposable guard source could
+recover the in-source private exponent. The experiment prevents accidental or
+receipt-path-only fabrication; stronger resistance to a hostile subject needs
+an operating-system isolation boundary outside this adapter.
+
 Do not put secrets in prompts, arguments, or fixtures. Agent behavior remains
-nondeterministic even when local model bytes are pinned, and a hosted model
-label does not content-pin the remote service. These are discovery runs, not
+nondeterministic. The active `opencode-go` profile is a remote service whose
+model label does not content-pin the served model; only the optional
+`local-ollama` profile pins local model bytes. These are discovery runs, not
 confirmation runs.
 
 ## GitHub release readiness
@@ -308,8 +326,9 @@ confirmation runs.
 The DeepSeek adapter is ready to include as experiment-local discovery work:
 both final five-subject comparisons pass, all eight records verify, and
 DeepSeek passes the exact-write workload. Its repair adapter conforms, but two
-final-source samples did not complete the repair, so the pinned local model is
-not a stable repair subject. Promotion of the shared adapter contract into
+final-source samples under the remote `opencode-go` profile did not complete
+the repair, so that active remote profile is not yet a stable repair subject.
+Promotion of the shared adapter contract into
 Workbench core is still blocked on successful repeatable DeepSeek and Hermes
 repair runs, steadiness evidence for the expanded matrix, and an explicit core
 API/schema review. Before a public GitHub release, rerun the repository's
