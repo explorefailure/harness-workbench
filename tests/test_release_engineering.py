@@ -906,6 +906,11 @@ class TestReleaseSurfaces(unittest.TestCase):
             record,
         )
         self.assertIn("zero open code-scanning alerts", record)
+        for document in (changelog, record):
+            self.assertNotIn("unpushed", document)
+            self.assertNotIn("public PR head remains", document)
+        self.assertIn("results do not transfer forward", changelog)
+        self.assertIn("require exact-head hosted checks after publication", record)
         self.assertIn("Release commit: **PENDING**", record)
         self.assertIn("Signed tag and verification: **PENDING**", record)
 

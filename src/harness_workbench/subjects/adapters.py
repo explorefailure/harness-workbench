@@ -1642,8 +1642,6 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
         if event_type == "agent_settled":
             settled += 1
         elif event_type == "tool_execution_start":
-            if settled:
-                errors.append("Pi tool event follows agent_settled terminal")
             call_id = event.get("toolCallId")
             if not isinstance(call_id, str) or not call_id:
                 errors.append("Pi tool_execution_start has no tool call id")
@@ -1654,8 +1652,6 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
             seen_call_ids.add(call_id)
             open_tools[call_id] = event
         elif event_type == "tool_execution_end":
-            if settled:
-                errors.append("Pi tool event follows agent_settled terminal")
             call_id = event.get("toolCallId")
             start = open_tools.pop(call_id, None) if isinstance(call_id, str) else None
             if start is None:
@@ -1690,6 +1686,12 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
         errors.append(f"Pi tool_execution_start has no matching end: {call_id}")
     if settled != 1:
         errors.append(f"expected exactly one Pi agent_settled, saw {settled}")
+    elif not events or events[-1].get("type") != "agent_settled":
+        # Pi's reference stream treats agent_settled as the terminal record,
+        # not merely as a ban on subsequent tool calls. Retaining messages,
+        # usage, or unknown records after it would claim completeness at a
+        # point that was not actually the end of the evidence stream.
+        errors.append("Pi agent_settled is not the final event")
 
     return {
         "acquisition": "native_jsonl",
@@ -2228,6 +2230,9 @@ def capture(
                 codex_credential_snapshot,
                 source=codex_credential,
             )
+        active_profile: dict[str, Any] | None = None
+        profile_key_name: str | None = None
+        profile_secret: str | None = None
         if subject in CONFIGURABLE_MODEL_SUBJECTS:
             # The generic OpenAI-compatible provider requires a key-shaped value
             # even though the pinned Ollama endpoint does not authenticate it.
@@ -2235,21 +2240,26 @@ def capture(
             # sealed record if a future dsh version starts echoing provider config.
             # A gateway profile supplies a real key the same way, so it is
             # redacted by the same machinery rather than a special case.
-            _, profile = _active_profile()
-            key_name = str(profile["api_key_env"])
-            placeholder = profile.get("api_key_placeholder")
+            _, active_profile = _active_profile()
+            profile_key_name = str(active_profile["api_key_env"])
+            placeholder = active_profile.get("api_key_placeholder")
+            profile_environment_value = os.environ.get(profile_key_name)
             if placeholder is not None:
-                secret = str(placeholder)
-            elif os.environ.get(key_name):
-                secret = os.environ[key_name]
+                profile_secret = str(placeholder)
+            elif profile_environment_value:
+                # Snapshot exactly once. Redactions, subject environment and
+                # private provider config all use these same immutable bytes.
+                profile_secret = profile_environment_value
             else:
                 raise AdapterError(
-                    f"profile requires {key_name} to be set in the environment"
+                    f"profile requires {profile_key_name} to be set in the environment"
                 )
             # Publish under both the profile's own name and whichever variable
             # this subject's provider actually reads.
-            for name in {key_name, str(identity["model_subject_key_env"])}:
-                environment[name] = secret
+            for name in {
+                profile_key_name, str(identity["model_subject_key_env"])
+            }:
+                environment[name] = profile_secret
         redactions = tuple(sorted(
             set(credential_values(environment))
             | set(credential_file_redactions)
@@ -2360,23 +2370,18 @@ def capture(
             # Hermes gets no unrelated host credentials, but it still needs the
             # provider key for the active profile, which the sweep above removes
             # precisely because it looks like a credential. Restore only that one.
-            _, hermes_profile = _active_profile()
-            provider_key = str(hermes_profile["api_key_env"])
-            placeholder = hermes_profile.get("api_key_placeholder")
-            secret = (
-                str(placeholder)
-                if placeholder is not None
-                else os.environ.get(provider_key, "")
-            )
-            if secret:
-                for name in {provider_key, str(identity["model_subject_key_env"])}:
-                    environment[name] = secret
+            assert profile_key_name is not None and profile_secret is not None
+            if profile_secret:
+                for name in {
+                    profile_key_name, str(identity["model_subject_key_env"])
+                }:
+                    environment[name] = profile_secret
             hermes_home = root / "hermes-home"
             hermes_home.mkdir()
             hermes_config = _apply_model_profile(
                 (HERE / "hermes_config.yaml").read_text(encoding="utf-8"),
                 "hermes",
-                secret,
+                profile_secret,
             )
             if workload == "guard":
                 assert guard_private_key is not None and guard_run_id is not None
@@ -2426,7 +2431,8 @@ def capture(
             pi_config = pi_home / "agent"
             pi_config.mkdir(parents=True)
             _write_private_text(
-                pi_config / "models.json", _pi_models_json(identity, secret)
+                pi_config / "models.json",
+                _pi_models_json(identity, profile_secret),
             )
             environment["HOME"] = str(pi_home)
             environment["PI_CODING_AGENT_DIR"] = str(pi_config)
@@ -2452,8 +2458,9 @@ def capture(
             #
             # Pi is handled in its own branch above: it receives the key through
             # an isolated models.json rather than the environment.
+            assert profile_key_name is not None
             keep = {
-                str(_active_profile()[1]["api_key_env"]),
+                profile_key_name,
                 str(identity["model_subject_key_env"]),
             }
             for name in sensitive_environment_names:
@@ -2697,7 +2704,8 @@ def capture(
                     "ambient_authenticated_client"
                     if subject in {"claude", "codex"}
                     else "none_loopback_model"
-                    if _active_profile()[1].get("kind") == "local"
+                    if active_profile is not None
+                    and active_profile.get("kind") == "local"
                     else "experiment_scoped_gateway_key"
                 ),
             },
@@ -2710,8 +2718,9 @@ def capture(
                 "network": "first-party Claude service" if subject == "claude"
                     else "first-party Codex service" if subject == "codex"
                     else "loopback Ollama only"
-                    if _active_profile()[1].get("kind") == "local"
-                    else f"remote gateway {_active_profile()[1]['base_url']}",
+                    if active_profile is not None
+                    and active_profile.get("kind") == "local"
+                    else f"remote gateway {active_profile['base_url']}",
             },
             "capture": process_capture,
             "lifecycle": lifecycle,

@@ -179,27 +179,98 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(1, count)
         self.assertEqual(b"logged=[REDACTED]", stored)
 
-    def test_truncated_capture_suppresses_any_possible_credential_prefix(self):
+    def test_truncated_credential_sensitive_capture_is_suppressed_whole(self):
         secret = "auth/token-value"
-        representations = (
-            secret.encode("utf-8"),
-            b"auth\\/token-value",
-            b"\\u0061\\u0075\\u0074\\u0068\\u002f"
-            b"\\u0074\\u006f\\u006b\\u0065\\u006e-value",
+        incomplete_unicode_json = (
+            b'{"message":"' + b"x" * 4096
+            + b"\\u0061\\u0075\\u0074\\u0068\\u002f"
+            + b"\\u0074\\u006f\\u006b\\u0065\\u006e-value"
+            + b"-suffix-with-no-closing-quote"
         )
-        for representation in representations:
-            for cut in (1, len(representation) // 2, len(representation) - 1):
-                with self.subTest(representation=representation, cut=cut):
-                    raw = b"ordinary-prefix:" + representation[:cut]
-                    item = capture.capture_bytes(
-                        raw,
-                        redactions=(secret,),
-                        source_bytes=len(raw) + 1,
+        for raw in (incomplete_unicode_json, b"entirely ordinary output"):
+            with self.subTest(raw_length=len(raw)):
+                item = capture.capture_bytes(
+                    raw,
+                    redactions=(secret,),
+                    source_bytes=len(raw) + 1,
+                )
+                self.assertEqual(
+                    capture.TRUNCATED_CREDENTIAL_CAPTURE,
+                    base64.b64decode(item["base64"]),
+                )
+                self.assertEqual(1, item["redaction_count"])
+                self.assertEqual(len(raw) + 1, item["source_bytes"])
+
+        # Truncation is not globally destructive. The fail-closed tradeoff is
+        # activated only when a credential redaction set exists.
+        ordinary = capture.capture_bytes(
+            b"ordinary prefix", source_bytes=len(b"ordinary prefix") + 1
+        )
+        self.assertEqual(
+            b"ordinary prefix", base64.b64decode(ordinary["base64"])
+        )
+
+    def test_split_incomplete_unicode_json_is_suppressed_on_both_streams(self):
+        secret = "auth/token-value"
+        encoded = (
+            b'{"message":"' + b"x" * 1024
+            + b"\\u0061\\u0075\\u0074\\u0068\\u002f"
+            + b"\\u0074\\u006f\\u006b\\u0065\\u006e-value"
+            + b"-long-suffix-without-a-closing-quote"
+        )
+        credential_offset = encoded.index(b"\\u0061")
+        splits = (
+            credential_offset + 2,
+            credential_offset + len(b"\\u0061\\u0075"),
+            len(encoded) - 5,
+        )
+        for stream in ("stdout", "stderr"):
+            for split in splits:
+                with self.subTest(stream=stream, split=split):
+                    fd = 1 if stream == "stdout" else 2
+                    script = (
+                        "import os; "
+                        f"raw={encoded!r}; split={split}; fd={fd}; "
+                        "os.write(fd, raw[:split]); "
+                        "os.write(fd, raw[split:]); os.write(fd, b'!')"
                     )
-                    stored = base64.b64decode(item["base64"])
-                    self.assertNotIn(representation[:cut], stored)
-                    self.assertTrue(stored.endswith(b"[REDACTED]"))
-                    self.assertGreater(item["redaction_count"], 0)
+                    with tempfile.TemporaryDirectory() as directory:
+                        result = capture.run_bounded(
+                            [sys.executable, "-c", script],
+                            cwd=Path(directory),
+                            env=dict(os.environ),
+                            timeout=10,
+                            stdout_limit=(len(encoded) if stream == "stdout" else 4096),
+                            stderr_limit=(len(encoded) if stream == "stderr" else 4096),
+                        )
+                    evidence = capture._bounded_evidence(
+                        result,
+                        stdout_limit=(len(encoded) if stream == "stdout" else 4096),
+                        stderr_limit=(len(encoded) if stream == "stderr" else 4096),
+                        redactions=(secret,),
+                    )
+                    self.assertEqual(
+                        capture.TRUNCATED_CREDENTIAL_CAPTURE,
+                        base64.b64decode(evidence[stream]["base64"]),
+                    )
+                    self.assertGreater(
+                        evidence[stream]["source_bytes"], evidence[stream]["bytes"]
+                    )
+
+    def test_lone_surrogate_credential_is_redacted_without_encoding_failure(self):
+        secret = "credential-\udcff-value"
+        json_raw = json.dumps({"token": secret}, ensure_ascii=True).encode("ascii")
+        raw_bytes = b"token=" + secret.encode("utf-8", errors="surrogatepass")
+        for raw in (json_raw, raw_bytes):
+            with self.subTest(raw=raw):
+                item = capture.capture_bytes(raw, redactions=(secret,))
+                serialized = json.dumps(item)
+                self.assertNotIn("\\udcff", serialized)
+                self.assertNotIn(
+                    secret.encode("utf-8", errors="surrogatepass"),
+                    base64.b64decode(item["base64"]),
+                )
+                self.assertGreater(item["redaction_count"], 0)
 
     def test_split_writes_are_redacted_after_bounded_stream_assembly(self):
         secret = "split-auth/token-value"
@@ -340,6 +411,72 @@ class ContainmentTests(unittest.TestCase):
 
 
 class SidecarTests(unittest.TestCase):
+    def test_jsonl_projection_is_derived_only_from_redacted_stored_bytes(self):
+        secret = "auth/token-value"
+        variants = (
+            json.dumps({"value": secret}).encode("utf-8") + b"\n",
+            b'{"value":"auth\\/token-value"}\n',
+            b'{"value":"\\u0061uth\\u002ftoken-value"}\n',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            for raw in variants:
+                with self.subTest(raw=raw):
+                    path.write_bytes(raw)
+                    item = capture.capture_file(
+                        path,
+                        required=True,
+                        format_name="jsonl",
+                        redactions=(secret,),
+                    )
+                    serialized = json.dumps(item)
+                    stored = base64.b64decode(item["base64"])
+                    self.assertNotIn(secret, serialized)
+                    self.assertNotIn(b"auth/token-value", stored)
+                    self.assertNotIn(b"auth\\/token-value", stored)
+                    retained_strings: list[str] = []
+
+                    def collect_strings(value: object) -> None:
+                        if isinstance(value, str):
+                            retained_strings.append(value)
+                        elif isinstance(value, list):
+                            for member in value:
+                                collect_strings(member)
+                        elif isinstance(value, dict):
+                            for key, member in value.items():
+                                collect_strings(key)
+                                collect_strings(member)
+
+                    collect_strings(json.loads(serialized))
+                    for spelling in (
+                        secret,
+                        r"auth\/token-value",
+                        r"\u0061uth\u002ftoken-value",
+                    ):
+                        self.assertFalse(
+                            any(spelling in value for value in retained_strings),
+                            (spelling, retained_strings),
+                        )
+                    self.assertEqual([{"value": "[REDACTED]"}], item["jsonl"])
+                    self.assertGreater(item["redaction_count"], 0)
+
+    def test_lone_surrogate_credential_is_safe_in_full_jsonl_envelope(self):
+        secret = "credential-\udcff-value"
+        raw = json.dumps({"value": secret}, ensure_ascii=True).encode("ascii") + b"\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            path.write_bytes(raw)
+            item = capture.capture_file(
+                path,
+                required=True,
+                format_name="jsonl",
+                redactions=(secret,),
+            )
+        serialized = json.dumps(item)
+        self.assertNotIn("\\udcff", serialized)
+        self.assertEqual([{"value": "[REDACTED]"}], item["jsonl"])
+        self.assertGreater(item["redaction_count"], 0)
+
     def test_boundary_and_digest_pressure(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "evidence.bin"

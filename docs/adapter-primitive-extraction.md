@@ -216,11 +216,16 @@ what it cost:
   structured redactor and should not. Complete JSON string tokens are decoded
   before credential matching, covering every valid JSON escape spelling; raw
   UTF-8 and the common standalone JSON-fragment spellings are matched by byte.
-  When a bounded stream is truncated, capture suppresses at most the final
-  maximum-supported-spelling length minus one bytes, so no incomplete raw or
-  JSON-escaped credential prefix can be retained. Percent and base64 transforms
-  are outside this guarantee because the subjects do not emit credentials in
-  those representations.
+  When credentials are configured and a bounded stream is truncated, capture
+  fails closed by replacing the whole retained prefix with a fixed marker. This
+  deliberately loses partial stdout/stderr evidence: an unterminated JSON
+  string can contain a complete escaped credential anywhere in that prefix, so
+  retaining only a credential-length tail is not sound. Source-byte counts,
+  overflow facts, and the marker remain. Complete non-truncated JSON strings
+  cover every valid JSON escape spelling; exact raw UTF-8, surrogate-pass bytes,
+  and common standalone JSON-fragment spellings are matched by byte. Percent
+  and base64 transforms are outside this guarantee because the subjects do not
+  emit credentials in those representations.
 
 **The gap the migration cannot close is provenance, not API.** `freeze` digests
 the files a spec declares in `inputs`, which are files beside the spec. After

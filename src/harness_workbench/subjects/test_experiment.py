@@ -697,6 +697,117 @@ class CommonTests(unittest.TestCase):
         self.assertNotIn(old_token, serialized)
         self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
 
+    def test_hermes_provider_secret_is_one_immutable_capture_snapshot(self) -> None:
+        key_name = "HWB_OPENCODE_KEY"
+        old_token = "hermes-provider-token-before-rotation"
+        new_token = "hermes-provider-token-after-rotation"
+        profile = {
+            "kind": "gateway",
+            "base_url": "https://example.invalid/v1",
+            "api_key_env": key_name,
+            "identity_strength": "gateway_model_label",
+            "models": {"hermes": "test-model"},
+            "subject_key_env": {"hermes": "OPENAI_API_KEY"},
+        }
+        resolved = {
+            "model": "test-model",
+            "model_profile": "test-gateway",
+            "model_identity_strength": "gateway_model_label",
+            "model_base_url": profile["base_url"],
+            "model_api_key_env": key_name,
+            "model_subject_key_env": "OPENAI_API_KEY",
+        }
+        observed: dict[str, object] = {}
+        original_environment_get = os.environ.get
+
+        def rotate_after_snapshot(name: str, default: str | None = None) -> str | None:
+            value = original_environment_get(name, default)
+            if name == key_name:
+                os.environ[key_name] = new_token
+            return value
+
+        def provider_config(_: str, subject: str, secret: str | None) -> str:
+            self.assertEqual("hermes", subject)
+            observed["config_secret"] = secret
+            return f"provider_secret: {secret}\nhooks:\n"
+
+        def run(
+            argv: list[str], *, cwd: Path, env: dict[str, str], **_: object
+        ) -> Bounded:
+            observed["profile_env"] = env[key_name]
+            observed["subject_env"] = env["OPENAI_API_KEY"]
+            config = (Path(env["HERMES_HOME"]) / "config.yaml").read_text(
+                encoding="utf-8"
+            )
+            observed["config"] = config
+            raw = old_token.encode("utf-8")
+            return Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=raw,
+                stderr=b"",
+                stdout_source_bytes=len(raw),
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        lifecycle = {
+            "acquisition": "shell_hook_plus_process",
+            "completeness": "process_boundary_only",
+            "event_types": [],
+            "tool_executions": [],
+            "terminal": {"status": "process_exit", "returncode": 0},
+        }
+        apparatus = {
+            "schema": "hwb-subject-apparatus/v0.1",
+            "package": "harness_workbench",
+            "version": "0.0.0-test",
+            "modules": {},
+            "baseline": {"present": True, "agrees": True},
+        }
+        with (
+            mock.patch.dict(os.environ, {key_name: old_token}, clear=False),
+            mock.patch.object(
+                adapters, "_active_profile", return_value=("test-gateway", profile)
+            ),
+            mock.patch.object(os.environ, "get", side_effect=rotate_after_snapshot),
+            mock.patch.object(adapters, "_resolve_model", return_value=resolved),
+            mock.patch.object(
+                adapters,
+                "_verify_identity",
+                return_value={
+                    "name": "hermes",
+                    "version": "test",
+                    "source_commit": "0" * 40,
+                },
+            ),
+            mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+            mock.patch.object(
+                adapters, "_apply_model_profile", side_effect=provider_config
+            ),
+            mock.patch.object(
+                adapters, "_hermes_command", return_value=["hermes-test"]
+            ),
+            mock.patch.object(adapters, "run_bounded", side_effect=run),
+            mock.patch.object(
+                adapters, "_normalize_hermes", return_value=(lifecycle, [])
+            ),
+        ):
+            record = adapters.capture("hermes", "write")
+
+        self.assertEqual(old_token, observed["config_secret"])
+        self.assertEqual(old_token, observed["profile_env"])
+        self.assertEqual(old_token, observed["subject_env"])
+        self.assertIn(old_token, str(observed["config"]))
+        self.assertNotIn(new_token, str(observed["config"]))
+        serialized = json.dumps(record)
+        self.assertNotIn(old_token, serialized)
+        self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
+
     def test_the_hermes_hook_scrubber_is_not_handed_an_empty_list(self) -> None:
         # The second layer, which was switched off. The hook scrubs values
         # before serialization, so it is the one place an encoding cannot
@@ -1039,9 +1150,27 @@ class PiNormalizerTests(unittest.TestCase):
             },
         )
         _, errors = adapters._normalize_pi(jsonl(*events), Path("/workspace"))
-        self.assertEqual(
-            2, errors.count("Pi tool event follows agent_settled terminal")
+        self.assertIn("Pi agent_settled is not the final event", errors)
+
+    def test_every_event_kind_after_agent_settled_is_rejected(self) -> None:
+        trailing_events = (
+            {"type": "message_end"},
+            {"type": "usage", "tokens": 1},
+            {"type": "future_event", "value": "unknown"},
         )
+        for trailing in trailing_events:
+            with self.subTest(event_type=trailing["type"]):
+                _, errors = adapters._normalize_pi(
+                    jsonl(
+                        {"type": "session"},
+                        {"type": "agent_settled"},
+                        trailing,
+                    ),
+                    Path("/workspace"),
+                )
+                self.assertEqual(
+                    1, errors.count("Pi agent_settled is not the final event")
+                )
 
     def test_tool_events_before_agent_settled_remain_valid(self) -> None:
         events = (

@@ -64,6 +64,9 @@ STDOUT_LIMIT = "stdout_limit"
 STDERR_LIMIT = "stderr_limit"
 STDOUT_STDERR_LIMIT = "stdout_stderr_limit"
 SIGNALLED = "signalled"
+TRUNCATED_CREDENTIAL_CAPTURE = (
+    b"[REDACTED: TRUNCATED CREDENTIAL-SENSITIVE CAPTURE]"
+)
 
 
 class CaptureError(ValueError):
@@ -435,27 +438,25 @@ def _redact_json_strings(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]
 
 def _credential_byte_variants(value: str) -> set[bytes]:
     """Exact non-JSON-fragment spellings supported by byte redaction."""
+    # `surrogatepass` gives every Python string a deterministic byte spelling,
+    # including lone surrogates that strict UTF-8 refuses. `surrogateescape`
+    # additionally reconstructs undecodable environment bytes where possible.
+    raw_variants = {value.encode("utf-8", errors="surrogatepass")}
+    try:
+        raw_variants.add(value.encode("utf-8", errors="surrogateescape"))
+    except UnicodeEncodeError:
+        pass
     json_variants = {
-        json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"),
+        json.dumps(value, ensure_ascii=False)[1:-1].encode(
+            "utf-8", errors="surrogatepass"
+        ),
         json.dumps(value, ensure_ascii=True)[1:-1].encode("utf-8"),
     }
     return {
-        value.encode("utf-8"),
+        *raw_variants,
         *json_variants,
         *(variant.replace(b"/", b"\\/") for variant in json_variants),
     }
-
-
-def _max_credential_spelling_bytes(values: Sequence[str]) -> int:
-    """Upper bound for raw UTF-8 or any valid JSON escape spelling."""
-    return max(
-        (
-            6 * (len(value.encode("utf-16-be", errors="surrogatepass")) // 2)
-            for value in values
-            if value
-        ),
-        default=0,
-    )
 
 
 def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
@@ -512,6 +513,14 @@ def capture_bytes(
     A subject that emits broken encoding has told you something, and
     `errors="replace"` would silently discard it while changing the bytes a
     reader compares against the digest.
+
+    If credentials are configured, a truncated capture retains no subject
+    bytes at all. Its payload is the fixed
+    ``TRUNCATED_CREDENTIAL_CAPTURE`` marker. This fail-closed policy gives up
+    partial stdout/stderr evidence because an incomplete JSON string cannot be
+    parsed soundly and may contain a fully escaped credential anywhere in the
+    retained prefix. Source-byte counts and overflow metadata still describe
+    the observation.
     """
     observed_source_bytes = len(raw) if source_bytes is None else source_bytes
     if observed_source_bytes < len(raw):
@@ -520,20 +529,15 @@ def capture_bytes(
         )
     truncated = observed_source_bytes > len(raw)
     if truncated and redactions:
-        # An overflowed stream ends at an arbitrary byte. Suppress the shortest
-        # suffix that could be the beginning of a supported credential spelling.
-        # A complete occurrence before that suffix is still redacted normally;
-        # an incomplete raw/JSON-escaped occurrence cannot leak a meaningful
-        # prefix. This costs at most max-spelling-length minus one bytes, and
-        # only on a stream already known to be truncated.
-        tail_size = min(
-            len(raw), max(0, _max_credential_spelling_bytes(redactions) - 1)
-        )
-        head = raw[:-tail_size] if tail_size else raw
-        stored, redaction_count = redact_bytes(head, redactions)
-        if tail_size:
-            stored += b"[REDACTED]"
-            redaction_count += 1
+        # Fail closed over the WHOLE retained prefix. A truncated byte stream
+        # can contain an unterminated JSON string whose credential was encoded
+        # much earlier than the final credential-length tail. Without the
+        # missing suffix there is no sound semantic boundary, so preserving any
+        # of the prefix would make short and long malformed strings behave
+        # differently. The evidence loss is deliberate and explicit: counts,
+        # overflow, source bytes and the marker remain; subject output does not.
+        stored = TRUNCATED_CREDENTIAL_CAPTURE
+        redaction_count = 1
     else:
         stored, redaction_count = redact_bytes(raw, redactions)
     envelope: dict[str, Any] = {
@@ -676,7 +680,10 @@ def capture_file(
     envelope = capture_bytes(
         raw if raw is not None else b"",
         redactions=redactions,
-        source_bytes=size,
+        # Refused oversize sidecars store zero bytes rather than a truncated
+        # prefix. Preserve their observed size below without misclassifying the
+        # empty retained payload as a truncated process capture.
+        source_bytes=size if raw is not None else 0,
     )
     if raw is None:
         # Nothing was stored, so the stored-bytes digest describes emptiness.
@@ -684,6 +691,7 @@ def capture_file(
         # "not there" must not produce the same evidence.
         envelope["base64"] = None
         envelope["text"] = None
+        envelope["source_bytes"] = size
     envelope.update(
         {
             "exists": exists,
@@ -700,7 +708,10 @@ def capture_file(
         if format_name in {"utf8", "jsonl"} and envelope["text"] is None:
             errors.append("evidence is not UTF-8")
         if format_name == "jsonl" and envelope["text"] is not None:
-            records, decode_errors = parse_jsonl(raw)
+            # The parsed projection is retained evidence too. Derive it from
+            # the safely redacted stored bytes, never from the unredacted file.
+            stored = base64.b64decode(envelope["base64"], validate=True)
+            records, decode_errors = parse_jsonl(stored)
             envelope["jsonl"] = records
             errors.extend(decode_errors)
     return envelope

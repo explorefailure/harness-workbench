@@ -87,9 +87,11 @@ published as a release. The heading gains a date only at step 1 of
 - Record the successful hosted CI and CodeQL preparation checks for exact PR
   checkpoint `f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3` without treating them
   as tag, asset, or release-final evidence.
-- Keep the source boundary explicit: audit remediation beginning at local
-  commit `05054d60c816309ea6346f2d34be1c654e7f5697` and its follow-up fixes are
-  unpushed; the public PR still ends at `f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3`.
+- Keep the source boundary explicit: audit remediation beginning at commit
+  `05054d60c816309ea6346f2d34be1c654e7f5697` and its follow-up fixes come after
+  hosted checkpoint `f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3`. Those later
+  commits require exact-head hosted checks after publication; the checkpoint's
+  results do not transfer forward.
 
 ## 0.1.0rc1 — 2026-08-12
 

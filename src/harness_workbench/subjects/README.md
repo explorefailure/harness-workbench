@@ -297,6 +297,11 @@ report source byte counts, stored digests, redaction counts, overflow state,
 and the initiating termination reason. Overflow flags are independent: a
 process may cross another stream limit while handling a timeout, forwarded
 signal, or single-stream limit that already started teardown.
+If a stream is truncated while credential redactions are configured, its whole
+retained prefix is replaced with a fixed marker. This sacrifices partial
+stdout/stderr evidence because an incomplete JSON string may contain a fully
+escaped credential far before the truncation boundary; the source byte count
+and overflow facts remain.
 An escaped child can outlive the owned group, but it cannot hold the adapter's
 capture loop open indefinitely.
 
