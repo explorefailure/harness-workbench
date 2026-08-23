@@ -338,6 +338,33 @@ class RedactionTests(unittest.TestCase):
         _, count = capture.redact_bytes(raw, (secret,))
         self.assertEqual(1, count)
 
+    def test_redaction_count_is_exactly_derivable_from_retained_markers(self):
+        first = "FIRST-CREDENTIAL-VALUE"
+        second = "SECOND-CREDENTIAL-VALUE"
+        raw = (
+            b"literal=[REDACTED] first=" + first.encode("utf-8")
+            + b" again=" + first.encode("utf-8")
+            + b" second=" + second.encode("utf-8")
+        )
+        item = capture.capture_bytes(raw, redactions=(first, second))
+        stored = base64.b64decode(item["base64"], validate=True)
+        self.assertEqual(4, stored.count(capture.REDACTION_MARKER))
+        self.assertEqual(
+            capture.retained_redaction_count(stored),
+            item["redaction_count"],
+        )
+
+        ordinary = capture.capture_bytes(b"ordinary output")
+        self.assertEqual(0, ordinary["redaction_count"])
+        literal = capture.capture_bytes(b"literal [REDACTED] output")
+        self.assertEqual(1, literal["redaction_count"])
+        truncated = capture.capture_bytes(
+            b"partial",
+            redactions=(first,),
+            source_bytes=len(b"partial") + 1,
+        )
+        self.assertEqual(1, truncated["redaction_count"])
+
     def test_capture_bytes_digests_what_was_stored_not_what_arrived(self):
         item = capture.capture_bytes(b"tok=SECRETVALUE", redactions=("SECRETVALUE",))
         stored = base64.b64decode(item["base64"])

@@ -980,29 +980,38 @@ def verify_process_evidence(
         for stream in streams:
             raw = retained_bytes.get(stream)
             redaction_count = redaction_counts.get(stream)
-            if raw is not None and type(redaction_count) is int and redaction_count > 0:
+            if raw is not None and type(redaction_count) is int:
+                expected_redaction_count = (
+                    capture_module.retained_redaction_count(raw)
+                )
+                if redaction_count != expected_redaction_count:
+                    errors.append(
+                        f"{label} {stream} redaction count disagrees with stored bytes"
+                    )
+                source_bytes = source_counts.get(stream)
+                if (
+                    expected_redaction_count > 0
+                    and type(source_bytes) is int
+                    and source_bytes < expected_redaction_count
+                ):
+                    # Every visible marker came from at least one source byte
+                    # (or was itself literal source text). The original byte
+                    # length is unknowable after replacement, but this lower
+                    # bound remains independently derivable.
+                    errors.append(
+                        f"{label} {stream} redacted source byte count is incoherent"
+                    )
                 truncated_marker = (
                     raw == capture_module.TRUNCATED_CREDENTIAL_CAPTURE
                 )
                 if truncated_marker:
                     if (
                         stream == "sidecar"
-                        or redaction_count != 1
                         or overflow.get(stream) is not True
                     ):
                         errors.append(
                             f"{label} {stream} has incoherent truncation redaction"
                         )
-                elif b"[REDACTED]" not in raw:
-                    # A positive count is the reason exact original-length and
-                    # original-digest rebinding is unavailable. Require the
-                    # retained representation emitted by the redactor so an
-                    # attacker cannot disable those checks by changing only
-                    # the count. Natural marker text with a forged count is an
-                    # unavoidable ambiguity once the secret bytes are gone.
-                    errors.append(
-                        f"{label} {stream} has incoherent redaction evidence"
-                    )
             if (
                 raw is not None
                 and overflow.get(stream) is False
@@ -1217,13 +1226,25 @@ def _stored_capture_bytes(
     if type(evidence.get("bytes")) is not int or evidence["bytes"] != len(raw):
         errors.append(f"{label} byte count disagrees")
     source_bytes = evidence.get("source_bytes")
-    if type(source_bytes) is not int or source_bytes < len(raw):
+    if type(source_bytes) is not int or source_bytes < 0:
         errors.append(f"{label} has an invalid source byte count")
     if hashlib.sha256(raw).hexdigest() != evidence.get("sha256"):
         errors.append(f"{label} digest disagrees")
     redactions = evidence.get("redaction_count")
     if type(redactions) is not int or redactions < 0:
         errors.append(f"{label} has an invalid redaction count")
+    else:
+        expected_redactions = capture_module.retained_redaction_count(raw)
+        if redactions != expected_redactions:
+            errors.append(f"{label} redaction count disagrees with stored bytes")
+        if type(source_bytes) is int:
+            if expected_redactions == 0 and source_bytes != len(raw):
+                errors.append(f"{label} source byte count disagrees with stored bytes")
+            elif (
+                expected_redactions > 0
+                and source_bytes < expected_redactions
+            ):
+                errors.append(f"{label} redacted source byte count is incoherent")
     try:
         decoded = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:

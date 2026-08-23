@@ -64,6 +64,7 @@ STDOUT_LIMIT = "stdout_limit"
 STDERR_LIMIT = "stderr_limit"
 STDOUT_STDERR_LIMIT = "stdout_stderr_limit"
 SIGNALLED = "signalled"
+REDACTION_MARKER = b"[REDACTED]"
 TRUNCATED_CREDENTIAL_CAPTURE = (
     b"[REDACTED: TRUNCATED CREDENTIAL-SENSITIVE CAPTURE]"
 )
@@ -462,9 +463,10 @@ def _credential_byte_variants(value: str) -> set[bytes]:
 def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     """Replace each value with `[REDACTED]`, returning the bytes and a count.
 
-    The count is not decoration. Scrubbed bytes and bytes that never held a
-    secret are otherwise indistinguishable, and their digests differ for a
-    reason nothing records.
+    The count is the number of non-overlapping fixed markers in the retained
+    representation. That makes it independently checkable; it deliberately
+    does not claim whether a marker was inserted here or emitted literally by
+    the subject, because the retained bytes cannot prove that history.
 
     Complete JSON strings are decoded before matching, so every valid JSON
     spelling of the value is covered: mandatory escapes, optional ``\\/``,
@@ -476,15 +478,15 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     Python's `json.dumps` DEFAULT, and this project's own Hermes hook
     serializes with it. A secret containing any non-ASCII byte is written as
     `\\uXXXX` escapes, which the raw form and the non-ASCII-preserving form
-    both miss -- and the capture is then stored with `redaction_count: 0`,
-    which reads as "no secret was present". That is worse than an obvious
-    failure, and it was live until it was looked for.
+    both miss -- and the capture is then stored with the secret still present.
+    That is worse than an obvious failure, and it was live until it was looked
+    for.
 
     Percent-encoded and base64 transforms remain deliberately unsupported: no
     subject here emits credentials that way, and treating arbitrary transforms
     as secrets would corrupt ordinary evidence without a bounded guarantee.
     """
-    redacted, count = _redact_json_strings(raw, values)
+    redacted, _ = _redact_json_strings(raw, values)
     for value in values:
         variants = _credential_byte_variants(value)
         for variant in sorted(variants, key=len, reverse=True):
@@ -492,9 +494,19 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
                 continue
             occurrences = redacted.count(variant)
             if occurrences:
-                redacted = redacted.replace(variant, b"[REDACTED]")
-                count += occurrences
-    return redacted, count
+                redacted = redacted.replace(variant, REDACTION_MARKER)
+    # This field is retained evidence, so it must be independently derivable
+    # from retained bytes. Count non-overlapping fixed markers, including any
+    # marker text the subject emitted literally; it is a representation count,
+    # not an unverifiable claim about how many source secrets once existed.
+    return redacted, retained_redaction_count(redacted)
+
+
+def retained_redaction_count(stored: bytes) -> int:
+    """The exact redaction count independently visible in retained bytes."""
+    if stored == TRUNCATED_CREDENTIAL_CAPTURE:
+        return 1
+    return stored.count(REDACTION_MARKER)
 
 
 def capture_bytes(
@@ -537,9 +549,9 @@ def capture_bytes(
         # differently. The evidence loss is deliberate and explicit: counts,
         # overflow, source bytes and the marker remain; subject output does not.
         stored = TRUNCATED_CREDENTIAL_CAPTURE
-        redaction_count = 1
     else:
-        stored, redaction_count = redact_bytes(raw, redactions)
+        stored, _ = redact_bytes(raw, redactions)
+    redaction_count = retained_redaction_count(stored)
     envelope: dict[str, Any] = {
         "bytes": len(stored),
         "source_bytes": observed_source_bytes,

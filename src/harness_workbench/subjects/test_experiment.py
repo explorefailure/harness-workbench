@@ -3534,7 +3534,7 @@ class ContractComparisonTests(unittest.TestCase):
                     "file_sha256": "0" * 64,
                     "redaction_count": 1,
                 }),
-                "hermes sidecar has incoherent redaction evidence",
+                "hermes sidecar redaction count disagrees with stored bytes",
             ),
             (
                 "Hermes size",
@@ -3579,57 +3579,118 @@ class ContractComparisonTests(unittest.TestCase):
                 )
 
     def test_honest_redacted_metadata_preserves_comparability(self) -> None:
-        secret = "metadata-redaction-secret"
-
-        def factory(subject: str) -> dict:
-            outer = self.outer(subject, passed=True)
-            adapter = outer["adapter"]
-            capture = adapter["capture"]
-            if subject == "codex":
-                raw = comparator._capture_raw(capture, "stdout")
-                assert raw is not None
-                events = [json.loads(line) for line in raw.splitlines()]
-                events[0]["credential"] = secret
-                raw = jsonl(*events)
-                capture["stdout"] = capture_bytes(
-                    raw, redactions=(secret,)
+        def make_factory(secrets: tuple[str, ...]):
+            def factory(subject: str) -> dict:
+                outer = self.outer(subject, passed=True)
+                adapter = outer["adapter"]
+                capture = adapter["capture"]
+                if subject == "codex":
+                    raw = comparator._capture_raw(capture, "stdout")
+                    assert raw is not None
+                    events = [json.loads(line) for line in raw.splitlines()]
+                    events[0].update({
+                        f"credential_{index}": secret
+                        for index, secret in enumerate(secrets)
+                    })
+                    raw = jsonl(*events)
+                    capture["stdout"] = capture_bytes(
+                        raw, redactions=secrets
+                    )
+                    self.assertEqual(
+                        len(secrets),
+                        capture["stdout"]["redaction_count"],
+                    )
+                elif subject == "hermes":
+                    raw = comparator._capture_raw(capture, "sidecar")
+                    assert raw is not None
+                    events = [json.loads(line) for line in raw.splitlines()]
+                    events[0].update({
+                        f"credential_{index}": secret
+                        for index, secret in enumerate(secrets)
+                    })
+                    raw = jsonl(*events)
+                    sidecar = capture_bytes(raw, redactions=secrets)
+                    self.assertEqual(
+                        len(secrets), sidecar["redaction_count"]
+                    )
+                    stored = base64.b64decode(sidecar["base64"], validate=True)
+                    records, complaints = adapters.parse_jsonl(stored)
+                    sidecar.update({
+                        "exists": True,
+                        "format": "jsonl",
+                        "size": len(raw),
+                        "max_bytes": capture["limits"]["sidecar_bytes"],
+                        "file_sha256": hashlib.sha256(raw).hexdigest(),
+                        "jsonl": records,
+                        "errors": complaints,
+                    })
+                    capture["sidecar"] = sidecar
+                projection = comparator._lifecycle_projection(subject, capture)
+                assert projection is not None
+                adapter["lifecycle"] = projection[0]
+                self.assertEqual([], projection[1])
+                return subject_runner.experiment_document(
+                    subject, "write", None, adapter
                 )
-                self.assertGreater(
-                    capture["stdout"]["redaction_count"], 0
-                )
-            elif subject == "hermes":
-                raw = comparator._capture_raw(capture, "sidecar")
-                assert raw is not None
-                events = [json.loads(line) for line in raw.splitlines()]
-                events[0]["credential"] = secret
-                raw = jsonl(*events)
-                sidecar = capture_bytes(raw, redactions=(secret,))
-                self.assertGreater(sidecar["redaction_count"], 0)
-                stored = base64.b64decode(sidecar["base64"], validate=True)
-                records, complaints = adapters.parse_jsonl(stored)
-                sidecar.update({
-                    "exists": True,
-                    "format": "jsonl",
-                    "size": len(raw),
-                    "max_bytes": capture["limits"]["sidecar_bytes"],
-                    "file_sha256": hashlib.sha256(raw).hexdigest(),
-                    "jsonl": records,
-                    "errors": complaints,
-                })
-                capture["sidecar"] = sidecar
-            projection = comparator._lifecycle_projection(subject, capture)
-            assert projection is not None
-            adapter["lifecycle"] = projection[0]
-            self.assertEqual([], projection[1])
-            return subject_runner.experiment_document(
-                subject, "write", None, adapter
-            )
+            return factory
 
+        no_redaction = self.compare_mutation(lambda _subject, _outer: None)
+        self.assertTrue(no_redaction["contract_passed"], no_redaction["errors"])
+
+        one_redaction = make_factory(("metadata-redaction-secret",))
         result = self.compare_mutation(
             lambda _subject, _outer: None,
-            factory=factory,
+            factory=one_redaction,
         )
         self.assertTrue(result["contract_passed"], result["errors"])
+        for count in (0, 42):
+            with self.subTest(redaction_count=count):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["capture"][
+                        "stdout"
+                    ].update({"redaction_count": count})
+                    if subject == "codex" else None,
+                    "codex stdout redaction count disagrees with stored bytes",
+                    factory=one_redaction,
+                )
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"]["capture"][
+                "stdout"
+            ].update({"source_bytes": 0})
+            if subject == "codex" else None,
+            "codex stdout redacted source byte count is incoherent",
+            factory=one_redaction,
+        )
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"]["capture"][
+                "sidecar"
+            ].update({"source_bytes": 0, "size": 0})
+            if subject == "hermes" else None,
+            "hermes sidecar redacted source byte count is incoherent",
+            factory=one_redaction,
+        )
+
+        multi_redaction = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=make_factory((
+                "first-metadata-redaction-secret",
+                "second-metadata-redaction-secret",
+            )),
+        )
+        self.assertTrue(
+            multi_redaction["contract_passed"], multi_redaction["errors"]
+        )
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"]["capture"][
+                "stdout"
+            ].update({"source_bytes": 1})
+            if subject == "codex" else None,
+            "codex stdout redacted source byte count is incoherent",
+            factory=make_factory((
+                "first-metadata-redaction-secret",
+                "second-metadata-redaction-secret",
+            )),
+        )
 
     def test_capture_integer_fields_reject_boolean_stand_ins(self) -> None:
         cases = (
@@ -4189,6 +4250,80 @@ class ContractComparisonTests(unittest.TestCase):
         self.assert_error_contains(
             "guard outcome calls_seen disagrees with receipt",
             contradicted["errors"],
+        )
+
+    def test_guard_receipt_stored_byte_metadata_is_exact(self) -> None:
+        guard_factory = lambda subject: self.guard_outer(
+            subject, evaluable=True
+        )
+        for field, value, expected in (
+            (
+                "redaction_count",
+                42,
+                "codex guard receipt redaction count disagrees with stored bytes",
+            ),
+            (
+                "source_bytes",
+                None,
+                "codex guard receipt source byte count disagrees with stored bytes",
+            ),
+        ):
+            with self.subTest(field=field):
+                def mutate(subject: str, outer: dict) -> None:
+                    if subject != "codex":
+                        return
+                    receipt = outer["adapter"]["oracle_evidence"][
+                        "guard_receipt"
+                    ]
+                    receipt[field] = (
+                        receipt[field] + 1 if value is None else value
+                    )
+
+                self.assert_contract_rejected(
+                    mutate,
+                    expected,
+                    factory=guard_factory,
+                )
+
+        def marker_factory(subject: str) -> dict:
+            outer = self.guard_outer(subject, evaluable=True)
+            if subject != "pi":
+                return outer
+            evidence = outer["adapter"]["oracle_evidence"]
+            event = evidence["events"][1]
+            event["tool_call_id"] = "[REDACTED]"
+            event["signature"] = adapters._guard_event_signature(
+                event, self.GUARD_PRIVATE_KEY
+            )
+            receipt = capture_bytes(jsonl(*evidence["events"]))
+            self.assertEqual(1, receipt["redaction_count"])
+            evidence["guard_receipt"] = receipt
+            return outer
+
+        honest_marker = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=marker_factory,
+        )
+        self.assertTrue(
+            honest_marker["contract_passed"], honest_marker["errors"]
+        )
+        for count in (0, 42):
+            with self.subTest(marker_count=count):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"][
+                        "oracle_evidence"
+                    ]["guard_receipt"].update({"redaction_count": count})
+                    if subject == "pi" else None,
+                    "pi guard receipt redaction count disagrees with stored bytes",
+                    factory=marker_factory,
+                )
+        self.assert_contract_rejected(
+            lambda subject, outer: outer["adapter"][
+                "oracle_evidence"
+            ]["guard_receipt"].update({"source_bytes": 0})
+            if subject == "pi" else None,
+            "pi guard receipt redacted source byte count is incoherent",
+            factory=marker_factory,
         )
 
     def test_comparator_rejects_schema_less_unsigned_guard_receipts(self) -> None:
