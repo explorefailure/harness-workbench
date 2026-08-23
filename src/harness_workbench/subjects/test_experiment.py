@@ -942,7 +942,10 @@ class CommonTests(unittest.TestCase):
                 self.assertEqual(record["lifecycle"], projection[0])
                 verification_errors: list[str] = []
                 state = comparator.verify_capture(
-                    subject, record["capture"], verification_errors
+                    subject,
+                    record["capture"],
+                    verification_errors,
+                    subject=subject,
                 )
                 self.assertEqual([], verification_errors)
                 self.assertIsNotNone(state)
@@ -3429,6 +3432,205 @@ class ContractComparisonTests(unittest.TestCase):
                 self.assertFalse(result["contract_passed"])
                 self.assert_error_contains(expected, result["errors"])
 
+    def test_unhashable_discriminators_fail_closed(self) -> None:
+        for value in ([], {}):
+            with self.subTest(field="sidecar format", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["capture"][
+                        "sidecar"
+                    ].update({"format": value})
+                    if subject == "hermes" else None,
+                    "hermes sidecar has invalid format",
+                )
+            with self.subTest(field="sidecar kind", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["capture"].update(
+                        {"sidecar_kind": value}
+                    ) if subject == "hermes" else None,
+                    "hermes has invalid sidecar kind",
+                )
+            with self.subTest(field="request workload", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["request"].update(
+                        {"workload": value}
+                    ) if subject == "codex" else None,
+                    "codex adapter request has invalid workload",
+                )
+            with self.subTest(field="lifecycle effect kind", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["lifecycle"][
+                        "tool_executions"
+                    ][0].update({"effect_kind": value})
+                    if subject == "codex" else None,
+                    "codex lifecycle has invalid tool execution fields",
+                    factory=self.repair_outer,
+                )
+            with self.subTest(field="workspace entry kind", value=value):
+                def mutate_manifest(subject: str, outer: dict) -> None:
+                    if subject == "pi":
+                        outer["adapter"]["workspace"]["after"].append({
+                            "path": "typed-node",
+                            "mode": 0o644,
+                            "kind": value,
+                        })
+
+                self.assert_contract_rejected(
+                    mutate_manifest,
+                    "pi workspace after has an invalid manifest entry",
+                )
+            with self.subTest(field="guard mode", value=value):
+                self.assert_contract_rejected(
+                    lambda subject, outer: outer["adapter"]["request"].update(
+                        {"variant": value}
+                    ) if subject == "claude" else None,
+                    "claude guard authentication has invalid subject or mode",
+                    factory=lambda subject: self.guard_outer(
+                        subject, evaluable=True
+                    ),
+                )
+
+    def test_subject_sidecar_and_unredacted_metadata_are_bound(self) -> None:
+        cases = (
+            (
+                "Hermes sidecar kind swap",
+                "hermes",
+                lambda capture: capture.update({
+                    "sidecar_kind": "native_persisted_session_jsonl"
+                }),
+                "hermes has invalid sidecar kind",
+            ),
+            (
+                "Hermes format downgrade",
+                "hermes",
+                lambda capture: capture["sidecar"].update({"format": "bytes"}),
+                "hermes sidecar disagrees with subject profile",
+            ),
+            (
+                "Hermes jsonl deletion",
+                "hermes",
+                lambda capture: capture["sidecar"].update({"jsonl": None}),
+                "hermes sidecar jsonl disagrees with stored bytes",
+            ),
+            (
+                "Hermes format and jsonl downgrade",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "format": "bytes", "jsonl": None
+                }),
+                "hermes sidecar disagrees with subject profile",
+            ),
+            (
+                "Hermes file digest",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "file_sha256": "0" * 64
+                }),
+                "hermes sidecar file digest disagrees with stored bytes",
+            ),
+            (
+                "Hermes forged digest and redaction count",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "file_sha256": "0" * 64,
+                    "redaction_count": 1,
+                }),
+                "hermes sidecar has incoherent redaction evidence",
+            ),
+            (
+                "Hermes size",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "size": capture["sidecar"]["size"] + 1
+                }),
+                "hermes sidecar size disagrees",
+            ),
+            (
+                "Hermes source count",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "source_bytes": capture["sidecar"]["source_bytes"] + 1
+                }),
+                "hermes sidecar size disagrees",
+            ),
+            (
+                "Hermes forged size and source count",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "size": capture["sidecar"]["size"] + 1,
+                    "source_bytes": capture["sidecar"]["source_bytes"] + 1,
+                }),
+                "hermes sidecar source byte count disagrees with stored bytes",
+            ),
+            (
+                "Codex stdout source count",
+                "codex",
+                lambda capture: capture["stdout"].update({
+                    "source_bytes": capture["stdout"]["source_bytes"] + 1
+                }),
+                "codex stdout source byte count disagrees with stored bytes",
+            ),
+        )
+        for name, target, mutate, expected in cases:
+            with self.subTest(name=name):
+                self.assert_contract_rejected(
+                    lambda subject, outer: mutate(outer["adapter"]["capture"])
+                    if subject == target else None,
+                    expected,
+                )
+
+    def test_honest_redacted_metadata_preserves_comparability(self) -> None:
+        secret = "metadata-redaction-secret"
+
+        def factory(subject: str) -> dict:
+            outer = self.outer(subject, passed=True)
+            adapter = outer["adapter"]
+            capture = adapter["capture"]
+            if subject == "codex":
+                raw = comparator._capture_raw(capture, "stdout")
+                assert raw is not None
+                events = [json.loads(line) for line in raw.splitlines()]
+                events[0]["credential"] = secret
+                raw = jsonl(*events)
+                capture["stdout"] = capture_bytes(
+                    raw, redactions=(secret,)
+                )
+                self.assertGreater(
+                    capture["stdout"]["redaction_count"], 0
+                )
+            elif subject == "hermes":
+                raw = comparator._capture_raw(capture, "sidecar")
+                assert raw is not None
+                events = [json.loads(line) for line in raw.splitlines()]
+                events[0]["credential"] = secret
+                raw = jsonl(*events)
+                sidecar = capture_bytes(raw, redactions=(secret,))
+                self.assertGreater(sidecar["redaction_count"], 0)
+                stored = base64.b64decode(sidecar["base64"], validate=True)
+                records, complaints = adapters.parse_jsonl(stored)
+                sidecar.update({
+                    "exists": True,
+                    "format": "jsonl",
+                    "size": len(raw),
+                    "max_bytes": capture["limits"]["sidecar_bytes"],
+                    "file_sha256": hashlib.sha256(raw).hexdigest(),
+                    "jsonl": records,
+                    "errors": complaints,
+                })
+                capture["sidecar"] = sidecar
+            projection = comparator._lifecycle_projection(subject, capture)
+            assert projection is not None
+            adapter["lifecycle"] = projection[0]
+            self.assertEqual([], projection[1])
+            return subject_runner.experiment_document(
+                subject, "write", None, adapter
+            )
+
+        result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=factory,
+        )
+        self.assertTrue(result["contract_passed"], result["errors"])
+
     def test_capture_integer_fields_reject_boolean_stand_ins(self) -> None:
         cases = (
             (
@@ -3734,7 +3936,9 @@ class ContractComparisonTests(unittest.TestCase):
                     "timed_out": True,
                 })
                 errors: list[str] = []
-                state = comparator.verify_capture("codex", evidence, errors)
+                state = comparator.verify_capture(
+                    "codex", evidence, errors, subject="codex"
+                )
                 self.assertEqual([], errors)
                 self.assertIsNotNone(state)
                 assert state is not None
@@ -3780,7 +3984,9 @@ class ContractComparisonTests(unittest.TestCase):
                 mutate(evidence)
                 errors: list[str] = []
                 self.assertIsNone(
-                    comparator.verify_capture("codex", evidence, errors)
+                    comparator.verify_capture(
+                        "codex", evidence, errors, subject="codex"
+                    )
                 )
                 self.assertTrue(
                     any(expected in error for error in errors), errors
@@ -3801,7 +4007,9 @@ class ContractComparisonTests(unittest.TestCase):
                     "termination_reason": f"{primary}_limit",
                 })
                 errors: list[str] = []
-                state = comparator.verify_capture("codex", evidence, errors)
+                state = comparator.verify_capture(
+                    "codex", evidence, errors, subject="codex"
+                )
                 self.assertEqual([], errors)
                 self.assertIsNotNone(state)
 
@@ -4685,6 +4893,7 @@ class ContractComparisonTests(unittest.TestCase):
             "deepseek",
             evidence,
             errors,
+            subject="deepseek",
         )
         self.assertIn(
             "deepseek sidecar: evidence exceeds 524288-byte capture limit:"
@@ -4709,6 +4918,7 @@ class ContractComparisonTests(unittest.TestCase):
             "hermes",
             evidence,
             errors,
+            subject="hermes",
         )
         self.assertIn(
             "hermes sidecar: required evidence file was not created", errors

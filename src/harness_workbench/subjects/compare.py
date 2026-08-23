@@ -22,6 +22,13 @@ from workloads import AMBIENT_CONFIG, GUARD_VARIANTS, WORKLOADS
 
 
 SUBJECTS = {"claude", "codex", "deepseek", "hermes", "pi"}
+_SIDECAR_PROFILES = {
+    "claude": ("none", False, "bytes"),
+    "codex": ("none", False, "bytes"),
+    "deepseek": ("native_persisted_session_jsonl", True, "jsonl"),
+    "hermes": ("shell_hook_jsonl", True, "jsonl"),
+    "pi": ("none", False, "bytes"),
+}
 HERE = Path(__file__).resolve().parent
 EXPECTED_EFFECT_SHA = hashlib.sha256(EXPECTED_CONTENT).hexdigest()
 PINS = json.loads((HERE / "pin.json").read_text(encoding="utf-8"))
@@ -93,6 +100,11 @@ def _sha256(value: Any) -> bool:
     )
 
 
+def _string_enum(value: Any, choices: Any) -> bool:
+    """Validate a JSON discriminator without hashing an untrusted value."""
+    return type(value) is str and value in choices
+
+
 def verify_adapter_subject(
     label: str, subject: Any, errors: list[str]
 ) -> str | None:
@@ -100,7 +112,7 @@ def verify_adapter_subject(
         errors.append(f"{label} adapter has an invalid subject: {subject!r}")
         return None
     name = subject.get("name")
-    if type(name) is not str or name not in SUBJECTS:
+    if not _string_enum(name, SUBJECTS):
         errors.append(f"{label} adapter has an invalid subject: {name!r}")
         return None
     if subject != _declared_subject_identity(name):
@@ -735,6 +747,7 @@ def verify_process_evidence(
     evidence: dict[str, Any],
     errors: list[str],
     *,
+    subject: str | None,
     include_sidecar: bool,
     nonzero_is_fault: bool,
     guard_expected: bool = False,
@@ -763,6 +776,8 @@ def verify_process_evidence(
         "stdout", "stderr"
     )
     source_counts: dict[str, int] = {}
+    retained_bytes: dict[str, bytes] = {}
+    redaction_counts: dict[str, int] = {}
     for stream in streams:
         item = evidence.get(stream)
         if not isinstance(item, dict):
@@ -806,11 +821,11 @@ def verify_process_evidence(
             errors.append(f"{label} {stream} has invalid source byte count")
         else:
             source_counts[stream] = source_bytes
-        if (
-            type(item.get("redaction_count")) is not int
-            or item["redaction_count"] < 0
-        ):
+        redaction_count = item.get("redaction_count")
+        if type(redaction_count) is not int or redaction_count < 0:
             errors.append(f"{label} {stream} has invalid redaction count")
+        else:
+            redaction_counts[stream] = redaction_count
         if stream == "sidecar" and exists is False and (
             item.get("bytes") != 0
             or source_bytes != 0
@@ -824,7 +839,7 @@ def verify_process_evidence(
             size = item.get("size")
             max_bytes = item.get("max_bytes")
             file_digest = item.get("file_sha256")
-            if format_name not in {"bytes", "utf8", "jsonl"}:
+            if not _string_enum(format_name, {"bytes", "utf8", "jsonl"}):
                 errors.append(f"{label} sidecar has invalid format")
             if type(size) is not int or size < 0 or size != source_bytes:
                 errors.append(f"{label} sidecar size disagrees")
@@ -863,6 +878,7 @@ def verify_process_evidence(
         except ValueError:
             errors.append(f"{label} {stream} is not valid base64")
             continue
+        retained_bytes[stream] = raw
         byte_count = item.get("bytes")
         if type(byte_count) is not int or byte_count < 0:
             errors.append(f"{label} {stream} has invalid byte count")
@@ -883,7 +899,6 @@ def verify_process_evidence(
             should_project_jsonl = (
                 format_name == "jsonl"
                 and exists is True
-                and type(file_digest) is str
                 and decoded is not None
             )
             if should_project_jsonl:
@@ -908,17 +923,28 @@ def verify_process_evidence(
         errors.append(f"{label} has invalid capture limits")
     if include_sidecar:
         sidecar_kind = evidence.get("sidecar_kind")
-        if sidecar_kind not in {
-            "none", "shell_hook_jsonl", "native_persisted_session_jsonl"
-        }:
+        profile = (
+            _SIDECAR_PROFILES.get(subject)
+            if _string_enum(subject, SUBJECTS)
+            else None
+        )
+        if profile is None:
+            errors.append(f"{label} capture has no recognized subject profile")
+        elif not _string_enum(sidecar_kind, {profile[0]}):
             errors.append(f"{label} has invalid sidecar kind")
+        sidecar_item = evidence.get("sidecar")
+        if isinstance(sidecar_item, dict) and profile is not None:
+            if (
+                sidecar_item.get("exists") is not profile[1]
+                or sidecar_item.get("format") != profile[2]
+            ):
+                errors.append(f"{label} sidecar disagrees with subject profile")
         redacted_names = evidence.get("redacted_environment_names")
         if (
             not _string_list(redacted_names)
             or redacted_names != sorted(set(redacted_names))
         ):
             errors.append(f"{label} has invalid redacted environment names")
-        sidecar_item = evidence.get("sidecar")
         if (
             isinstance(limits, dict)
             and isinstance(sidecar_item, dict)
@@ -945,14 +971,81 @@ def verify_process_evidence(
                 errors.append(
                     f"{label} {stream} overflow disagrees with source bytes"
                 )
+    # With no redaction and no truncation, the retained bytes are the original
+    # bytes, so their source counts are independently derivable. Redaction can
+    # change byte length, while overflow deliberately retains only a prefix (or
+    # the fixed credential-aware marker); in those cases the independently
+    # checked limit relation is all the retained evidence can prove.
+    if isinstance(overflow, dict):
+        for stream in streams:
+            raw = retained_bytes.get(stream)
+            redaction_count = redaction_counts.get(stream)
+            if raw is not None and type(redaction_count) is int and redaction_count > 0:
+                truncated_marker = (
+                    raw == capture_module.TRUNCATED_CREDENTIAL_CAPTURE
+                )
+                if truncated_marker:
+                    if (
+                        stream == "sidecar"
+                        or redaction_count != 1
+                        or overflow.get(stream) is not True
+                    ):
+                        errors.append(
+                            f"{label} {stream} has incoherent truncation redaction"
+                        )
+                elif b"[REDACTED]" not in raw:
+                    # A positive count is the reason exact original-length and
+                    # original-digest rebinding is unavailable. Require the
+                    # retained representation emitted by the redactor so an
+                    # attacker cannot disable those checks by changing only
+                    # the count. Natural marker text with a forged count is an
+                    # unavoidable ambiguity once the secret bytes are gone.
+                    errors.append(
+                        f"{label} {stream} has incoherent redaction evidence"
+                    )
+            if (
+                raw is not None
+                and overflow.get(stream) is False
+                and redaction_count == 0
+                and source_counts.get(stream) != len(raw)
+            ):
+                errors.append(
+                    f"{label} {stream} source byte count disagrees with stored bytes"
+                )
+    if include_sidecar:
+        sidecar_item = evidence.get("sidecar")
+        sidecar_raw = retained_bytes.get("sidecar")
+        if (
+            isinstance(sidecar_item, dict)
+            and sidecar_item.get("exists") is True
+            and isinstance(overflow, dict)
+            and overflow.get("sidecar") is False
+            and redaction_counts.get("sidecar") == 0
+            and sidecar_raw is not None
+        ):
+            if (
+                sidecar_item.get("size") != len(sidecar_raw)
+                or sidecar_item.get("source_bytes") != len(sidecar_raw)
+            ):
+                errors.append(
+                    f"{label} sidecar size disagrees with stored bytes"
+                )
+            if sidecar_item.get("file_sha256") != hashlib.sha256(
+                sidecar_raw
+            ).hexdigest():
+                errors.append(
+                    f"{label} sidecar file digest disagrees with stored bytes"
+                )
     termination_reason = evidence.get("termination_reason")
-    if termination_reason not in (
-        None,
-        capture_module.TIMEOUT,
-        capture_module.STDOUT_LIMIT,
-        capture_module.STDERR_LIMIT,
-        capture_module.STDOUT_STDERR_LIMIT,
-        capture_module.SIGNALLED,
+    if termination_reason is not None and not _string_enum(
+        termination_reason,
+        {
+            capture_module.TIMEOUT,
+            capture_module.STDOUT_LIMIT,
+            capture_module.STDERR_LIMIT,
+            capture_module.STDOUT_STDERR_LIMIT,
+            capture_module.SIGNALLED,
+        },
     ):
         errors.append(f"{label} has an invalid termination reason")
     if type(evidence.get("returncode")) is not int:
@@ -1037,12 +1130,14 @@ def verify_capture(
     capture: dict[str, Any],
     errors: list[str],
     *,
+    subject: str | None,
     guard_expected: bool = False,
 ) -> CaptureState | None:
     return verify_process_evidence(
         label,
         capture,
         errors,
+        subject=subject,
         include_sidecar=True,
         nonzero_is_fault=True,
         guard_expected=guard_expected,
@@ -1071,6 +1166,7 @@ def verify_repair_oracle_evidence(
             f"{label} repair {name}",
             process,
             errors,
+            subject=None,
             include_sidecar=False,
             nonzero_is_fault=False,
         )
@@ -1170,7 +1266,9 @@ def verify_guard_oracle_evidence(
         return True
     import adapters as adapter_module
 
-    if subject not in adapter_module.GUARD_TOOLS or mode not in GUARD_VARIANTS:
+    if not _string_enum(subject, adapter_module.GUARD_TOOLS) or not _string_enum(
+        mode, GUARD_VARIANTS
+    ):
         errors.append(f"{label} guard authentication has invalid subject or mode")
         return True
 
@@ -1427,7 +1525,8 @@ def verify_lifecycle(
         ),
     }
     valid = True
-    if subject not in expected_profiles:
+    subject_valid = _string_enum(subject, expected_profiles)
+    if not subject_valid:
         errors.append(f"{label} lifecycle has no recognized subject profile")
         valid = False
         profile = (None, None, None)
@@ -1464,7 +1563,7 @@ def verify_lifecycle(
         valid = False
     projection = (
         _lifecycle_projection(subject, capture)
-        if subject in expected_profiles
+        if subject_valid
         else None
     )
     if projection is None:
@@ -1482,7 +1581,7 @@ def verify_lifecycle(
                 f"{label} verdict omits retained normalizer complaints"
             )
             valid = False
-    if type(executions) is list and subject in expected_profiles:
+    if type(executions) is list and subject_valid:
         expected_keys = {
             "call_id", "tool_name", "effect_kind", "operation",
             "arguments_sha256", "arguments_stage", "reported_error",
@@ -1521,8 +1620,10 @@ def verify_lifecycle(
                 or execution.get("arguments_stage") != expected_arguments_stage
                 or execution.get("result_stage") != expected_result_stage
                 or not _sha256(execution.get("arguments_sha256"))
-                or execution.get("effect_kind")
-                not in {"read", "write", "command", "other"}
+                or not _string_enum(
+                    execution.get("effect_kind"),
+                    {"read", "write", "command", "other"},
+                )
                 or execution.get("operation") is not None
                 and type(execution.get("operation")) is not str
                 or execution.get("reported_error") is not None
@@ -1670,7 +1771,7 @@ def verify_invocation(
         and timeout > 0
         and _invocation_argv_matches(subject, workload, identity, argv)
     )
-    if subject in {"claude", "codex"}:
+    if _string_enum(subject, {"claude", "codex"}):
         valid = valid and credential == "ambient_authenticated_client"
     else:
         _, profile = _active_model_profile()
@@ -1691,7 +1792,11 @@ def _invocation_argv_matches(
     argv: Any,
 ) -> bool:
     """Bind normalized argv to the independently declared experiment shape."""
-    if subject not in SUBJECTS or workload not in WORKLOADS or not _string_list(argv):
+    if (
+        not _string_enum(subject, SUBJECTS)
+        or not _string_enum(workload, WORKLOADS)
+        or not _string_list(argv)
+    ):
         return False
     assert isinstance(argv, list)
     executable_name = "dsh" if subject == "deepseek" else subject
@@ -1825,7 +1930,7 @@ def verify_isolation(
         and type(network) is str
         and bool(network.strip())
     )
-    if subject in SUBJECTS and workload in WORKLOADS:
+    if _string_enum(subject, SUBJECTS) and _string_enum(workload, WORKLOADS):
         expected_ambient = AMBIENT_CONFIG[subject][
             "guard" if workload == "guard" else "default"
         ]
@@ -1873,7 +1978,7 @@ def _manifest_map(
         non_regular = (
             isinstance(entry, dict)
             and set(entry) == {"path", "mode", "kind"}
-            and entry.get("kind") in _NON_REGULAR_WORKSPACE_KINDS
+            and _string_enum(entry.get("kind"), _NON_REGULAR_WORKSPACE_KINDS)
         )
         if (
             not isinstance(entry, dict)
@@ -1898,7 +2003,9 @@ def verify_workspace(
     outcome: dict[str, Any],
     errors: list[str],
 ) -> None:
-    if set(workspace) != {"before", "after"} or workload not in WORKLOADS:
+    if set(workspace) != {"before", "after"} or not _string_enum(
+        workload, WORKLOADS
+    ):
         errors.append(f"{label} adapter has invalid workspace")
         return
     before = _manifest_map(f"{label} workspace before", workspace["before"], errors)
@@ -1987,16 +2094,17 @@ def verify_outer_binding(
     inner_workload = request.get("workload")
     outer_workload = outer.get("workload")
     request_valid = True
-    if type(inner_workload) is not str or inner_workload not in WORKLOADS:
+    inner_workload_valid = _string_enum(inner_workload, WORKLOADS)
+    outer_workload_valid = _string_enum(outer_workload, WORKLOADS)
+    if not inner_workload_valid:
         errors.append(
             f"{label} adapter request has invalid workload: {inner_workload!r}"
         )
         request_valid = False
-    if type(outer_workload) is not str or outer_workload not in WORKLOADS:
+    if not outer_workload_valid:
         errors.append(f"{label} outer has invalid workload: {outer_workload!r}")
     elif (
-        type(inner_workload) is str
-        and inner_workload in WORKLOADS
+        inner_workload_valid
         and outer_workload != inner_workload
     ):
         errors.append(
@@ -2029,7 +2137,11 @@ def verify_outer_binding(
     ):
         errors.append(f"{label} guard request has no valid variant")
         request_valid = False
-    if inner_workload in {"write", "repair"} and inner_variant is not None:
+    if (
+        inner_workload_valid
+        and inner_workload in {"write", "repair"}
+        and inner_variant is not None
+    ):
         errors.append(f"{label} non-guard request has a variant")
         request_valid = False
     prompt_sha = request.get("prompt_sha256")
@@ -2038,7 +2150,7 @@ def verify_outer_binding(
             f"{label} adapter request has invalid prompt_sha256: {prompt_sha!r}"
         )
         request_valid = False
-    elif inner_workload in WORKLOADS:
+    elif inner_workload_valid:
         expected_prompt = hashlib.sha256(
             WORKLOADS[inner_workload]["prompt"].encode("utf-8")
         ).hexdigest()
@@ -2060,7 +2172,7 @@ def verify_outer_binding(
             f" {input_digests!r}"
         )
         request_valid = False
-    elif inner_workload in WORKLOADS:
+    elif inner_workload_valid:
         try:
             expected_inputs = {
                 name: digest_file(HERE / name)
@@ -2299,6 +2411,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
                 label,
                 adapter["capture"],
                 errors,
+                subject=inner_subject,
                 guard_expected=raw_workload == "guard",
             )
             capture_state = main_capture_state
