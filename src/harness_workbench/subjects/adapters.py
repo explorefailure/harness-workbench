@@ -51,6 +51,7 @@ HERE = Path(__file__).resolve().parent
 
 GUARD_RECEIPT_SCHEMA = "cross-harness-guard-event/v0.3"
 GUARD_AUTH_SCHEMA = "cross-harness-guard-auth/v0.1"
+GUARD_BINDING_SCHEMA = "cross-harness-guard-binding/v0.1"
 GUARD_SIGNATURE_ALGORITHM = "rsa-pkcs1v15-sha256"
 GUARD_PRIVATE_MODULUS_PLACEHOLDER = "__HWB_GUARD_PRIVATE_MODULUS__"
 GUARD_PRIVATE_EXPONENT_PLACEHOLDER = "__HWB_GUARD_PRIVATE_EXPONENT__"
@@ -670,6 +671,7 @@ def _verify_guard_event_signature(
             or type(public_exponent) is not int
             or public_exponent != 65537
             or type(signature_hex) is not str
+            or re.fullmatch(r"[0-9a-f]{512}", signature_hex) is None
         ):
             return False
         modulus = int(modulus_hex, 16)
@@ -698,6 +700,19 @@ def _guard_authentication(
         "run_id": run_id,
         "key_id": _guard_key_id(public_key),
         "public_key": public_key,
+    }
+
+
+def _guard_capture_binding(
+    *, subject: str, mode: str, run_id: str, public_key: dict[str, Any]
+) -> dict[str, Any]:
+    """Non-signing invocation identity retained outside oracle evidence."""
+    return {
+        "schema": GUARD_BINDING_SCHEMA,
+        "subject": subject,
+        "mode": mode,
+        "run_id": run_id,
+        "key_id": _guard_key_id(public_key),
     }
 
 
@@ -1269,8 +1284,14 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
                 elif call_id in results:
                     errors.append(f"duplicate Claude tool result: {call_id}")
                 else:
+                    is_error = content.get("is_error")
+                    if type(is_error) is not bool:
+                        errors.append(
+                            f"Claude tool result is_error is not boolean: {call_id}"
+                        )
+                        is_error = None
                     results[call_id] = {
-                        "is_error": bool(content.get("is_error", False)),
+                        "is_error": is_error,
                         "content": content.get("content"),
                     }
                     result_indices[call_id] = event_index
@@ -1393,6 +1414,12 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
             arguments, effect_kind, _ = _argument_projection(
                 item_type, {"command": item.get("command")}, workspace
             )
+            operation_exit_code = item.get("exit_code")
+            if type(operation_exit_code) is not int:
+                errors.append(
+                    f"Codex command exit_code is not an integer: {item_id}"
+                )
+                operation_exit_code = None
         else:
             continue
         executions.append({
@@ -1404,6 +1431,11 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
             "arguments_stage": "subject_event",
             "reported_error": item.get("status") != "completed"
                 or (item.get("exit_code") not in (None, 0)),
+            "operation_exit_code": (
+                operation_exit_code
+                if item_type == "command_execution"
+                else None
+            ),
             "result_stage": "subject_reported",
             "acquisition": "native_jsonl",
         })
@@ -1610,6 +1642,8 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
         if event_type == "agent_settled":
             settled += 1
         elif event_type == "tool_execution_start":
+            if settled:
+                errors.append("Pi tool event follows agent_settled terminal")
             call_id = event.get("toolCallId")
             if not isinstance(call_id, str) or not call_id:
                 errors.append("Pi tool_execution_start has no tool call id")
@@ -1620,6 +1654,8 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
             seen_call_ids.add(call_id)
             open_tools[call_id] = event
         elif event_type == "tool_execution_end":
+            if settled:
+                errors.append("Pi tool event follows agent_settled terminal")
             call_id = event.get("toolCallId")
             start = open_tools.pop(call_id, None) if isinstance(call_id, str) else None
             if start is None:
@@ -2632,6 +2668,14 @@ def capture(
         process_capture["redacted_environment_names"] = (
             sensitive_environment_names
         )
+        if workload == "guard":
+            assert guard_public_key is not None and guard_run_id is not None
+            process_capture["guard_binding"] = _guard_capture_binding(
+                subject=subject,
+                mode=str(variant),
+                run_id=guard_run_id,
+                public_key=guard_public_key,
+            )
         return {
             "schema": "cross-harness-adapter-run/v0.1",
             "subject": identity,

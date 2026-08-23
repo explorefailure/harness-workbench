@@ -295,8 +295,8 @@ provider credential, in its private temporary config and the provider variable
 its client expects; unrelated host credentials are removed. Stored captures
 report source byte counts, stored digests, redaction counts, overflow state,
 and the initiating termination reason. Overflow flags are independent: a
-process may cross a stream limit while handling a timeout or forwarded signal
-that already started teardown.
+process may cross another stream limit while handling a timeout, forwarded
+signal, or single-stream limit that already started teardown.
 An escaped child can outlive the owned group, but it cannot hold the adapter's
 capture loop open indefinitely.
 
@@ -306,8 +306,11 @@ owner-only disposable guard source and is absent from the subject environment
 and retained record, while `oracle_evidence.authentication` retains the public
 key and binds it to the receipt schema, subject, variant, and run ID. The
 adapter verifies receipts during capture and `compare.py` verifies them again
-from retained bytes. Knowing only `HWB_GUARD_RECEIPT`, `HWB_GUARD_MODE`, and
-the JSON shape is therefore insufficient to forge an evaluable receipt.
+from retained bytes. A separate `capture.guard_binding`, created before the
+subject runs, independently retains the subject, variant, run ID, and key ID;
+comparison requires the oracle proof to match it, so replaying a whole proof
+from another run fails. Knowing only `HWB_GUARD_RECEIPT`, `HWB_GUARD_MODE`,
+and the JSON shape is therefore insufficient to forge an evaluable receipt.
 
 That authentication is not an OS sandbox. A subject that deliberately
 enumerates and reads another same-UID process's disposable guard source could

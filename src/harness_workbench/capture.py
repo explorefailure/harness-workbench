@@ -111,8 +111,8 @@ class Bounded:
     what was kept. Without the pair, a truncated capture and a quiet subject
     look identical. `termination_reason` names the bound that initiated
     termination. Overflow flags remain independent observations because a
-    process can emit past one or both stream limits while handling the timeout
-    or forwarded signal that already began teardown.
+    process can emit past one or both stream limits while handling a timeout,
+    forwarded signal, or single-stream limit that already began teardown.
     """
 
     argv: list[str]
@@ -248,17 +248,6 @@ def run_bounded(
 
         def terminate(why: str) -> None:
             nonlocal reason, sent_at
-            if (
-                reason in (STDOUT_LIMIT, STDERR_LIMIT)
-                and why in (STDOUT_LIMIT, STDERR_LIMIT)
-                and reason != why
-            ):
-                # Both pipes can already be readable when one ceiling first
-                # initiates termination. Preserve that complete observation
-                # instead of leaving one overflow flag contradicting a
-                # single-stream reason chosen by selector iteration order.
-                reason = STDOUT_STDERR_LIMIT
-                return
             if reason is not None:
                 return
             reason = why
@@ -286,7 +275,14 @@ def run_bounded(
                         _signal_group(process.pid, signal.SIGKILL)
                     break
                 read_any = False
-                for key, _ in selector.select(timeout=0.05):
+                # One selector result is one pre-termination sampling cycle.
+                # Read every stream in that result before choosing the bound
+                # that initiates teardown. Output provoked by SIGTERM arrives
+                # in a later cycle and remains an independent overflow fact;
+                # it must not rewrite the already observed initiating reason.
+                ready = selector.select(timeout=0.05)
+                cycle_limit_streams: set[str] = set()
+                for key, _ in ready:
                     stream = key.data
                     try:
                         chunk = os.read(key.fileobj.fileno(), 65_536)
@@ -305,9 +301,15 @@ def run_bounded(
                         buffers[stream].extend(chunk[:room])
                     if len(chunk) > room:
                         overflow[stream] = True
-                        terminate(
-                            STDOUT_LIMIT if stream == "stdout" else STDERR_LIMIT
-                        )
+                        if reason is None:
+                            cycle_limit_streams.add(stream)
+                if reason is None and cycle_limit_streams:
+                    if cycle_limit_streams == {"stdout", "stderr"}:
+                        terminate(STDOUT_STDERR_LIMIT)
+                    elif "stdout" in cycle_limit_streams:
+                        terminate(STDOUT_LIMIT)
+                    else:
+                        terminate(STDERR_LIMIT)
                 if process.poll() is not None and not read_any:
                     # The child is gone and the pipe is drained -- anything
                     # still holding it is a grandchild that outlived its parent.
@@ -374,6 +376,88 @@ def credential_values(environment: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(sorted(values, key=len, reverse=True))
 
 
+def _redact_json_strings(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
+    """Redact known values after decoding complete JSON string tokens.
+
+    This semantic pass covers every valid JSON spelling of a string, including
+    optional solidus escapes, mixed ``\\uXXXX`` escapes, and surrogate pairs.
+    Only a complete JSON string that decodes to a known value is rewritten;
+    arbitrary non-JSON output is left for the exact byte-variant pass below.
+    """
+    output = bytearray()
+    cursor = 0
+    count = 0
+    ordered = tuple(sorted(set(values), key=len, reverse=True))
+    while cursor < len(raw):
+        if raw[cursor] != 0x22:  # '"'
+            output.append(raw[cursor])
+            cursor += 1
+            continue
+        end = cursor + 1
+        escaped = False
+        while end < len(raw):
+            byte = raw[end]
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # '\\'
+                escaped = True
+            elif byte == 0x22:
+                break
+            end += 1
+        if end >= len(raw):
+            output.extend(raw[cursor:])
+            break
+        token = raw[cursor : end + 1]
+        try:
+            decoded = json.loads(token.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            output.extend(token)
+            cursor = end + 1
+            continue
+        redacted = decoded
+        token_count = 0
+        if isinstance(decoded, str):
+            for value in ordered:
+                occurrences = redacted.count(value)
+                if occurrences:
+                    redacted = redacted.replace(value, "[REDACTED]")
+                    token_count += occurrences
+        if token_count:
+            # ensure_ascii makes even a decoded lone surrogate representable;
+            # only affected strings are canonicalized.
+            output.extend(json.dumps(redacted, ensure_ascii=True).encode("ascii"))
+            count += token_count
+        else:
+            output.extend(token)
+        cursor = end + 1
+    return bytes(output), count
+
+
+def _credential_byte_variants(value: str) -> set[bytes]:
+    """Exact non-JSON-fragment spellings supported by byte redaction."""
+    json_variants = {
+        json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"),
+        json.dumps(value, ensure_ascii=True)[1:-1].encode("utf-8"),
+    }
+    return {
+        value.encode("utf-8"),
+        *json_variants,
+        *(variant.replace(b"/", b"\\/") for variant in json_variants),
+    }
+
+
+def _max_credential_spelling_bytes(values: Sequence[str]) -> int:
+    """Upper bound for raw UTF-8 or any valid JSON escape spelling."""
+    return max(
+        (
+            6 * (len(value.encode("utf-16-be", errors="surrogatepass")) // 2)
+            for value in values
+            if value
+        ),
+        default=0,
+    )
+
+
 def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     """Replace each value with `[REDACTED]`, returning the bytes and a count.
 
@@ -381,10 +465,11 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     secret are otherwise indistinguishable, and their digests differ for a
     reason nothing records.
 
-    Each value is also matched in its JSON-escaped forms, BOTH of them. A
-    subject that logs a credential inside a JSON string emits escapes the raw
-    value does not contain, and matching only the raw form leaks exactly the
-    case most likely to occur -- every harness here speaks JSONL.
+    Complete JSON strings are decoded before matching, so every valid JSON
+    spelling of the value is covered: mandatory escapes, optional ``\\/``,
+    arbitrary ``\\uXXXX`` choices, mixed literal/escaped text and surrogate
+    pairs. Exact raw and common JSON-fragment spellings are also matched when
+    they occur outside a complete JSON string.
 
     `ensure_ascii=True` is not a third-party quirk to be generous about; it is
     Python's `json.dumps` DEFAULT, and this project's own Hermes hook
@@ -394,24 +479,13 @@ def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
     which reads as "no secret was present". That is worse than an obvious
     failure, and it was live until it was looked for.
 
-    Registering variants of a known value is what the state of the art does:
-    the GitHub Actions runner registers four encoders per secret for base64
-    alone. Its ADR also names the cost, which is why this list is principled
-    rather than maximal -- each extra variant that fires reveals a little more
-    about where the secret was and how long it is. These three cover "the
-    value" and "the value as a JSON string", which is the shape this project's
-    evidence actually takes. Percent-encoded and base64 forms are deliberately
-    NOT registered: no subject here has been observed emitting one, and
-    guessing at encodings buys leak surface for coverage nobody has needed.
+    Percent-encoded and base64 transforms remain deliberately unsupported: no
+    subject here emits credentials that way, and treating arbitrary transforms
+    as secrets would corrupt ordinary evidence without a bounded guarantee.
     """
-    redacted = raw
-    count = 0
+    redacted, count = _redact_json_strings(raw, values)
     for value in values:
-        variants = {
-            value.encode("utf-8"),
-            json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"),
-            json.dumps(value, ensure_ascii=True)[1:-1].encode("utf-8"),
-        }
+        variants = _credential_byte_variants(value)
         for variant in sorted(variants, key=len, reverse=True):
             if not variant:
                 continue
@@ -439,10 +513,32 @@ def capture_bytes(
     `errors="replace"` would silently discard it while changing the bytes a
     reader compares against the digest.
     """
-    stored, redaction_count = redact_bytes(raw, redactions)
+    observed_source_bytes = len(raw) if source_bytes is None else source_bytes
+    if observed_source_bytes < len(raw):
+        raise CaptureError(
+            "source byte count cannot be smaller than captured bytes"
+        )
+    truncated = observed_source_bytes > len(raw)
+    if truncated and redactions:
+        # An overflowed stream ends at an arbitrary byte. Suppress the shortest
+        # suffix that could be the beginning of a supported credential spelling.
+        # A complete occurrence before that suffix is still redacted normally;
+        # an incomplete raw/JSON-escaped occurrence cannot leak a meaningful
+        # prefix. This costs at most max-spelling-length minus one bytes, and
+        # only on a stream already known to be truncated.
+        tail_size = min(
+            len(raw), max(0, _max_credential_spelling_bytes(redactions) - 1)
+        )
+        head = raw[:-tail_size] if tail_size else raw
+        stored, redaction_count = redact_bytes(head, redactions)
+        if tail_size:
+            stored += b"[REDACTED]"
+            redaction_count += 1
+    else:
+        stored, redaction_count = redact_bytes(raw, redactions)
     envelope: dict[str, Any] = {
         "bytes": len(stored),
-        "source_bytes": len(raw) if source_bytes is None else source_bytes,
+        "source_bytes": observed_source_bytes,
         "sha256": digest_bytes(stored),
         "base64": base64.b64encode(stored).decode("ascii"),
         "redaction_count": redaction_count,

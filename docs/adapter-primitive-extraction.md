@@ -95,9 +95,11 @@ streams until EOF, deadline, or byte limit → on any bound, signal the *group*,
 not the process → wait a declared grace → escalate to `SIGKILL` → observe
 whether the group is still alive → record the reason. Terminal state names
 the bound that fired; if both already-readable streams cross their ceilings,
-`stdout_stderr_limit` records both without depending on selector iteration
-order. The per-stream overflow and source-byte fields retain the full
-observation.
+`stdout_stderr_limit` records both only when both ceilings are observed in the
+same pre-termination selector cycle, without depending on selector iteration
+order. A later overflow provoked by teardown does not rewrite the initiating
+single-stream reason. The per-stream overflow and source-byte fields retain the
+full observation.
 
 The group is the unit of control, not the process. A subject that spawns a
 shell that spawns a build leaves orphans that hold the workspace open and
@@ -211,7 +213,14 @@ what it cost:
   runs as a separate process inside Hermes, redacting *parsed JSON values*
   before they are ever written. `redact_bytes` scrubs a byte stream after the
   fact. Different layer, different failure mode; the primitive offers no
-  structured redactor and should not.
+  structured redactor and should not. Complete JSON string tokens are decoded
+  before credential matching, covering every valid JSON escape spelling; raw
+  UTF-8 and the common standalone JSON-fragment spellings are matched by byte.
+  When a bounded stream is truncated, capture suppresses at most the final
+  maximum-supported-spelling length minus one bytes, so no incomplete raw or
+  JSON-escaped credential prefix can be retained. Percent and base64 transforms
+  are outside this guarantee because the subjects do not emit credentials in
+  those representations.
 
 **The gap the migration cannot close is provenance, not API.** `freeze` digests
 the files a spec declares in `inputs`, which are files beside the spec. After

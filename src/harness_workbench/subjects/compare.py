@@ -877,12 +877,15 @@ def verify_process_evidence(
             errors.append(
                 f"{label} {stream} limit reason lacks overflow evidence"
             )
-    # Timeout/signal teardown can itself provoke output. The initiating reason
-    # remains timeout/signalled while the independently measured stream flags
-    # report any later overflow. A stream-limit reason, by contrast, must name
-    # exactly the stream(s) whose limit initiated termination.
+    # Teardown can itself provoke output. The initiating reason remains stable
+    # while the independently measured stream flags report any later overflow.
+    # A stream-limit reason must name its initiating stream; only the combined
+    # reason asserts that both limits were observed in the initiating cycle.
     allows_later_overflow = termination_reason in (
-        capture_module.TIMEOUT, capture_module.SIGNALLED,
+        capture_module.TIMEOUT,
+        capture_module.SIGNALLED,
+        capture_module.STDOUT_LIMIT,
+        capture_module.STDERR_LIMIT,
     )
     for stream in ("stdout", "stderr"):
         if (
@@ -1033,6 +1036,7 @@ def verify_guard_oracle_evidence(
     label: str,
     subject: str | None,
     mode: Any,
+    capture: dict[str, Any],
     oracle_evidence: Any,
     outcome: dict[str, Any],
     errors: list[str],
@@ -1065,16 +1069,32 @@ def verify_guard_oracle_evidence(
         errors.append(f"{label} guard authentication has invalid subject or mode")
         return True
 
+    binding = capture.get("guard_binding")
+    expected_binding_keys = {"schema", "subject", "mode", "run_id", "key_id"}
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != expected_binding_keys
+        or binding.get("schema") != adapter_module.GUARD_BINDING_SCHEMA
+        or binding.get("subject") != subject
+        or binding.get("mode") != mode
+        or type(binding.get("run_id")) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", binding["run_id"]) is None
+        or type(binding.get("key_id")) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", binding["key_id"]) is None
+    ):
+        errors.append(f"{label} guard has invalid capture binding")
+        return True
+
     expected_authentication = {
         "schema": adapter_module.GUARD_AUTH_SCHEMA,
         "algorithm": adapter_module.GUARD_SIGNATURE_ALGORITHM,
         "subject": subject,
         "mode": mode,
-        "run_id": authentication.get("run_id"),
-        "key_id": adapter_module._guard_key_id(public_key),
+        "run_id": binding["run_id"],
+        "key_id": binding["key_id"],
         "public_key": public_key,
     }
-    run_id = authentication.get("run_id")
+    run_id = binding["run_id"]
     modulus = public_key.get("n")
     modulus_is_2048_bit = (
         type(modulus) is str
@@ -1083,8 +1103,7 @@ def verify_guard_oracle_evidence(
     )
     if (
         authentication != expected_authentication
-        or type(run_id) is not str
-        or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+        or adapter_module._guard_key_id(public_key) != binding["key_id"]
         or not modulus_is_2048_bit
         or public_key.get("e") != 65537
     ):
@@ -1364,7 +1383,7 @@ def verify_lifecycle(
             "arguments_sha256", "arguments_stage", "reported_error",
             "result_stage", "acquisition",
         }
-        if subject in {"pi", "deepseek", "hermes"}:
+        if subject in {"pi", "deepseek", "hermes", "codex"}:
             expected_keys.add("operation_exit_code")
         if subject == "hermes":
             expected_keys.add("request_id")
@@ -1403,7 +1422,7 @@ def verify_lifecycle(
                 and type(execution.get("operation")) is not str
                 or execution.get("reported_error") is not None
                 and type(execution.get("reported_error")) is not bool
-                or subject in {"pi", "deepseek", "hermes"}
+                or subject in {"pi", "deepseek", "hermes", "codex"}
                 and operation_exit_code is not None
                 and type(operation_exit_code) is not int
             ):
@@ -2203,6 +2222,7 @@ def compare(paths: list[Path]) -> dict[str, Any]:
                     label,
                     inner_subject,
                     raw_variant,
+                    adapter["capture"],
                     adapter.get("oracle_evidence"),
                     adapter["outcome"],
                     errors,

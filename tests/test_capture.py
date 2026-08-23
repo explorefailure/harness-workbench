@@ -156,8 +156,108 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn(b"\\u00e9", stored)
         self.assertNotIn(secret.encode("utf-8"), stored)
 
+    def test_every_valid_json_string_escape_spelling_is_redacted(self):
+        secret = 'auth/token-"\\-é-😀'
+        spellings = (
+            json.dumps(secret, ensure_ascii=False),
+            json.dumps(secret, ensure_ascii=True),
+            json.dumps(secret, ensure_ascii=True).replace("/", "\\/"),
+            '"\\u0061uth\\u002ftoken-\\"\\\\-\\u00e9-\\ud83d\\ude00"',
+        )
+        for spelling in spellings:
+            with self.subTest(spelling=spelling):
+                raw = ('{"credential":' + spelling + '}').encode("utf-8")
+                stored, count = capture.redact_bytes(raw, (secret,))
+                self.assertEqual(1, count)
+                self.assertNotIn(b"auth", stored)
+                self.assertIn(b"[REDACTED]", stored)
+
+    def test_solidus_escaped_fragment_is_redacted_outside_complete_json(self):
+        stored, count = capture.redact_bytes(
+            b"logged=auth\\/token-value", ("auth/token-value",)
+        )
+        self.assertEqual(1, count)
+        self.assertEqual(b"logged=[REDACTED]", stored)
+
+    def test_truncated_capture_suppresses_any_possible_credential_prefix(self):
+        secret = "auth/token-value"
+        representations = (
+            secret.encode("utf-8"),
+            b"auth\\/token-value",
+            b"\\u0061\\u0075\\u0074\\u0068\\u002f"
+            b"\\u0074\\u006f\\u006b\\u0065\\u006e-value",
+        )
+        for representation in representations:
+            for cut in (1, len(representation) // 2, len(representation) - 1):
+                with self.subTest(representation=representation, cut=cut):
+                    raw = b"ordinary-prefix:" + representation[:cut]
+                    item = capture.capture_bytes(
+                        raw,
+                        redactions=(secret,),
+                        source_bytes=len(raw) + 1,
+                    )
+                    stored = base64.b64decode(item["base64"])
+                    self.assertNotIn(representation[:cut], stored)
+                    self.assertTrue(stored.endswith(b"[REDACTED]"))
+                    self.assertGreater(item["redaction_count"], 0)
+
+    def test_split_writes_are_redacted_after_bounded_stream_assembly(self):
+        secret = "split-auth/token-value"
+        script = (
+            "import os,time; "
+            f"parts={list(secret.encode('utf-8'))!r}; "
+            "[os.write(1, bytes([part])) for part in parts]; "
+            "[os.write(2, bytes([part])) for part in parts]"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = capture.run_bounded(
+                [sys.executable, "-c", script],
+                cwd=Path(directory),
+                env=dict(os.environ),
+                timeout=10,
+                stdout_limit=1024,
+                stderr_limit=1024,
+            )
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            redactions=(secret,),
+        )
+        for stream in ("stdout", "stderr"):
+            self.assertNotIn(secret, evidence[stream]["text"])
+            self.assertEqual(1, evidence[stream]["redaction_count"])
+
+    def test_stdout_and_stderr_limit_prefixes_are_not_retained(self):
+        secret = "limit-auth/token-value"
+        for stream in ("stdout", "stderr"):
+            result = capture.Bounded(
+                argv=["tool"],
+                returncode=-15,
+                termination_reason=(
+                    capture.STDOUT_LIMIT if stream == "stdout"
+                    else capture.STDERR_LIMIT
+                ),
+                stdout=secret[:12].encode() if stream == "stdout" else b"",
+                stderr=secret[:12].encode() if stream == "stderr" else b"",
+                stdout_source_bytes=13 if stream == "stdout" else 0,
+                stderr_source_bytes=13 if stream == "stderr" else 0,
+                stdout_overflow=stream == "stdout",
+                stderr_overflow=stream == "stderr",
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+            evidence = capture._bounded_evidence(
+                result,
+                stdout_limit=12,
+                stderr_limit=12,
+                redactions=(secret,),
+            )
+            self.assertNotIn(secret[:12], evidence[stream]["text"])
+            self.assertGreater(evidence[stream]["redaction_count"], 0)
+
     def test_a_secret_is_counted_once_per_occurrence_not_once_per_variant(self):
-        """Three variants are registered; one occurrence must still count one.
+        """Several spellings are supported; one occurrence must count once.
 
         Otherwise `redaction_count` inflates with the encoder list rather than
         with what was actually found, and stops describing the evidence.
@@ -443,6 +543,29 @@ class BoundedRunTests(unittest.TestCase):
                 self.assertGreater(
                     getattr(result, f"{stream}_source_bytes"), 128
                 )
+
+    def test_single_stream_limit_is_not_rewritten_by_teardown_overflow(self):
+        cases = ((1, 2, "stdout"), (2, 1, "stderr"))
+        for initiating_fd, teardown_fd, initiating_stream in cases:
+            with self.subTest(initiating_stream=initiating_stream):
+                result = self._run(
+                    "import os,signal,time; "
+                    f"signal.signal(signal.SIGTERM, lambda *_: "
+                    f"(os.write({teardown_fd}, b't' * 4096), exit(0))); "
+                    f"os.write({initiating_fd}, b'i' * 4096); time.sleep(30)",
+                    timeout=10,
+                    stdout_limit=128,
+                    stderr_limit=128,
+                    termination_grace=1.0,
+                )
+                expected = (
+                    capture.STDOUT_LIMIT
+                    if initiating_stream == "stdout"
+                    else capture.STDERR_LIMIT
+                )
+                self.assertEqual(expected, result.termination_reason)
+                self.assertTrue(result.stdout_overflow)
+                self.assertTrue(result.stderr_overflow)
 
     def test_child_ignoring_sigterm_is_escalated_and_still_bounded(self):
         started = time.monotonic()

@@ -25,7 +25,7 @@ Every `cross-harness-adapter-run/v0.1` object contains:
 | `capabilities` | Explicit booleans or typed values for native events, hook events, native terminal events, tool correlation, result status, and model-identity strength. Unsupported features are not synthesized. |
 | `invocation` | Credential-safe argv, working directory marker, timeout, and credential-source class. |
 | `isolation` | Disposable-workspace claim, ambient-config policy, and network scope. This is disclosure, not proof of containment. |
-| `capture` | Credential-scrubbed stdout, stderr, and named sidecar bytes up to declared positive limits, with source/stored byte counts, stored SHA-256 digests, redaction counts, overflow state, process return code, and the bound that initiated termination. Stream-overflow flags remain independent because overflow may occur during timeout/signal teardown. |
+| `capture` | Credential-scrubbed stdout, stderr, and named sidecar bytes up to declared positive limits, with source/stored byte counts, stored SHA-256 digests, redaction counts, overflow state, process return code, and the bound that initiated termination. Stream-overflow flags remain independent because overflow may occur during timeout/signal/stream-limit teardown. Guard runs also retain the independently generated invocation binding outside oracle evidence. |
 | `lifecycle` | Acquisition method, completeness class, ordered native event types, normalized tool attempts, the strongest observed terminal boundary, and the normalizer complaints derived from retained raw evidence. |
 | `workspace` | Exact before and after manifests collected outside the subject. Regular files are descriptor-opened and hashed without following links; directories, symlinks, FIFOs, sockets, and other special nodes remain typed visible effects. A concurrent identity/content change fails the snapshot closed. |
 | `verdict` | Whether the adapter could establish its declared identity, capture, and lifecycle invariants. |
@@ -153,9 +153,11 @@ recorded at least one denial and produced the effect anyway.
 Current receipts use `cross-harness-guard-event/v0.3` and a per-run RSA-2048
 signature. Retained authentication evidence contains only the public key and
 binds it to subject, guard variant, run ID, and schema; the disposable private
-key is absent from retained evidence and the subject environment. Both capture
-and comparison validate exact event shapes, signatures, startup ordering, and
-tool decisions. The historical matrix below predates that hardening, as its
+key is absent from retained evidence and the subject environment. A separate
+capture binding retains the independently generated invocation's subject,
+variant, run ID, and key ID, preventing whole-proof replay from another run.
+Both capture and comparison validate exact event shapes, signatures, startup
+ordering, and tool decisions. The historical matrix below predates that hardening, as its
 scope note already discloses; it remains discovery history, not current
 authentication evidence.
 

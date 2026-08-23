@@ -901,6 +901,27 @@ class ClaudeNormalizerTests(unittest.TestCase):
         )
         self.assertIn("Claude tool result precedes its call: call-1", errors)
 
+    def test_tool_result_is_error_must_be_an_actual_boolean(self) -> None:
+        for value in ("false", 0, 1, None):
+            with self.subTest(value=value):
+                result = json.loads(json.dumps(self.result))
+                result["message"]["content"][0]["is_error"] = value
+                lifecycle, errors = adapters._normalize_claude(
+                    jsonl(
+                        {"type": "system", "subtype": "init"},
+                        self.call,
+                        result,
+                        self.terminal,
+                    ),
+                    self.workspace,
+                )
+                self.assertIn(
+                    "Claude tool result is_error is not boolean: call-1", errors
+                )
+                self.assertIsNone(
+                    lifecycle["tool_executions"][0]["reported_error"]
+                )
+
 
 class CodexNormalizerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -966,6 +987,77 @@ class CodexNormalizerTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertTrue(lifecycle["tool_executions"][0]["reported_error"])
+
+    def test_command_exit_code_is_exact_and_boolean_is_rejected(self) -> None:
+        for value, valid in ((-7, True), (0, True), (True, False), ("1", False),
+                             (None, False)):
+            with self.subTest(value=value):
+                started = {
+                    "type": "item.started",
+                    "item": {
+                        "id": "command-1", "type": "command_execution",
+                        "command": "python3.11 -m unittest -v",
+                        "status": "in_progress",
+                    },
+                }
+                completed = json.loads(json.dumps(started))
+                completed["type"] = "item.completed"
+                completed["item"].update({
+                    "status": "completed", "exit_code": value,
+                })
+                lifecycle, errors = adapters._normalize_codex(
+                    self.stream(started, completed), self.workspace
+                )
+                if valid:
+                    self.assertEqual([], errors)
+                    self.assertEqual(
+                        value,
+                        lifecycle["tool_executions"][0]["operation_exit_code"],
+                    )
+                else:
+                    self.assertIn(
+                        "Codex command exit_code is not an integer: command-1",
+                        errors,
+                    )
+                    self.assertIsNone(
+                        lifecycle["tool_executions"][0]["operation_exit_code"]
+                    )
+
+
+class PiNormalizerTests(unittest.TestCase):
+    def test_tool_events_after_agent_settled_are_rejected(self) -> None:
+        events = (
+            {"type": "session"},
+            {"type": "agent_settled"},
+            {
+                "type": "tool_execution_start", "toolCallId": "late",
+                "toolName": "write", "args": {"file_path": "/workspace/x"},
+            },
+            {
+                "type": "tool_execution_end", "toolCallId": "late",
+                "toolName": "write", "isError": False,
+            },
+        )
+        _, errors = adapters._normalize_pi(jsonl(*events), Path("/workspace"))
+        self.assertEqual(
+            2, errors.count("Pi tool event follows agent_settled terminal")
+        )
+
+    def test_tool_events_before_agent_settled_remain_valid(self) -> None:
+        events = (
+            {"type": "session"},
+            {
+                "type": "tool_execution_start", "toolCallId": "honest",
+                "toolName": "write", "args": {"file_path": "/workspace/x"},
+            },
+            {
+                "type": "tool_execution_end", "toolCallId": "honest",
+                "toolName": "write", "isError": False,
+            },
+            {"type": "agent_settled"},
+        )
+        _, errors = adapters._normalize_pi(jsonl(*events), Path("/workspace"))
+        self.assertEqual([], errors)
 
 
 class HermesNormalizerTests(unittest.TestCase):
@@ -1857,6 +1949,32 @@ class GuardCaptureVerdictTests(unittest.TestCase):
                 self.assertFalse(record["outcome"]["evaluable"])
                 self.assertFalse(record["verdict"]["passed"])
 
+    def test_signature_hex_must_be_canonical_lowercase_fixed_width(self) -> None:
+        event = self.signed_event(event="loaded")
+        signature = event["signature"]
+        uppercase_index = next(
+            index for index, char in enumerate(signature) if char in "abcdef"
+        )
+        malformed = (
+            "+" + signature[1:],
+            signature[:uppercase_index]
+            + signature[uppercase_index].upper()
+            + signature[uppercase_index + 1:],
+            " " + signature[1:],
+            signature[:-1],
+            signature + "0",
+            "g" + signature[1:],
+        )
+        self.assertTrue(
+            adapters._verify_guard_event_signature(event, self.PUBLIC_KEY)
+        )
+        for value in malformed:
+            with self.subTest(value=value[:12], length=len(value)):
+                forged = dict(event, signature=value)
+                self.assertFalse(
+                    adapters._verify_guard_event_signature(forged, self.PUBLIC_KEY)
+                )
+
     def test_authenticated_receipt_is_bound_to_subject_and_mode(self) -> None:
         for field, value in (("subject", "codex"), ("mode", "allow")):
             event = self.signed_event(event="loaded")
@@ -1994,6 +2112,9 @@ class ContractComparisonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.GUARD_PUBLIC_KEY, cls.GUARD_PRIVATE_KEY = (
+            adapters._generate_guard_keypair()
+        )
+        cls.ALT_GUARD_PUBLIC_KEY, cls.ALT_GUARD_PRIVATE_KEY = (
             adapters._generate_guard_keypair()
         )
 
@@ -2530,7 +2651,13 @@ class ContractComparisonTests(unittest.TestCase):
         evaluable: bool,
         adapter_passed: bool | None = None,
         variant: str = "block",
+        run_id: str | None = None,
+        public_key: dict | None = None,
+        private_key: dict | None = None,
     ) -> dict:
+        run_id = self.GUARD_RUN_ID if run_id is None else run_id
+        public_key = self.GUARD_PUBLIC_KEY if public_key is None else public_key
+        private_key = self.GUARD_PRIVATE_KEY if private_key is None else private_key
         outer = self.outer(subject, passed=True)
         outer.update({"workload": "guard", "variant": variant})
         outer["adapter"]["request"].update({
@@ -2572,12 +2699,12 @@ class ContractComparisonTests(unittest.TestCase):
                 "schema": adapters.GUARD_RECEIPT_SCHEMA,
                 "subject": subject,
                 "mode": variant,
-                "run_id": self.GUARD_RUN_ID,
-                "key_id": adapters._guard_key_id(self.GUARD_PUBLIC_KEY),
+                "run_id": run_id,
+                "key_id": adapters._guard_key_id(public_key),
                 **raw_event,
             }
             event["signature"] = adapters._guard_event_signature(
-                event, self.GUARD_PRIVATE_KEY
+                event, private_key
             )
             events.append(event)
         task_outcome = guard_outcome(
@@ -2594,12 +2721,20 @@ class ContractComparisonTests(unittest.TestCase):
             "authentication": adapters._guard_authentication(
                 subject=subject,
                 mode=variant,
-                run_id=self.GUARD_RUN_ID,
-                public_key=self.GUARD_PUBLIC_KEY,
+                run_id=run_id,
+                public_key=public_key,
             ),
             "guard_receipt": capture_bytes(receipt),
             "events": events,
         }
+        outer["adapter"]["capture"]["guard_binding"] = (
+            adapters._guard_capture_binding(
+                subject=subject,
+                mode=variant,
+                run_id=run_id,
+                public_key=public_key,
+            )
+        )
         outer["adapter"]["workspace"] = {
             "before": _fixture_manifest(),
             "after": _fixture_manifest(),
@@ -3266,20 +3401,15 @@ class ContractComparisonTests(unittest.TestCase):
                 "stdout overflow disagrees with source bytes",
             ),
             (
-                "extra overflow under stream reason",
+                "combined reason lacks both overflows",
                 lambda evidence: (
-                    evidence.update({"termination_reason": "stdout_limit"}),
-                    evidence["overflow"].update({
-                        "stdout": True, "stderr": True
-                    }),
+                    evidence.update({"termination_reason": "stdout_stderr_limit"}),
+                    evidence["overflow"].update({"stdout": True}),
                     evidence["stdout"].update({
                         "source_bytes": evidence["limits"]["stdout_bytes"] + 1
                     }),
-                    evidence["stderr"].update({
-                        "source_bytes": evidence["limits"]["stderr_bytes"] + 1
-                    }),
                 ),
-                "stderr overflow disagrees with termination reason",
+                "stderr limit reason lacks overflow evidence",
             ),
         )
         for name, mutate, expected in cases:
@@ -3295,6 +3425,25 @@ class ContractComparisonTests(unittest.TestCase):
                 self.assertTrue(
                     any(expected in error for error in errors), errors
                 )
+
+    def test_stream_limit_can_faithfully_precede_other_stream_overflow(self) -> None:
+        baseline = self.outer("codex", passed=True)["adapter"]["capture"]
+        for primary, later in (("stdout", "stderr"), ("stderr", "stdout")):
+            with self.subTest(primary=primary, later=later):
+                evidence = json.loads(json.dumps(baseline))
+                for stream in (primary, later):
+                    evidence[stream]["source_bytes"] = (
+                        evidence["limits"][f"{stream}_bytes"] + 1
+                    )
+                    evidence["overflow"][stream] = True
+                evidence.update({
+                    "returncode": -15,
+                    "termination_reason": f"{primary}_limit",
+                })
+                errors: list[str] = []
+                state = comparator.verify_capture("codex", evidence, errors)
+                self.assertEqual([], errors)
+                self.assertIsNotNone(state)
 
     def test_hidden_capture_faults_fail_closed(self) -> None:
         def excess_source(subject: str, outer: dict) -> None:
@@ -3476,7 +3625,14 @@ class ContractComparisonTests(unittest.TestCase):
                 lambda evidence: evidence["authentication"].update({
                     "run_id": "00" * 16
                 }),
-                "receipt line 1 is unauthenticated",
+                "authentication proof disagrees with run",
+            ),
+            (
+                "key id",
+                lambda evidence: evidence["authentication"].update({
+                    "key_id": "00" * 32
+                }),
+                "authentication proof disagrees with run",
             ),
             (
                 "signature",
@@ -3503,6 +3659,54 @@ class ContractComparisonTests(unittest.TestCase):
                 )
                 self.assertFalse(result["contract_passed"])
                 self.assert_error_contains(expected, result["errors"])
+
+        binding_mutations = (
+            ("subject", "claude"),
+            ("mode", "allow"),
+            ("run_id", "00" * 16),
+            ("key_id", "00" * 32),
+        )
+        for field, value in binding_mutations:
+            with self.subTest(binding=field):
+                result = self.compare_mutation(
+                    lambda subject, outer: outer["adapter"]["capture"][
+                        "guard_binding"
+                    ].update({field: value}) if subject == "codex" else None,
+                    factory=lambda subject: self.guard_outer(
+                        subject, evaluable=True
+                    ),
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(
+                    (
+                        "guard has invalid capture binding"
+                        if field in {"subject", "mode"}
+                        else "authentication proof disagrees with run"
+                    ),
+                    result["errors"],
+                )
+
+    def test_guard_whole_oracle_proof_replay_is_rejected_by_capture_binding(
+        self,
+    ) -> None:
+        replay = self.guard_outer(
+            "codex",
+            evaluable=True,
+            run_id="56" * 16,
+            public_key=self.ALT_GUARD_PUBLIC_KEY,
+            private_key=self.ALT_GUARD_PRIVATE_KEY,
+        )["adapter"]["oracle_evidence"]
+
+        result = self.compare_mutation(
+            lambda subject, outer: outer["adapter"].update({
+                "oracle_evidence": json.loads(json.dumps(replay))
+            }) if subject == "codex" else None,
+            factory=lambda subject: self.guard_outer(subject, evaluable=True),
+        )
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "authentication proof disagrees with run", result["errors"]
+        )
 
     def test_lifecycle_claims_are_bound_to_subject_raw_evidence(self) -> None:
         result = self.compare_mutation(
@@ -3588,6 +3792,100 @@ class ContractComparisonTests(unittest.TestCase):
                     "lifecycle disagrees with retained raw evidence",
                     result["errors"],
                 )
+
+        codex = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["lifecycle"][
+                "tool_executions"
+            ][0].update({"operation_exit_code": 999})
+            if subject == "codex" else None,
+            factory=self.repair_outer,
+        )
+        self.assertFalse(codex["contract_passed"])
+        self.assert_error_contains(
+            "lifecycle disagrees with retained raw evidence", codex["errors"]
+        )
+
+    def test_new_lossy_normalizer_cases_are_bound_as_honest_negatives(self) -> None:
+        def invalid(subject: str) -> dict:
+            if subject not in {"claude", "codex", "pi"}:
+                return self.invalid_normalizer_outer(subject)
+            outer = self.outer(subject, passed=True)
+            adapter = outer["adapter"]
+            stream = "stdout"
+            if subject == "claude":
+                events = [
+                    {"type": "system", "subtype": "init"},
+                    {
+                        "type": "assistant", "message": {"content": [{
+                            "type": "tool_use", "id": "bad-bool",
+                            "name": "Write", "input": {
+                                "file_path": "/workspace/shared.txt",
+                                "content": EXPECTED_CONTENT.decode("utf-8"),
+                            },
+                        }]},
+                    },
+                    {
+                        "type": "user", "message": {"content": [{
+                            "type": "tool_result", "tool_use_id": "bad-bool",
+                            "is_error": "false", "content": "ok",
+                        }]},
+                    },
+                    {"type": "result", "subtype": "success", "is_error": False},
+                ]
+            elif subject == "codex":
+                item = {
+                    "id": "bad-exit", "type": "command_execution",
+                    "command": "true", "status": "in_progress",
+                }
+                completed = dict(item, status="completed", exit_code=True)
+                events = [
+                    {"type": "thread.started"},
+                    {"type": "turn.started"},
+                    {"type": "item.started", "item": item},
+                    {"type": "item.completed", "item": completed},
+                    {"type": "turn.completed"},
+                ]
+            elif subject == "pi":
+                events = [
+                    {"type": "session"},
+                    {"type": "agent_settled"},
+                    {
+                        "type": "tool_execution_start", "toolCallId": "late",
+                        "toolName": "write", "args": {
+                            "file_path": "/workspace/shared.txt",
+                            "content": EXPECTED_CONTENT.decode("utf-8"),
+                        },
+                    },
+                    {
+                        "type": "tool_execution_end", "toolCallId": "late",
+                        "toolName": "write", "isError": False,
+                    },
+                ]
+            adapter["capture"][stream] = capture_bytes(jsonl(*events))
+            projection = comparator._lifecycle_projection(
+                subject, adapter["capture"]
+            )
+            assert projection is not None and projection[1]
+            adapter["lifecycle"] = projection[0]
+            adapter["verdict"] = {
+                "passed": False, "errors": list(projection[1])
+            }
+            return subject_runner.experiment_document(
+                subject, "write", None, adapter
+            )
+
+        honest = self.compare_mutation(lambda _subject, _outer: None, factory=invalid)
+        self.assertTrue(honest["contract_passed"], honest["errors"])
+        cleared = self.compare_mutation(
+            lambda subject, outer: outer["adapter"]["verdict"].update({
+                "errors": []
+            }) if subject in {"claude", "codex", "pi"} else None,
+            factory=invalid,
+        )
+        self.assertFalse(cleared["contract_passed"])
+        self.assert_error_contains(
+            "verdict omits retained normalizer complaints", cleared["errors"]
+        )
 
     def test_incomplete_raw_call_result_lifecycle_is_rejected(self) -> None:
         def drop_claude_result(subject: str, outer: dict) -> None:
