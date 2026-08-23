@@ -737,9 +737,25 @@ def verify_process_evidence(
     *,
     include_sidecar: bool,
     nonzero_is_fault: bool,
+    guard_expected: bool = False,
 ) -> CaptureState | None:
     """Normalize the complete process profile before a verdict consumes it."""
     started = len(errors)
+    expected_process_keys = {
+        "argv", "limits", "stdout", "stderr", "returncode",
+        "termination_reason", "timed_out", "overflow", "process_group",
+        "forwarded_signals",
+    }
+    if include_sidecar:
+        expected_process_keys |= {
+            "sidecar", "sidecar_kind", "redacted_environment_names",
+        }
+    if guard_expected:
+        expected_process_keys.add("guard_binding")
+    if not isinstance(evidence, dict) or set(evidence) != expected_process_keys:
+        errors.append(f"{label} has invalid process evidence shape")
+        if not isinstance(evidence, dict):
+            return None
     argv = evidence.get("argv")
     if not _string_list(argv) or not argv:
         errors.append(f"{label} has invalid process argv")
@@ -752,26 +768,39 @@ def verify_process_evidence(
         if not isinstance(item, dict):
             errors.append(f"{label} has no {stream} capture")
             continue
+        expected_stream_keys = {
+            "bytes", "source_bytes", "sha256", "base64",
+            "redaction_count", "text",
+        }
+        if stream == "sidecar":
+            expected_stream_keys |= {
+                "exists", "format", "size", "max_bytes", "file_sha256",
+                "jsonl", "errors",
+            }
+        if set(item) != expected_stream_keys:
+            errors.append(f"{label} {stream} has invalid capture shape")
+            continue
         # Whatever the capture itself complained about, reported as its own
         # cause. These used to be invisible here: a sidecar refused for being
         # oversize stores no bytes, so the only error this function produced
         # was "not valid base64" -- which names the symptom and hides the
         # reason -- and a required sidecar that was never created produced no
         # error at all, because empty bytes digest perfectly well.
-        complaints = item.get("errors", [])
-        if not _string_list(complaints):
-            errors.append(
-                f"{label} {stream} has invalid errors: {complaints!r}"
-            )
-            complaints = []
-        else:
-            for complaint in complaints:
-                errors.append(f"{label} {stream}: {complaint}")
-        exists = item.get("exists")
-        if exists is not None and type(exists) is not bool:
-            errors.append(f"{label} {stream} has invalid exists flag")
-        if stream == "sidecar" and type(exists) is not bool:
-            errors.append(f"{label} sidecar has no exact exists flag")
+        complaints: list[str] = []
+        exists = None
+        if stream == "sidecar":
+            raw_complaints = item.get("errors")
+            if not _string_list(raw_complaints):
+                errors.append(
+                    f"{label} sidecar has invalid errors: {raw_complaints!r}"
+                )
+            else:
+                complaints = raw_complaints
+                for complaint in complaints:
+                    errors.append(f"{label} sidecar: {complaint}")
+            exists = item.get("exists")
+            if type(exists) is not bool:
+                errors.append(f"{label} sidecar has no exact exists flag")
         source_bytes = item.get("source_bytes")
         if type(source_bytes) is not int or source_bytes < 0:
             errors.append(f"{label} {stream} has invalid source byte count")
@@ -788,9 +817,28 @@ def verify_process_evidence(
             or item.get("base64") != ""
         ):
             errors.append(f"{label} absent sidecar carries captured bytes")
-        if exists is False and complaints:
-            # Already stated by the capture, and there are no bytes to check.
-            continue
+        format_name = None
+        file_digest = None
+        if stream == "sidecar":
+            format_name = item.get("format")
+            size = item.get("size")
+            max_bytes = item.get("max_bytes")
+            file_digest = item.get("file_sha256")
+            if format_name not in {"bytes", "utf8", "jsonl"}:
+                errors.append(f"{label} sidecar has invalid format")
+            if type(size) is not int or size < 0 or size != source_bytes:
+                errors.append(f"{label} sidecar size disagrees")
+            if type(max_bytes) is not int or max_bytes <= 0:
+                errors.append(f"{label} sidecar has invalid byte limit")
+            nonregular = "evidence path is not a regular file" in complaints
+            if exists is True and not nonregular and not _sha256(file_digest):
+                errors.append(f"{label} sidecar has invalid file digest")
+            elif file_digest is not None and not _sha256(file_digest):
+                errors.append(f"{label} sidecar has invalid file digest")
+            if exists is False and (
+                size != 0 or file_digest is not None or format_name != "bytes"
+            ):
+                errors.append(f"{label} absent sidecar metadata disagrees")
         encoded = item.get("base64")
         if encoded is None:
             # Deliberate absence, not corruption: the capture declined to store
@@ -798,6 +846,14 @@ def verify_process_evidence(
             # would add a second, misleading complaint.
             if not complaints:
                 errors.append(f"{label} {stream} has no captured bytes or reason")
+            if (
+                item.get("bytes") != 0
+                or item.get("sha256") != hashlib.sha256(b"").hexdigest()
+                or item.get("text") is not None
+            ):
+                errors.append(f"{label} {stream} refused bytes are incoherent")
+            if stream == "sidecar" and item.get("jsonl") is not None:
+                errors.append(f"{label} sidecar has an unexpected jsonl projection")
             continue
         if type(encoded) is not str:
             errors.append(f"{label} {stream} is not valid base64")
@@ -817,6 +873,31 @@ def verify_process_evidence(
             errors.append(f"{label} {stream} has invalid digest")
         elif hashlib.sha256(raw).hexdigest() != digest:
             errors.append(f"{label} {stream} digest disagrees")
+        try:
+            decoded = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            decoded = None
+        if item.get("text") != decoded:
+            errors.append(f"{label} {stream} text disagrees with stored bytes")
+        if stream == "sidecar":
+            should_project_jsonl = (
+                format_name == "jsonl"
+                and exists is True
+                and type(file_digest) is str
+                and decoded is not None
+            )
+            if should_project_jsonl:
+                records, framing_errors = parse_jsonl(raw)
+                if item.get("jsonl") != records:
+                    errors.append(
+                        f"{label} sidecar jsonl disagrees with stored bytes"
+                    )
+                if complaints != framing_errors:
+                    errors.append(
+                        f"{label} sidecar errors disagree with stored bytes"
+                    )
+            elif item.get("jsonl") is not None:
+                errors.append(f"{label} sidecar has an unexpected jsonl projection")
     limits = evidence.get("limits")
     expected_limits = {f"{stream}_bytes" for stream in streams}
     if (
@@ -825,6 +906,25 @@ def verify_process_evidence(
         or not all(type(value) is int and value > 0 for value in limits.values())
     ):
         errors.append(f"{label} has invalid capture limits")
+    if include_sidecar:
+        sidecar_kind = evidence.get("sidecar_kind")
+        if sidecar_kind not in {
+            "none", "shell_hook_jsonl", "native_persisted_session_jsonl"
+        }:
+            errors.append(f"{label} has invalid sidecar kind")
+        redacted_names = evidence.get("redacted_environment_names")
+        if (
+            not _string_list(redacted_names)
+            or redacted_names != sorted(set(redacted_names))
+        ):
+            errors.append(f"{label} has invalid redacted environment names")
+        sidecar_item = evidence.get("sidecar")
+        if (
+            isinstance(limits, dict)
+            and isinstance(sidecar_item, dict)
+            and sidecar_item.get("max_bytes") != limits.get("sidecar_bytes")
+        ):
+            errors.append(f"{label} sidecar limit disagrees")
     overflow = evidence.get("overflow")
     if not isinstance(overflow, dict) or set(overflow) != set(streams) or not all(
         type(value) is bool for value in overflow.values()
@@ -933,7 +1033,11 @@ def verify_process_evidence(
 
 
 def verify_capture(
-    label: str, capture: dict[str, Any], errors: list[str]
+    label: str,
+    capture: dict[str, Any],
+    errors: list[str],
+    *,
+    guard_expected: bool = False,
 ) -> CaptureState | None:
     return verify_process_evidence(
         label,
@@ -941,6 +1045,7 @@ def verify_capture(
         errors,
         include_sidecar=True,
         nonzero_is_fault=True,
+        guard_expected=guard_expected,
     )
 
 
@@ -2191,7 +2296,10 @@ def compare(paths: list[Path]) -> dict[str, Any]:
                 errors,
             )
             main_capture_state = verify_capture(
-                label, adapter["capture"], errors
+                label,
+                adapter["capture"],
+                errors,
+                guard_expected=raw_workload == "guard",
             )
             capture_state = main_capture_state
             oracle_state = None

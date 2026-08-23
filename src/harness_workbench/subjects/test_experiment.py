@@ -19,6 +19,7 @@ import compare as comparator
 import guard_hook
 import runner as subject_runner
 import usage_probe
+from harness_workbench import capture as capture_module
 from harness_workbench.capture import (
     Bounded,
     capture_bytes,
@@ -807,6 +808,147 @@ class CommonTests(unittest.TestCase):
         serialized = json.dumps(record)
         self.assertNotIn(old_token, serialized)
         self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
+
+    def test_credential_truncated_stdout_replays_for_every_stdout_subject(
+        self,
+    ) -> None:
+        secret = "credential-aware-overflow-token"
+        profile = {
+            "kind": "gateway",
+            "base_url": "https://example.invalid/v1",
+            "api_key_env": "HWB_PROVIDER_KEY",
+            "api_key_placeholder": secret,
+            "identity_strength": "gateway_model_label",
+            "models": {
+                "hermes": "test-model",
+                "pi": "test-model",
+            },
+            "subject_key_env": {
+                "hermes": "OPENAI_API_KEY",
+                "pi": "OPENAI_API_KEY",
+            },
+        }
+        resolved = {
+            "model": "test-model",
+            "model_profile": "test-gateway",
+            "model_identity_strength": "gateway_model_label",
+            "model_base_url": profile["base_url"],
+            "model_api_key_env": profile["api_key_env"],
+            "model_subject_key_env": "OPENAI_API_KEY",
+        }
+        apparatus = {
+            "schema": "hwb-subject-apparatus/v0.1",
+            "package": "harness_workbench",
+            "version": "0.0.0-test",
+            "modules": {},
+            "baseline": {"present": True, "agrees": True},
+        }
+        prefixes = {
+            "claude": jsonl(
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": "success", "is_error": False},
+            ),
+            "codex": jsonl(
+                {"type": "thread.started"},
+                {"type": "turn.started"},
+                {"type": "turn.completed"},
+            ),
+            "pi": jsonl(
+                {"type": "session"},
+                {"type": "agent_settled"},
+            ),
+            "hermes": b"ordinary Hermes stdout before overflow\n",
+        }
+
+        for subject in ("claude", "codex", "pi", "hermes"):
+            with self.subTest(subject=subject):
+                raw = prefixes[subject] + (secret + "\n").encode("utf-8")
+                bounded = Bounded(
+                    argv=[f"{subject}-test"],
+                    returncode=-15,
+                    termination_reason="stdout_limit",
+                    stdout=raw,
+                    stderr=b"",
+                    stdout_source_bytes=len(raw) + 1,
+                    stderr_source_bytes=0,
+                    stdout_overflow=True,
+                    stderr_overflow=False,
+                    group_alive_before_cleanup=False,
+                    group_alive_after_cleanup=False,
+                )
+                identity = {
+                    "name": subject,
+                    "version": "test",
+                    "model": "test-model",
+                    **(
+                        {"source_commit": "0" * 40}
+                        if subject == "hermes" else {}
+                    ),
+                }
+                with (
+                    mock.patch.dict(
+                        os.environ, {"HWB_TEST_TOKEN": secret}, clear=False
+                    ),
+                    mock.patch.object(
+                        adapters,
+                        "_active_profile",
+                        return_value=("test-gateway", profile),
+                    ),
+                    mock.patch.object(
+                        adapters, "_resolve_model", return_value=resolved
+                    ),
+                    mock.patch.object(
+                        adapters, "_verify_identity", return_value=identity
+                    ),
+                    mock.patch.object(
+                        adapters, "_apparatus", return_value=apparatus
+                    ),
+                    mock.patch.object(
+                        adapters,
+                        "_claude_command",
+                        return_value=["claude-test"],
+                    ),
+                    mock.patch.object(
+                        adapters, "_codex_command", return_value=["codex-test"]
+                    ),
+                    mock.patch.object(
+                        adapters,
+                        "_hermes_command",
+                        return_value=["hermes-test"],
+                    ),
+                    mock.patch.object(
+                        adapters, "_pi_command", return_value=["pi-test"]
+                    ),
+                    mock.patch.object(
+                        adapters, "run_bounded", return_value=bounded
+                    ),
+                ):
+                    record = adapters.capture(
+                        subject,
+                        "write",
+                        stdout_limit=len(raw),
+                        stderr_limit=1024,
+                    )
+
+                self.assertEqual(
+                    capture_module.TRUNCATED_CREDENTIAL_CAPTURE,
+                    base64.b64decode(record["capture"]["stdout"]["base64"]),
+                )
+                projection = comparator._lifecycle_projection(
+                    subject, record["capture"]
+                )
+                self.assertIsNotNone(projection)
+                assert projection is not None
+                self.assertEqual(record["lifecycle"], projection[0])
+                verification_errors: list[str] = []
+                state = comparator.verify_capture(
+                    subject, record["capture"], verification_errors
+                )
+                self.assertEqual([], verification_errors)
+                self.assertIsNotNone(state)
+                assert state is not None
+                self.assertTrue(state.measurement_fault)
+                self.assertFalse(record["verdict"]["passed"])
 
     def test_the_hermes_hook_scrubber_is_not_handed_an_empty_list(self) -> None:
         # The second layer, which was switched off. The hook scrubs values
@@ -2252,6 +2394,21 @@ class ContractComparisonTests(unittest.TestCase):
         return capture_bytes(raw)
 
     @staticmethod
+    def sidecar(raw: bytes, *, exists: bool) -> dict:
+        item = capture_bytes(raw)
+        records, complaints = adapters.parse_jsonl(raw)
+        item.update({
+            "exists": exists,
+            "format": "jsonl" if exists else "bytes",
+            "size": len(raw),
+            "max_bytes": 524_288,
+            "file_sha256": hashlib.sha256(raw).hexdigest() if exists else None,
+            "jsonl": records if exists else None,
+            "errors": complaints if exists else [],
+        })
+        return item
+
+    @staticmethod
     def lifecycle_evidence(
         subject: str, returncode: int
     ) -> tuple[bytes, bytes, dict]:
@@ -2653,9 +2810,10 @@ class ContractComparisonTests(unittest.TestCase):
         capture = {
             "stdout": self.stream(stdout_raw),
             "stderr": self.stream(),
-            "sidecar": self.stream(sidecar_raw),
+            "sidecar": self.sidecar(
+                sidecar_raw, exists=subject in {"hermes", "deepseek"}
+            ),
         }
-        capture["sidecar"]["exists"] = subject in {"hermes", "deepseek"}
         argv = self.invocation_argv(subject)
         capture.update({
             "limits": {
@@ -2677,6 +2835,12 @@ class ContractComparisonTests(unittest.TestCase):
             },
             "forwarded_signals": [],
             "argv": argv,
+            "sidecar_kind": (
+                "shell_hook_jsonl" if subject == "hermes"
+                else "native_persisted_session_jsonl"
+                if subject == "deepseek" else "none"
+            ),
+            "redacted_environment_names": [],
         })
         projection = comparator._lifecycle_projection(subject, capture)
         if projection is None:
@@ -2891,8 +3055,15 @@ class ContractComparisonTests(unittest.TestCase):
         else:
             prior = comparator._capture_raw(adapter["capture"], stream)
             assert prior is not None
-            raw = prior + b"not-json\n"
-        adapter["capture"][stream].update(capture_bytes(raw))
+            # Keep persisted sidecars valid JSONL so this fixture isolates a
+            # lifecycle complaint rather than also manufacturing a capture
+            # framing fault. Stdout subjects have no parsed JSONL sidecar
+            # projection and may still exercise malformed native output.
+            raw = prior + (jsonl({}) if stream == "sidecar" else b"not-json\n")
+        if stream == "sidecar":
+            adapter["capture"][stream] = self.sidecar(raw, exists=True)
+        else:
+            adapter["capture"][stream] = capture_bytes(raw)
         projection = comparator._lifecycle_projection(subject, adapter["capture"])
         if projection is None or not projection[1]:
             raise AssertionError(f"{subject} invalid fixture produced no complaint")
@@ -2937,10 +3108,9 @@ class ContractComparisonTests(unittest.TestCase):
         outer["adapter"]["capture"]["argv"] = argv
         outer["adapter"]["outcome"] = task_outcome
         outer["adapter"]["capture"]["stdout"] = self.stream(stdout_raw)
-        outer["adapter"]["capture"]["sidecar"] = self.stream(sidecar_raw)
-        outer["adapter"]["capture"]["sidecar"]["exists"] = subject in {
-            "hermes", "deepseek"
-        }
+        outer["adapter"]["capture"]["sidecar"] = self.sidecar(
+            sidecar_raw, exists=subject in {"hermes", "deepseek"}
+        )
         outer["adapter"]["lifecycle"] = lifecycle
         outer["adapter"]["workspace"] = {"before": before, "after": after}
         for label, process in (
@@ -3173,7 +3343,7 @@ class ContractComparisonTests(unittest.TestCase):
                 lambda outer: outer["adapter"]["capture"]["stdout"].update(
                     {"errors": 1}
                 ),
-                "stdout has invalid errors",
+                "stdout has invalid capture shape",
             ),
             (
                 "termination reason",
@@ -3197,6 +3367,67 @@ class ContractComparisonTests(unittest.TestCase):
                     if subject == "pi" else None,
                     expected,
                 )
+
+    def test_process_capture_derived_fields_and_shapes_are_sealed(self) -> None:
+        credential = "credential-bearing-forged-member"
+        cases = (
+            (
+                "stdout text",
+                "codex",
+                lambda capture: capture["stdout"].update({"text": credential}),
+                "stdout text disagrees with stored bytes",
+            ),
+            (
+                "stderr text",
+                "pi",
+                lambda capture: capture["stderr"].update({"text": credential}),
+                "stderr text disagrees with stored bytes",
+            ),
+            (
+                "sidecar text",
+                "hermes",
+                lambda capture: capture["sidecar"].update({"text": credential}),
+                "sidecar text disagrees with stored bytes",
+            ),
+            (
+                "sidecar jsonl",
+                "hermes",
+                lambda capture: capture["sidecar"].update({
+                    "jsonl": [{"api_key": credential}]
+                }),
+                "sidecar jsonl disagrees with stored bytes",
+            ),
+            (
+                "stdout extra",
+                "claude",
+                lambda capture: capture["stdout"].update({
+                    "credential": credential
+                }),
+                "stdout has invalid capture shape",
+            ),
+            (
+                "sidecar extra",
+                "deepseek",
+                lambda capture: capture["sidecar"].update({
+                    "credential": credential
+                }),
+                "sidecar has invalid capture shape",
+            ),
+            (
+                "process extra",
+                "codex",
+                lambda capture: capture.update({"credential": credential}),
+                "invalid process evidence shape",
+            ),
+        )
+        for name, target, mutate, expected in cases:
+            with self.subTest(name=name):
+                result = self.compare_mutation(
+                    lambda subject, outer: mutate(outer["adapter"]["capture"])
+                    if subject == target else None
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(expected, result["errors"])
 
     def test_capture_integer_fields_reject_boolean_stand_ins(self) -> None:
         cases = (
@@ -3669,6 +3900,48 @@ class ContractComparisonTests(unittest.TestCase):
         self.assertTrue(
             interrupted_result["contract_passed"], interrupted_result["errors"]
         )
+
+    def test_credential_truncated_stdout_is_a_comparable_bounded_failure(
+        self,
+    ) -> None:
+        credential = "credential-aware-comparison-token"
+
+        def bounded(subject: str) -> dict:
+            outer = self.outer(subject, passed=False)
+            if subject in {"claude", "codex", "pi", "hermes"}:
+                adapter = outer["adapter"]
+                capture = adapter["capture"]
+                raw = comparator._capture_raw(capture, "stdout") or b""
+                capture["stdout"] = capture_bytes(
+                    raw,
+                    redactions=(credential,),
+                    source_bytes=len(raw) + 1,
+                )
+                capture["limits"]["stdout_bytes"] = max(1, len(raw))
+                capture["overflow"]["stdout"] = True
+                capture.update({
+                    "returncode": -15,
+                    "termination_reason": "stdout_limit",
+                    "timed_out": False,
+                })
+                projection = comparator._lifecycle_projection(subject, capture)
+                if projection is None:
+                    raise AssertionError(f"missing {subject} retained lifecycle")
+                adapter["lifecycle"] = projection[0]
+                adapter["verdict"] = {
+                    "passed": False,
+                    "errors": [*projection[1], "test measurement fault"],
+                }
+                outer = subject_runner.experiment_document(
+                    subject, "write", None, adapter
+                )
+            return outer
+
+        result = self.compare_mutation(
+            lambda _subject, _outer: None,
+            factory=bounded,
+        )
+        self.assertTrue(result["contract_passed"], result["errors"])
 
     def test_real_repair_outcomes_are_comparable_without_a_golden_digest(self) -> None:
         result = self.compare_mutation(
@@ -4387,27 +4660,30 @@ class ContractComparisonTests(unittest.TestCase):
         # used to decode the None, catch the TypeError, and report "not valid
         # base64" -- naming the symptom and hiding the cause.
         errors: list[str] = []
+        evidence = json.loads(json.dumps(
+            self.outer("deepseek", passed=True)["adapter"]["capture"]
+        ))
+        evidence["sidecar"].update({
+            "bytes": 0,
+            "source_bytes": 900000,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "base64": None,
+            "text": None,
+            "redaction_count": 0,
+            "exists": True,
+            "format": "jsonl",
+            "size": 900000,
+            "max_bytes": 524288,
+            "file_sha256": "0" * 64,
+            "jsonl": None,
+            "errors": [
+                "evidence exceeds 524288-byte capture limit: 900000 bytes"
+            ],
+        })
+        evidence["overflow"]["sidecar"] = True
         comparator.verify_capture(
             "deepseek",
-            {
-                "stdout": self.stream(), "stderr": self.stream(),
-                "sidecar": dict(
-                    self.stream(),
-                    base64=None,
-                    text=None,
-                    exists=True,
-                    errors=["evidence exceeds 524288-byte capture limit: 900000 bytes"],
-                ),
-                "limits": {
-                    "stdout_bytes": 1024, "stderr_bytes": 1024,
-                    "sidecar_bytes": 524288,
-                },
-                "overflow": {"stdout": False, "stderr": False, "sidecar": True},
-                "returncode": 0,
-                "termination_reason": None,
-                "timed_out": False,
-                "forwarded_signals": [],
-            },
+            evidence,
             errors,
         )
         self.assertIn(
@@ -4422,25 +4698,16 @@ class ContractComparisonTests(unittest.TestCase):
         # empty bytes, and empty bytes digest perfectly well. Every structural
         # check passed and the comparator reported nothing at all.
         errors: list[str] = []
+        evidence = json.loads(json.dumps(
+            self.outer("hermes", passed=True)["adapter"]["capture"]
+        ))
+        evidence["sidecar"] = self.sidecar(b"", exists=False)
+        evidence["sidecar"]["errors"] = [
+            "required evidence file was not created"
+        ]
         comparator.verify_capture(
             "hermes",
-            {
-                "stdout": self.stream(), "stderr": self.stream(),
-                "sidecar": dict(
-                    self.stream(),
-                    exists=False,
-                    errors=["required evidence file was not created"],
-                ),
-                "limits": {
-                    "stdout_bytes": 1024, "stderr_bytes": 1024,
-                    "sidecar_bytes": 1024,
-                },
-                "overflow": {"stdout": False, "stderr": False, "sidecar": False},
-                "returncode": 0,
-                "termination_reason": None,
-                "timed_out": False,
-                "forwarded_signals": [],
-            },
+            evidence,
             errors,
         )
         self.assertIn(

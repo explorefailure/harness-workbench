@@ -1,6 +1,7 @@
 """Four subject adapters projected into one evidence envelope."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -29,7 +30,6 @@ from harness_workbench.capture import (
     digest_file,
     manifest,
     parse_jsonl,
-    redact_bytes,
     relative_to_root,
     run_bounded,
 )
@@ -2532,14 +2532,43 @@ def capture(
                 max_bytes=evidence_limit,
                 redactions=redactions,
             )
-        # The sidecar arrives already redacted, so the normalizers read the
-        # stored text rather than the file. `text` is None only for evidence the
-        # primitive refused or could not decode, and that is carried in
-        # `sidecar["errors"]` -- an empty parse here is then a recorded state.
-        normalized_evidence = (sidecar["text"] or "").encode("utf-8")
         evidence_overflow = sidecar["size"] > sidecar["max_bytes"]
         evidence_errors.extend(sidecar["errors"])
-        normalized_stdout, _ = redact_bytes(result.stdout, redactions)
+        # Seal the process observation before deriving lifecycle claims. A
+        # credential-aware truncated stream is replaced wholesale by
+        # capture_bytes; normalizing the pre-seal prefix would make the adapter
+        # claim a lifecycle the comparator cannot replay from retained bytes.
+        process_capture = _bounded_evidence(
+            result,
+            stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit,
+            redactions=redactions,
+            argv=_normalized_argv(argv, root, workspace),
+        )
+        process_capture["limits"]["sidecar_bytes"] = evidence_limit
+        process_capture["sidecar"] = sidecar
+        process_capture["sidecar_kind"] = evidence_kind
+        process_capture["overflow"]["sidecar"] = evidence_overflow
+        process_capture["redacted_environment_names"] = (
+            sensitive_environment_names
+        )
+        if workload == "guard":
+            assert guard_public_key is not None and guard_run_id is not None
+            process_capture["guard_binding"] = _guard_capture_binding(
+                subject=subject,
+                mode=str(variant),
+                run_id=guard_run_id,
+                public_key=guard_public_key,
+            )
+        retained_stdout = process_capture["stdout"]["base64"]
+        assert isinstance(retained_stdout, str)
+        normalized_stdout = base64.b64decode(retained_stdout, validate=True)
+        retained_sidecar = sidecar["base64"]
+        normalized_evidence = (
+            base64.b64decode(retained_sidecar, validate=True)
+            if isinstance(retained_sidecar, str)
+            else b""
+        )
         if subject == "claude":
             lifecycle, adapter_errors = _normalize_claude(
                 normalized_stdout, workspace
@@ -2661,28 +2690,6 @@ def capture(
             "passed": not adapter_errors,
             "errors": list(adapter_errors),
         }
-        process_capture = _bounded_evidence(
-            result,
-            stdout_limit=stdout_limit,
-            stderr_limit=stderr_limit,
-            redactions=redactions,
-            argv=_normalized_argv(argv, root, workspace),
-        )
-        process_capture["limits"]["sidecar_bytes"] = evidence_limit
-        process_capture["sidecar"] = sidecar
-        process_capture["sidecar_kind"] = evidence_kind
-        process_capture["overflow"]["sidecar"] = evidence_overflow
-        process_capture["redacted_environment_names"] = (
-            sensitive_environment_names
-        )
-        if workload == "guard":
-            assert guard_public_key is not None and guard_run_id is not None
-            process_capture["guard_binding"] = _guard_capture_binding(
-                subject=subject,
-                mode=str(variant),
-                run_id=guard_run_id,
-                public_key=guard_public_key,
-            )
         return {
             "schema": "cross-harness-adapter-run/v0.1",
             "subject": identity,
