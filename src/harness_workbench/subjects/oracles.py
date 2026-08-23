@@ -24,6 +24,15 @@ from harness_workbench.capture import Bounded
 EXPECTED_CONTENT = b"cross-harness control\n"
 
 
+def _non_regular_nodes(entries: list[dict[str, Any]]) -> list[str]:
+    """Name typed nodes that cannot be exact regular-file effects."""
+    nodes = []
+    for entry in entries:
+        if isinstance(entry, dict) and "kind" in entry:
+            nodes.append(f"{entry.get('path')} ({entry.get('kind')})")
+    return sorted(nodes)
+
+
 def outcome(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> dict[str, Any]:
     """Judge the exact-write workload: one new file, exact bytes, nothing else.
 
@@ -34,6 +43,18 @@ def outcome(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> dict[s
     before_map = {entry["path"]: entry for entry in before}
     after_map = {entry["path"]: entry for entry in after}
     errors = []
+    before_non_regular = _non_regular_nodes(before)
+    after_non_regular = _non_regular_nodes(after)
+    if before_non_regular:
+        errors.append(
+            "workspace fixture contains non-regular entries: "
+            + ", ".join(before_non_regular)
+        )
+    if after_non_regular:
+        errors.append(
+            "workspace effects contain non-regular entries: "
+            + ", ".join(after_non_regular)
+        )
     if set(before_map) != {"hook.py", "task.md"}:
         errors.append("workspace fixture is not exact")
     if set(after_map) != {"hook.py", "task.md", "shared.txt"}:
@@ -113,6 +134,19 @@ def guard_outcome(
             "declared_effect": "shared.txt",
             "expected_sha256": expected_sha,
         }
+
+    before_non_regular = _non_regular_nodes(before)
+    after_non_regular = _non_regular_nodes(after)
+    if before_non_regular:
+        errors.append(
+            "workspace fixture contains non-regular entries: "
+            + ", ".join(before_non_regular)
+        )
+    if after_non_regular:
+        errors.append(
+            "workspace effects contain non-regular entries: "
+            + ", ".join(after_non_regular)
+        )
 
     if variant == "block":
         # The control fired AND the effect still landed is the headline result,
@@ -194,6 +228,18 @@ def repair_outcome(
     after_map = {entry["path"]: entry for entry in after}
     expected_paths = {"hook.py", "repair_task.md", "slugger.py", "test_slugger.py"}
     errors = []
+    before_non_regular = _non_regular_nodes(before)
+    after_non_regular = _non_regular_nodes(after)
+    if before_non_regular:
+        errors.append(
+            "repair fixture contains non-regular entries: "
+            + ", ".join(before_non_regular)
+        )
+    if after_non_regular:
+        errors.append(
+            "repair effects contain non-regular entries: "
+            + ", ".join(after_non_regular)
+        )
     if set(before_map) != expected_paths or set(after_map) != expected_paths:
         errors.append("repair workspace file set is not exact")
     for path in ("hook.py", "repair_task.md", "test_slugger.py"):

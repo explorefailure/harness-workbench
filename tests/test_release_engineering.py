@@ -5,6 +5,7 @@ import ast
 import fnmatch
 import gzip
 import io
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -801,6 +802,34 @@ class TestReleaseSurfaces(unittest.TestCase):
             "guard run would leave a copied credential stageable",
         )
 
+    def test_a_materialized_subject_tree_ignores_interrupted_run_roots(self):
+        """The repository's root ignore file does not travel with the tree."""
+        from harness_workbench import subject_tree
+
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory) / "subjects"
+            tree.mkdir()
+            subject_tree.materialize(str(tree))
+            initialized = subprocess.run(
+                ["git", "init", "-q"], cwd=tree, capture_output=True, text=True
+            )
+            if initialized.returncode != 0:
+                self.skipTest("git is unavailable")
+            credential = tree / ".hwb-codex-probe" / "codex-home" / "auth.json"
+            credential.parent.mkdir(parents=True)
+            credential.write_text('{"access_token":"must-not-stage"}\n', encoding="utf-8")
+            decision = subprocess.run(
+                ["git", "check-ignore", "-q", credential.relative_to(tree)],
+                cwd=tree,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(
+            0,
+            decision.returncode,
+            "materialized subject tree can stage a killed run's copied auth.json",
+        )
+
     def test_public_identity_and_minimal_verification_provenance_are_explicit(self):
         with (ROOT / "pyproject.toml").open("rb") as stream:
             project = tomllib.load(stream)["project"]
@@ -829,7 +858,7 @@ class TestReleaseSurfaces(unittest.TestCase):
             record,
         )
         self.assertIn(
-            "maintainer-side author-context verification on 2026-08-11",
+            "maintainer-side author-context verification on 2026-08-22",
             record,
         )
         self.assertIn("macOS/arm64 with CPython 3.11", record)
@@ -863,16 +892,66 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertNotIn("Published releases\n\nNone yet", changelog)
         # The repository-owned record is intentionally the pre-publication
         # source record; the release-final record is a GitHub release asset.
-        self.assertIn("Frozen candidate record — NOT RELEASED", record)
+        self.assertIn("Prepared candidate record — NOT RELEASED", record)
         self.assertIn(
-            "https://github.com/explorefailure/harness-workbench/actions/runs/31625746283",
+            "f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3",
             record,
         )
         self.assertIn(
-            "https://github.com/explorefailure/harness-workbench/actions/runs/31625748519",
+            "https://github.com/explorefailure/harness-workbench/actions/runs/32604245910",
             record,
         )
-        self.assertIn("No CodeQL pass or uploaded result is claimed", record)
+        self.assertIn(
+            "https://github.com/explorefailure/harness-workbench/actions/runs/32604245892",
+            record,
+        )
+        self.assertIn("zero open code-scanning alerts", record)
+        self.assertIn("Release commit: **PENDING**", record)
+        self.assertIn("Signed tag and verification: **PENDING**", record)
+
+    def test_live_subject_prerequisites_follow_the_active_profile(self):
+        selection = json.loads(
+            (ROOT / "src" / "harness_workbench" / "subjects"
+             / "model_selection.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("opencode-go", selection["active"])
+        self.assertEqual("gateway", selection["profiles"]["opencode-go"]["kind"])
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        subject_readme = (
+            ROOT / "src" / "harness_workbench" / "subjects" / "README.md"
+        ).read_text(encoding="utf-8")
+        for surface in (readme, subject_readme):
+            with self.subTest(surface="root" if surface is readme else "subjects"):
+                self.assertIn("`opencode-go`", surface)
+                self.assertIn("`HWB_OPENCODE_KEY`", surface)
+                self.assertIn("outbound network", surface)
+                self.assertRegex(surface, r"paid|spend")
+                self.assertIn("Hermes", surface)
+                self.assertIn("`local-ollama`", surface)
+        self.assertNotIn(
+            "placeholder key-shaped value required by that provider profile",
+            subject_readme,
+        )
+        self.assertNotIn(
+            "Hermes uses the same pinned local Ollama model",
+            subject_readme,
+        )
+
+    def test_capture_provenance_distinguishes_rc1_tag_from_development(self):
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("added after the published `0.1.0rc1` tag", changelog)
+        self.assertIn("published rc1 artefacts do not contain it", changelog)
+        self.assertNotIn(
+            "`capture` reached the published `0.1.0rc1` candidate",
+            changelog,
+        )
+        self.assertIn("That tag does not contain `capture.py`", record)
+        self.assertNotIn("byte-identical across `0.1.0rc1`", record)
+        self.assertNotIn("which does not exist yet", record)
 
     def test_ci_tag_check_is_read_only_and_tag_only(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
@@ -1410,7 +1489,7 @@ class TestReleaseSurfaces(unittest.TestCase):
     # This list is the *decision*, not the discovery: a module is public until
     # somebody puts it here on purpose. Adding a module to the package without
     # touching this list fails the completeness check below, which is the point
-    # -- `capture` reached a published candidate routed nowhere precisely
+    # -- `conform` reached a published candidate routed nowhere precisely
     # because a new module needed no decision from anyone.
     INTERNAL_MODULES = frozenset({
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",

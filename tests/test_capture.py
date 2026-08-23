@@ -208,6 +208,27 @@ class ContainmentTests(unittest.TestCase):
             Path("/tmp/root/a/b"), capture.contained_path(Path("/tmp/root"), "a/b")
         )
 
+    @unittest.skipUnless(POSIX, "symlink contract is POSIX-only")
+    def test_symlink_parent_cannot_escape_for_existing_or_future_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "root"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "existing.txt").write_text("outside", encoding="utf-8")
+            (root / "redirect").symlink_to(outside, target_is_directory=True)
+
+            for value in ("redirect/existing.txt", "redirect/future/deep.txt"):
+                with self.subTest(value=value):
+                    with self.assertRaises(capture.CaptureError):
+                        capture.contained_path(root, value)
+
+            self.assertEqual(
+                root / "future" / "deep.txt",
+                capture.contained_path(root, "future/deep.txt"),
+            )
+
     def test_subject_reported_outside_path_is_labelled_not_dropped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -359,6 +380,35 @@ class BoundedRunTests(unittest.TestCase):
         self.assertEqual(1024, len(result.stdout))
         self.assertGreater(result.stdout_source_bytes, 1024)
         self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_simultaneous_stream_limits_have_one_faithful_combined_reason(self):
+        result = self._run(
+            "import os,signal,time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "os.write(1, b'x' * 2048); os.write(2, b'y' * 2048); "
+            "time.sleep(30)",
+            timeout=10,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            termination_grace=0.5,
+        )
+        self.assertEqual("stdout_stderr_limit", result.termination_reason)
+        self.assertTrue(result.stdout_overflow)
+        self.assertTrue(result.stderr_overflow)
+        self.assertEqual(1024, len(result.stdout))
+        self.assertEqual(1024, len(result.stderr))
+        self.assertGreater(result.stdout_source_bytes, 1024)
+        self.assertGreater(result.stderr_source_bytes, 1024)
+        self.assertFalse(result.group_alive_after_cleanup)
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=1024,
+            stderr_limit=1024,
+        )
+        self.assertEqual("stdout_stderr_limit", evidence["termination_reason"])
+        self.assertEqual(
+            {"stdout": True, "stderr": True}, evidence["overflow"]
+        )
 
     def test_timeout_kills_the_owned_process_group(self):
         result = self._run(

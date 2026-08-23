@@ -33,6 +33,8 @@ never a pass and never a fail.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -40,7 +42,9 @@ import sys
 from typing import Any
 
 
-SCHEMA = "cross-harness-guard-event/v0.1"
+SCHEMA = "cross-harness-guard-event/v0.2"
+CAPABILITY = "__HWB_GUARD_CAPABILITY__"
+RUN_ID = "__HWB_GUARD_RUN_ID__"
 DENIAL_REASON = "Harness Workbench guard denied the write tool"
 
 # The tool each subject writes a file with, and the shell it is measured
@@ -89,8 +93,26 @@ def _mode() -> str:
 
 
 def _emit(receipt: Path, subject: str, mode: str, event: dict[str, Any]) -> None:
+    authenticated = {
+        "schema": SCHEMA,
+        "subject": subject,
+        "mode": mode,
+        "run_id": RUN_ID,
+        "capability_id": hashlib.sha256(CAPABILITY.encode("ascii")).hexdigest(),
+        **event,
+    }
+    canonical = json.dumps(
+        authenticated,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    signature = hmac.new(
+        CAPABILITY.encode("ascii"), canonical.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
     line = json.dumps(
-        {"schema": SCHEMA, "subject": subject, "mode": mode, **event},
+        {**authenticated, "signature": signature},
+        ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )

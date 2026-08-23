@@ -92,6 +92,9 @@ harness_workbench = [
     # these globs, which is the only version of this rule that cannot rot.
     "subjects/*.ts",
     "subjects/*.mjs",
+    # Materialized trees are independent Git workspaces. Keep interrupted
+    # per-run roots (including copied Codex auth) unstageable there too.
+    "subjects/.gitignore",
     "subjects/repair_fixture/*.py",
 ]
 

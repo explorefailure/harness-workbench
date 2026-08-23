@@ -19,21 +19,27 @@ The identities in `pin.json` must match the installed clients. Claude and Codex
 use their existing authenticated clients. DeepSeek Harness uses the official
 `dsh` headless profile with temporary `HOME`, `DSH_HOME`, and XDG directories.
 Which model runs is declared in `model_selection.json`, which is the model
-authority; `pin.json`'s `ollama` block is the local profile's content pin and
-says so. Under the `local-ollama` profile the generic `llm-pi-ai` plugin routes
-the content-pinned local `gpt-oss:20b` model through Ollama's loopback
-OpenAI-compatible endpoint, so no external API key is required. (`qwen3.5:9b`
-was the earlier pin and was replaced after it failed the repair workload in
-every harness tested; it is no longer the local pin for any subject.) Under the
-`opencode-go` gateway profile the model is a label the gateway promises to
-honour rather than a digest, and `identity_strength` in that file records the
-difference instead of hiding it. The experiment supplies only the placeholder
-key-shaped value required by that provider profile and treats it as a redacted
-credential. `dsh_patch.yml` retains workspace confinement while making the run
-noninteractive. Hermes uses the same pinned local Ollama model and a temporary
-`HERMES_HOME`; only its workload toolsets are enabled. The Hermes source
-checkout defaults to `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is
-installed elsewhere.
+authority; `pin.json`'s `ollama` block is only the optional local profile's
+content pin and says so. The committed active profile is **`opencode-go`**.
+DeepSeek Harness, Hermes, and Pi runs under that profile require a valid
+`HWB_OPENCODE_KEY`, outbound network access to the declared remote gateway,
+and permission to make a potentially paid or spend-bearing model call. The
+adapter refuses to run when that key is absent; it does not substitute a
+placeholder for a gateway credential. The gateway model is a label the
+service promises to honour rather than a digest, and `identity_strength` in
+the declaration records that weaker identity.
+
+Hermes is the pinned Nous client and therefore makes a remote API call through
+the active gateway profile in the configuration shipped here. It gets a
+temporary `HERMES_HOME`, and only its workload toolsets are enabled. The Hermes
+source checkout defaults
+to `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is installed
+elsewhere. `local-ollama` is a separate, optional local profile: selecting it
+routes the content-pinned `gpt-oss:20b` model through Ollama's loopback
+OpenAI-compatible endpoint and uses a non-secret placeholder because that
+endpoint does not authenticate. (`qwen3.5:9b` was the earlier local pin and is
+no longer selected for any subject.) `dsh_patch.yml` retains workspace
+confinement while making DeepSeek runs noninteractive.
 
 `harness_workbench` must be importable: the adapters take bounded capture,
 credential redaction, manifests and digests from `harness_workbench.capture`
@@ -267,7 +273,7 @@ DeepSeek Harness keeps its `workspace-write` filesystem sandbox. The experiment
 patch replaces interactive approval with a named noninteractive preset and
 disables subagent, workflow, Ralph, background-job, skill, goal, todo, search,
 and web tools. Automatic title generation and the irrelevant dynamic runtime
-context snapshot are disabled; the local provider declares reasoning `off` and
+context snapshot are disabled; the selected provider declares reasoning `off` and
 an 8,192-token per-step cap. Its supported headless stdout is final text only,
 so the adapter collects the first-party uncompressed session log from the
 isolated `DSH_HOME` and normalizes native `tool/call`, `tool/result`, and
@@ -284,9 +290,11 @@ after one of them invites the other to be read as it.
 Stdout, stderr, and the sidecar have positive byte limits. Exceeding stdout or
 stderr terminates the owned process group; the Hermes hook refuses a sidecar
 append that would exceed its limit. Credential-looking environment values are
-scrubbed before captured bytes are serialized, and credential variables are not
-passed to the local Hermes process. Stored captures report source byte counts,
-stored digests, redaction counts, overflow state, and termination reason.
+scrubbed before captured bytes are serialized. Hermes receives only the active
+provider credential, in its private temporary config and the provider variable
+its client expects; unrelated host credentials are removed. Stored captures
+report source byte counts, stored digests, redaction counts, overflow state,
+and termination reason.
 An escaped child can outlive the owned group, but it cannot hold the adapter's
 capture loop open indefinitely.
 

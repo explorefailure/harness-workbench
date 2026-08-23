@@ -12,12 +12,32 @@
 // This writes `loaded` at registration, before any model output exists. A run
 // with no `loaded` line is NOT_EVALUABLE, never a pass and never a fail.
 import { appendFileSync } from "node:fs";
+import { createHash, createHmac } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type GuardMode = "block" | "allow";
 
-const SCHEMA = "cross-harness-guard-event/v0.1";
+const SCHEMA = "cross-harness-guard-event/v0.2";
+const CAPABILITY = "__HWB_GUARD_CAPABILITY__";
+const RUN_ID = "__HWB_GUARD_RUN_ID__";
 const GUARDED_TOOL = "write";
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) =>
+      `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) {
+    throw new Error("guard receipt contains an unserializable value");
+  }
+  return encoded;
+}
 
 function required(name: string): string {
   const value = process.env[name];
@@ -41,15 +61,32 @@ export default function registerGuard(pi: ExtensionAPI) {
   const mode = guardMode();
   const receiptPath = required("HWB_GUARD_RECEIPT");
 
-  const emit = (event: Record<string, unknown>) =>
+  const emit = (event: Record<string, unknown>) => {
+    const authenticated = {
+      schema: SCHEMA,
+      subject: "pi",
+      mode,
+      run_id: RUN_ID,
+      capability_id: createHash("sha256").update(CAPABILITY).digest("hex"),
+      ...event,
+    };
+    const signature = createHmac("sha256", CAPABILITY)
+      .update(canonical(authenticated))
+      .digest("hex");
     appendFileSync(
       receiptPath,
-      `${JSON.stringify({ schema: SCHEMA, subject: "pi", mode, ...event })}\n`,
+      `${JSON.stringify({ ...authenticated, signature })}\n`,
       { encoding: "utf8" },
     );
+  };
 
   // Written at registration, before the model has produced anything at all.
-  emit({ event: "loaded", guarded_tool: GUARDED_TOOL, pid: process.pid });
+  emit({
+    event: "loaded",
+    guarded_tool: GUARDED_TOOL,
+    shell_tool: "bash",
+    pid: process.pid,
+  });
 
   pi.on("tool_call", (event) => {
     // Every call is recorded, not only the guarded one. "How many tools did it

@@ -846,7 +846,12 @@ def verify_process_evidence(
                 )
     termination_reason = evidence.get("termination_reason")
     if termination_reason not in (
-        None, "timeout", "stdout_limit", "stderr_limit", "signalled"
+        None,
+        capture_module.TIMEOUT,
+        capture_module.STDOUT_LIMIT,
+        capture_module.STDERR_LIMIT,
+        capture_module.STDOUT_STDERR_LIMIT,
+        capture_module.SIGNALLED,
     ):
         errors.append(f"{label} has an invalid termination reason")
     if type(evidence.get("returncode")) is not int:
@@ -856,18 +861,26 @@ def verify_process_evidence(
         errors.append(f"{label} has an invalid timeout flag")
     elif timed_out is not (termination_reason == "timeout"):
         errors.append(f"{label} timeout flag disagrees with termination reason")
-    if termination_reason == "stdout_limit" and not overflow_map.get(
-        "stdout", False
-    ):
-        errors.append(f"{label} stdout limit reason lacks overflow evidence")
-    if termination_reason == "stderr_limit" and not overflow_map.get(
-        "stderr", False
-    ):
-        errors.append(f"{label} stderr limit reason lacks overflow evidence")
-    if overflow_map.get("stdout") is True and termination_reason != "stdout_limit":
-        errors.append(f"{label} stdout overflow disagrees with termination reason")
-    if overflow_map.get("stderr") is True and termination_reason != "stderr_limit":
-        errors.append(f"{label} stderr overflow disagrees with termination reason")
+    streams_by_limit_reason = {
+        capture_module.STDOUT_LIMIT: {"stdout"},
+        capture_module.STDERR_LIMIT: {"stderr"},
+        capture_module.STDOUT_STDERR_LIMIT: {"stdout", "stderr"},
+    }
+    reason_streams = (
+        streams_by_limit_reason.get(termination_reason, set())
+        if type(termination_reason) is str
+        else set()
+    )
+    for stream in reason_streams:
+        if not overflow_map.get(stream, False):
+            errors.append(
+                f"{label} {stream} limit reason lacks overflow evidence"
+            )
+    for stream in ("stdout", "stderr"):
+        if overflow_map.get(stream) is True and stream not in reason_streams:
+            errors.append(
+                f"{label} {stream} overflow disagrees with termination reason"
+            )
     process_group = evidence.get("process_group")
     process_group_valid = (
         isinstance(process_group, dict)
@@ -1061,90 +1074,85 @@ def _capture_raw(capture: dict[str, Any], stream: str) -> bytes | None:
         return None
 
 
+def _raw_workspace(events: list[dict[str, Any]]) -> Path:
+    """Recover the disposable workspace needed to replay path projections.
+
+    DeepSeek records it explicitly in the session header.  The other native
+    streams record absolute paths on file operations; capture always names the
+    disposable directory ``workspace``.  Relative-only and command-only runs
+    can use the canonical fallback because their projection is independent of
+    the host prefix.
+    """
+    for event in events:
+        if event.get("type") == "session" and type(event.get("cwd")) is str:
+            cwd = Path(event["cwd"])
+            if cwd.is_absolute() and cwd.name == "workspace":
+                return cwd
+
+    def strings(value: Any):
+        if type(value) is str:
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from strings(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from strings(child)
+
+    for value in strings(events):
+        path = Path(value)
+        if not path.is_absolute() or "workspace" not in path.parts:
+            continue
+        index = len(path.parts) - 1 - tuple(reversed(path.parts)).index("workspace")
+        return Path(*path.parts[: index + 1])
+    return Path("/workspace")
+
+
 def _lifecycle_projection(
     subject: str, capture: dict[str, Any]
-) -> tuple[
-    list[Any], list[tuple[Any, ...]], dict[str, Any], list[str]
-] | None:
+) -> tuple[dict[str, Any], list[str]] | None:
+    """Re-run the subject normalizer over the retained bytes.
+
+    A hand-written summary projection inevitably omits fields.  That omission
+    previously let argument digests, effect/operation classifications, error
+    statuses, and operation exit codes drift while call ids still matched.
+    Reusing the capture normalizer makes the retained raw stream the source of
+    every lifecycle fact and keeps the comparison boundary in lockstep with
+    capture.
+    """
     stream = "sidecar" if subject in {"hermes", "deepseek"} else "stdout"
     raw = _capture_raw(capture, stream)
     if raw is None:
         return None
     events, complaints = parse_jsonl(raw, objects_only=True)
+    if complaints:
+        return {}, complaints
+    workspace = _raw_workspace(events)
+    # Lazy import avoids making the comparator's declarations depend on adapter
+    # initialization while still sharing the exact normalization mechanism.
+    import adapters as adapter_module
+
     if subject == "claude":
-        types = [event.get("type") for event in events]
-        calls = []
-        for event in events:
-            message = event.get("message")
-            content = message.get("content", []) if isinstance(message, dict) else []
-            for item in content if isinstance(content, list) else []:
-                if isinstance(item, dict) and item.get("type") == "tool_use":
-                    calls.append((item.get("id"), str(item.get("name", "")).lower()))
-        terminal = events[-1] if events else {}
-        return types, calls, {
-            "status": terminal.get("subtype"), "is_error": terminal.get("is_error")
-        }, complaints
+        return adapter_module._normalize_claude(raw, workspace)
     if subject == "codex":
-        types = [event.get("type") for event in events]
-        calls = []
-        for event in events:
-            item = event.get("item")
-            if (
-                event.get("type") == "item.completed"
-                and isinstance(item, dict)
-                and item.get("type") in {"file_change", "command_execution"}
-            ):
-                calls.append((item.get("id"), item.get("type")))
-        return types, calls, {
-            "status": events[-1].get("type") if events else None
-        }, complaints
+        return adapter_module._normalize_codex(raw, workspace)
     if subject == "pi":
-        types = [
-            event.get("type") for event in events if type(event.get("type")) is str
-        ]
-        calls = [
-            (event.get("toolCallId"), event.get("toolName"))
-            for event in events if event.get("type") == "tool_execution_start"
-        ]
-        settled = sum(event.get("type") == "agent_settled" for event in events)
-        return types, calls, {
-            "status": "agent_settled", "settled": settled
-        }, complaints
+        return adapter_module._normalize_pi(raw, workspace)
     if subject == "hermes":
-        types = [event.get("hook_event_name") for event in events]
-        posts = {
-            (
-                (event.get("extra") or {}).get("api_request_id"),
-                (event.get("extra") or {}).get("tool_call_id"),
-            )
-            for event in events
-            if event.get("hook_event_name") == "post_tool_call"
-            and isinstance(event.get("extra"), dict)
-        }
-        calls = []
-        for event in events:
-            extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
-            identity = (extra.get("api_request_id"), extra.get("tool_call_id"))
-            if event.get("hook_event_name") == "pre_tool_call" and identity in posts:
-                calls.append((*identity, event.get("tool_name")))
-        return types, calls, {
-            "status": "process_exit", "returncode": capture.get("returncode")
-        }, complaints
-    records = events
-    events = [event for event in records if event.get("type") != "session"]
-    types = [event.get("type") for event in events]
-    calls = []
-    for event in events:
-        if event.get("type") != "tool/call":
-            continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        calls.append((data.get("callId"), str(data.get("name", "")).lower()))
-    terminal = events[-1] if events else {}
-    data = terminal.get("data") if isinstance(terminal.get("data"), dict) else {}
-    reason = data.get("reason") if isinstance(data.get("reason"), dict) else {}
-    return types, calls, {
-        "status": reason.get("kind"), "returncode": capture.get("returncode")
-    }, complaints
+        stdout = _capture_raw(capture, "stdout")
+        if stdout is None:
+            return None
+        return adapter_module._normalize_hermes(
+            stdout, raw, workspace, capture.get("returncode")
+        )
+    identity = _declared_subject_identity("deepseek")
+    return adapter_module._normalize_deepseek(
+        raw,
+        workspace,
+        capture.get("returncode"),
+        str(identity["provider"]),
+        str(identity["model"]),
+    )
 
 
 def verify_lifecycle(
@@ -1205,10 +1213,14 @@ def verify_lifecycle(
     if projection is None:
         errors.append(f"{label} lifecycle has no retained raw evidence")
         valid = False
-    elif event_types != projection[0] or terminal != projection[2]:
+    elif lifecycle != projection[0]:
         errors.append(f"{label} lifecycle disagrees with retained raw evidence")
         valid = False
-    if projection is not None and projection[3]:
+    # JSONL format complaints prevent any projection. Subject-semantic
+    # complaints (a failed terminal, an incomplete call) are already retained
+    # by the adapter verdict and may be the honest result of a bounded run; the
+    # normalized facts must still match even when that verdict is false.
+    if projection is not None and projection[0] == {} and projection[1]:
         errors.append(f"{label} lifecycle raw evidence is malformed")
         valid = False
     if type(executions) is list and subject in expected_profiles:
@@ -1221,7 +1233,6 @@ def verify_lifecycle(
             expected_keys.add("operation_exit_code")
         if subject == "hermes":
             expected_keys.add("request_id")
-        identities = []
         for execution in executions:
             if not isinstance(execution, dict) or set(execution) != expected_keys:
                 errors.append(f"{label} lifecycle has invalid tool execution shape")
@@ -1236,7 +1247,6 @@ def verify_lifecycle(
                 if subject == "hermes"
                 else (execution.get("call_id"), execution.get("tool_name"))
             )
-            identities.append(identity)
             expected_arguments_stage = (
                 "subject_proposal"
                 if subject in {"claude", "hermes"}
@@ -1264,11 +1274,6 @@ def verify_lifecycle(
             ):
                 errors.append(f"{label} lifecycle has invalid tool execution fields")
                 valid = False
-        if projection is not None and identities != projection[1]:
-            errors.append(
-                f"{label} lifecycle tool executions disagree with raw evidence"
-            )
-            valid = False
     if not valid:
         return None
     return LifecycleState(
@@ -1582,6 +1587,21 @@ def verify_isolation(
         errors.append(f"{label} adapter has invalid isolation")
 
 
+_NON_REGULAR_WORKSPACE_KINDS = {
+    "block_device", "character_device", "directory", "fifo", "other",
+    "socket", "symlink",
+}
+
+
+def _regular_manifest_entry(entry: dict[str, Any]) -> bool:
+    return (
+        set(entry) == {"path", "size", "mode", "sha256"}
+        and type(entry.get("size")) is int
+        and entry["size"] >= 0
+        and _sha256(entry.get("sha256"))
+    )
+
+
 def _manifest_map(
     label: str, value: Any, errors: list[str]
 ) -> dict[str, dict[str, Any]] | None:
@@ -1590,17 +1610,20 @@ def _manifest_map(
         return None
     result: dict[str, dict[str, Any]] = {}
     for entry in value:
+        regular = isinstance(entry, dict) and _regular_manifest_entry(entry)
+        non_regular = (
+            isinstance(entry, dict)
+            and set(entry) == {"path", "mode", "kind"}
+            and entry.get("kind") in _NON_REGULAR_WORKSPACE_KINDS
+        )
         if (
             not isinstance(entry, dict)
-            or set(entry) != {"path", "size", "mode", "sha256"}
             or type(entry.get("path")) is not str
             or not entry["path"]
-            or type(entry.get("size")) is not int
-            or entry["size"] < 0
             or type(entry.get("mode")) is not int
             or entry["mode"] < 0
             or entry["mode"] > 0o7777
-            or not _sha256(entry.get("sha256"))
+            or not (regular or non_regular)
             or entry["path"] in result
         ):
             errors.append(f"{label} has an invalid manifest entry")
@@ -1639,6 +1662,9 @@ def verify_workspace(
     effect_path = profile["effect_path"]
     effect_entry = after.get(effect_path)
     effect_sha = effect_entry.get("sha256") if effect_entry is not None else None
+    non_regular = {
+        path for path, entry in after.items() if "kind" in entry
+    }
     if workload in {"write", "repair"} and outcome.get("effect_sha256") != effect_sha:
         errors.append(f"{label} outcome effect digest disagrees with workspace")
     invariant_paths = set(expected_before) - {effect_path}
@@ -1651,6 +1677,7 @@ def verify_workspace(
         exact_paths = set(after) == set(expected_before) | {effect_path}
         workspace_passed = (
             exact_paths
+            and not non_regular
             and not invariant_changed
             and effect_sha == EXPECTED_EFFECT_SHA
         )
@@ -1659,6 +1686,7 @@ def verify_workspace(
     elif workload == "repair":
         repair_workspace_valid = (
             set(after) == set(expected_before)
+            and not non_regular
             and not invariant_changed
             and after.get(effect_path) != expected_before.get(effect_path)
         )
@@ -1674,7 +1702,9 @@ def verify_workspace(
         unexpected = sorted(set(after) - set(expected_before) - {effect_path})
         if outcome.get("evaluable", True) and outcome.get("unexpected_files") != unexpected:
             errors.append(f"{label} guard unexpected files disagree with workspace")
-        if outcome.get("passed") is True and (unexpected or invariant_changed):
+        if outcome.get("passed") is True and (
+            unexpected or invariant_changed or non_regular
+        ):
             errors.append(f"{label} passing guard outcome has invalid workspace")
 def verify_outer_binding(
     label: str,

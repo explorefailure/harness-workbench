@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
+import stat
 import tempfile
 from typing import Any
 from urllib.request import urlopen
@@ -46,6 +49,17 @@ from workloads import (
 
 
 HERE = Path(__file__).resolve().parent
+
+GUARD_RECEIPT_SCHEMA = "cross-harness-guard-event/v0.2"
+GUARD_CAPABILITY_PLACEHOLDER = "__HWB_GUARD_CAPABILITY__"
+GUARD_RUN_ID_PLACEHOLDER = "__HWB_GUARD_RUN_ID__"
+GUARD_TOOLS = {
+    "claude": ("Write", "Bash"),
+    "codex": ("apply_patch", "Bash"),
+    "deepseek": ("write", "bash"),
+    "hermes": ("write_file", "terminal"),
+    "pi": ("write", "bash"),
+}
 
 
 def parse_jsonl_objects(raw: bytes) -> tuple[list[dict[str, Any]], list[str]]:
@@ -354,6 +368,58 @@ def _fixture(workspace: Path, workload: str) -> None:
         raise AdapterError(f"unknown workload: {workload}")
 
 
+def workspace_manifest(root: Path) -> list[dict[str, Any]]:
+    """Describe every filesystem node below a disposable workspace.
+
+    The subject-neutral capture manifest intentionally includes regular files
+    only: following a symlink would attribute outside bytes to an inside path.
+    Exact-effect measurement has a different requirement. A symlink, directory,
+    FIFO, or socket created by a subject is itself an effect and cannot disappear
+    from the before/after evidence merely because it has no safe byte digest.
+
+    Regular-file entries retain the existing four-field shape so fixture
+    profiles and historical records remain comparable. Non-regular entries are
+    represented by path, mode, and an explicit kind; none is opened or followed.
+    """
+    entries: list[dict[str, Any]] = []
+
+    def visit(directory: Path) -> None:
+        with os.scandir(directory) as iterator:
+            children = sorted(iterator, key=lambda child: child.name)
+        for child in children:
+            path = Path(child.path)
+            node_stat = child.stat(follow_symlinks=False)
+            entry: dict[str, Any] = {
+                "path": path.relative_to(root).as_posix(),
+                "mode": stat.S_IMODE(node_stat.st_mode),
+            }
+            if stat.S_ISREG(node_stat.st_mode):
+                entry.update({
+                    "size": node_stat.st_size,
+                    "sha256": digest_file(path),
+                })
+            elif stat.S_ISDIR(node_stat.st_mode):
+                entry["kind"] = "directory"
+            elif stat.S_ISLNK(node_stat.st_mode):
+                entry["kind"] = "symlink"
+            elif stat.S_ISFIFO(node_stat.st_mode):
+                entry["kind"] = "fifo"
+            elif stat.S_ISSOCK(node_stat.st_mode):
+                entry["kind"] = "socket"
+            elif stat.S_ISBLK(node_stat.st_mode):
+                entry["kind"] = "block_device"
+            elif stat.S_ISCHR(node_stat.st_mode):
+                entry["kind"] = "character_device"
+            else:
+                entry["kind"] = "other"
+            entries.append(entry)
+            if stat.S_ISDIR(node_stat.st_mode):
+                visit(path)
+
+    visit(root)
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
 def _write_private_text(path: Path, text: str) -> None:
     """Write a disposable vendor config with owner-only permissions.
 
@@ -396,7 +462,38 @@ def _ambient_config(subject: str, workload: str) -> str:
     return per_subject["guard" if workload == "guard" else "default"]
 
 
-def _install_guard_hook(root: Path) -> Path:
+def _materialize_guard(
+    source_name: str,
+    installed: Path,
+    *,
+    capability: str,
+    run_id: str,
+) -> Path:
+    """Write one run-bound guard without publishing its signing key in env.
+
+    Guard subjects deliberately retain a shell, and that shell inherits the
+    receipt path and mode.  Those values therefore cannot authenticate a
+    receipt.  The signing capability is materialized into the per-run guard
+    source instead; it is absent from the subject environment and the retained
+    evidence, while the adapter keeps its own copy for verification.
+    """
+    source = (HERE / source_name).read_text(encoding="utf-8")
+    if source.count(GUARD_CAPABILITY_PLACEHOLDER) != 1:
+        raise AdapterError(
+            f"{source_name} does not contain exactly one guard capability placeholder"
+        )
+    if source.count(GUARD_RUN_ID_PLACEHOLDER) != 1:
+        raise AdapterError(
+            f"{source_name} does not contain exactly one guard run-id placeholder"
+        )
+    rendered = source.replace(GUARD_CAPABILITY_PLACEHOLDER, capability).replace(
+        GUARD_RUN_ID_PLACEHOLDER, run_id
+    )
+    _write_private_text(installed, rendered)
+    return installed
+
+
+def _install_guard_hook(root: Path, *, capability: str, run_id: str) -> Path:
     """Put the shared guard command beside the run and return its path.
 
     Beside the run and never inside the workspace. All three command-hook
@@ -406,8 +503,9 @@ def _install_guard_hook(root: Path) -> Path:
     instrumentation part of the effect it exists to observe.
     """
     installed = root / "guard_hook.py"
-    shutil.copy2(HERE / "guard_hook.py", installed)
-    return installed
+    return _materialize_guard(
+        "guard_hook.py", installed, capability=capability, run_id=run_id
+    )
 
 
 def _guard_hook_command(guard_hook: Path, subject: str, event: str) -> str:
@@ -859,6 +957,11 @@ def _argument_projection(
     return projection, effect_kind, outside
 
 
+def _arguments_digest(projection: dict[str, Any]) -> str:
+    """Bare SHA-256 for the canonically encoded argument projection."""
+    return digest_obj(projection).split(":", 1)[1]
+
+
 def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str]]:
     events, errors = parse_jsonl_objects(raw)
     types = [event.get("type") for event in events]
@@ -887,7 +990,9 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
         errors.append("Claude stream does not end with result")
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, dict[str, Any]] = {}
-    for event in events:
+    call_indices: dict[str, int] = {}
+    result_indices: dict[str, int] = {}
+    for event_index, event in enumerate(events):
         message = event.get("message", {})
         for content in message.get("content", []) if isinstance(message, dict) else []:
             if not isinstance(content, dict):
@@ -900,6 +1005,7 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
                     errors.append(f"duplicate Claude tool call: {call_id}")
                 else:
                     calls[call_id] = content
+                    call_indices[call_id] = event_index
             elif content.get("type") == "tool_result":
                 call_id = content.get("tool_use_id")
                 if not isinstance(call_id, str) or not call_id:
@@ -911,9 +1017,12 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
                         "is_error": bool(content.get("is_error", False)),
                         "content": content.get("content"),
                     }
+                    result_indices[call_id] = event_index
     for call_id in results:
         if call_id not in calls:
             errors.append(f"Claude tool result has no call: {call_id}")
+        elif result_indices[call_id] <= call_indices[call_id]:
+            errors.append(f"Claude tool result precedes its call: {call_id}")
     executions = []
     for call_id, call in calls.items():
         arguments = call.get("input", {})
@@ -930,7 +1039,7 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
             "tool_name": str(call.get("name", "")).lower(),
             "effect_kind": effect_kind,
             "operation": normalized.get("operation"),
-            "arguments_sha256": digest_obj(normalized),
+            "arguments_sha256": _arguments_digest(normalized),
             "arguments_stage": "subject_proposal",
             "reported_error": result.get("is_error") if result else None,
             "result_stage": "subject_reported",
@@ -983,7 +1092,9 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
         errors.append("Codex stream does not end with turn.completed")
     started = {}
     completed = {}
-    for event in events:
+    started_indices: dict[str, int] = {}
+    completed_indices: dict[str, int] = {}
+    for event_index, event in enumerate(events):
         item = event.get("item")
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             continue
@@ -992,14 +1103,18 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
                 errors.append(f"duplicate Codex item start: {item['id']}")
             else:
                 started[item["id"]] = item
+                started_indices[item["id"]] = event_index
         elif event.get("type") == "item.completed":
             if item["id"] in completed:
                 errors.append(f"duplicate Codex item completion: {item['id']}")
             else:
                 completed[item["id"]] = item
+                completed_indices[item["id"]] = event_index
     for item_id in started:
         if item_id not in completed:
             errors.append(f"Codex item did not complete: {item_id}")
+        elif completed_indices[item_id] <= started_indices[item_id]:
+            errors.append(f"Codex item completion precedes its start: {item_id}")
     executions = []
     for item_id, item in completed.items():
         item_type = item.get("type")
@@ -1029,7 +1144,7 @@ def _normalize_codex(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[
             "tool_name": item_type,
             "effect_kind": effect_kind,
             "operation": arguments.get("operation"),
-            "arguments_sha256": digest_obj(arguments),
+            "arguments_sha256": _arguments_digest(arguments),
             "arguments_stage": "subject_event",
             "reported_error": item.get("status") != "completed"
                 or (item.get("exit_code") not in (None, 0)),
@@ -1094,7 +1209,7 @@ def _normalize_hermes(
             # `tool_call_id` alone is not an identity. See the pairing below.
             "request_id": extra.get("api_request_id"),
             "telemetry_schema": extra.get("telemetry_schema_version"),
-            "arguments_sha256": digest_obj(arguments),
+            "arguments_sha256": _arguments_digest(arguments),
             "effect_kind": effect_kind,
             "operation": arguments.get("operation"),
             "outside_workspace": outside,
@@ -1273,7 +1388,7 @@ def _normalize_pi(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list[str
                 "effect_kind": effect_kind,
                 "operation": arguments.get("operation"),
                 "operation_exit_code": _pi_result_exit_code(event),
-                "arguments_sha256": digest_obj(arguments),
+                "arguments_sha256": _arguments_digest(arguments),
                 "arguments_stage": "subject_event",
                 "reported_error": is_error,
                 "result_stage": "subject_reported",
@@ -1442,7 +1557,7 @@ def _normalize_deepseek(
             "tool_name": str(call.get("name", "")).lower(),
             "effect_kind": effect_kind,
             "operation": normalized.get("operation"),
-            "arguments_sha256": digest_obj(normalized),
+            "arguments_sha256": _arguments_digest(normalized),
             "arguments_stage": "subject_event",
             "reported_error": result[1].get("isError") if result else None,
             "operation_exit_code": operation_exit_code,
@@ -1597,7 +1712,57 @@ def _deepseek_session_log(dsh_home: Path) -> tuple[Path | None, list[str]]:
     return paths[0], []
 
 
-def _guard_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def _credential_file_values(path: Path) -> tuple[str, ...]:
+    """Collect credential-file strings before any process can echo them.
+
+    Codex's isolated guard home must copy ``auth.json``. Those values need not
+    exist in the environment, so environment-name discovery cannot protect
+    them. Treat every substantial JSON string as sensitive: guessing nested
+    token field names is brittle across client credential-format changes.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AdapterError(
+            f"credential file is not readable JSON: {path}: {error}"
+        ) from error
+
+    found: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, str):
+            if len(value) >= 8:
+                found.add(value)
+        elif isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return tuple(sorted(found, key=len, reverse=True))
+
+
+def _guard_event_signature(event: dict[str, Any], capability: str) -> str:
+    unsigned = {key: value for key, value in event.items() if key != "signature"}
+    canonical = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(capability.encode("ascii"), canonical, hashlib.sha256).hexdigest()
+
+
+def _guard_events(
+    path: Path,
+    *,
+    subject: str,
+    mode: str,
+    run_id: str,
+    capability: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Whatever the interceptor wrote about itself, and complaints about it.
 
     A missing file is not an error here -- it is the *finding* that the guard
@@ -1607,7 +1772,78 @@ def _guard_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     """
     if not path.is_file():
         return [], ["guard receipt file was never created"]
-    events, errors = parse_jsonl_objects(path.read_bytes())
+    parsed, errors = parse_jsonl_objects(path.read_bytes())
+    events: list[dict[str, Any]] = []
+    capability_id = hashlib.sha256(capability.encode("ascii")).hexdigest()
+    expected = {
+        "schema": GUARD_RECEIPT_SCHEMA,
+        "subject": subject,
+        "mode": mode,
+        "run_id": run_id,
+        "capability_id": capability_id,
+    }
+    for index, event in enumerate(parsed, start=1):
+        for field, value in expected.items():
+            if event.get(field) != value:
+                errors.append(
+                    f"guard receipt line {index} has wrong {field}: "
+                    f"{event.get(field)!r} (expected {value!r})"
+                )
+                break
+        else:
+            signature = event.get("signature")
+            if not isinstance(signature, str) or not hmac.compare_digest(
+                signature, _guard_event_signature(event, capability)
+            ):
+                errors.append(
+                    f"guard receipt line {index} has an invalid capability signature"
+                )
+                continue
+            event_name = event.get("event")
+            if event_name not in {"loaded", "tool_call"}:
+                errors.append(
+                    f"guard receipt line {index} has unknown event {event_name!r}"
+                )
+                continue
+            guarded_tool, shell_tool = GUARD_TOOLS[subject]
+            if event_name == "loaded":
+                if event.get("guarded_tool") != guarded_tool:
+                    errors.append(
+                        f"guard receipt line {index} has wrong guarded tool"
+                    )
+                    continue
+                if event.get("shell_tool") != shell_tool:
+                    errors.append(
+                        f"guard receipt line {index} has wrong shell tool"
+                    )
+                    continue
+                if not isinstance(event.get("pid"), int) or isinstance(
+                    event.get("pid"), bool
+                ) or event["pid"] <= 0:
+                    errors.append(
+                        f"guard receipt line {index} has invalid guard pid"
+                    )
+                    continue
+            else:
+                tool = event.get("tool")
+                if not isinstance(tool, str) or not tool:
+                    errors.append(
+                        f"guard receipt line {index} has invalid tool name"
+                    )
+                    continue
+                expected_decision = mode if tool == guarded_tool else "not_guarded"
+                if event.get("decision") != expected_decision:
+                    errors.append(
+                        f"guard receipt line {index} has incoherent decision"
+                    )
+                    continue
+            events.append(event)
+
+    loaded = [event for event in events if event.get("event") == "loaded"]
+    if len(loaded) > 1:
+        errors.append("guard receipt contains more than one authenticated startup event")
+    if events and events[0].get("event") != "loaded":
+        errors.append("guard receipt does not start with the authenticated startup event")
     return events, errors
 
 
@@ -1657,9 +1893,29 @@ def capture(
         # after-manifest would make the instrumentation part of the effect it
         # is supposed to be measuring.
         guard_receipt = root / "guard-receipt.jsonl"
+        guard_capability: str | None = None
+        guard_run_id: str | None = None
         if workload == "guard":
+            guard_capability = secrets.token_hex(32)
+            guard_run_id = secrets.token_hex(16)
             environment["HWB_GUARD_MODE"] = str(variant)
             environment["HWB_GUARD_RECEIPT"] = str(guard_receipt)
+        codex_credential: Path | None = None
+        credential_file_redactions: tuple[str, ...] = ()
+        if subject == "codex" and workload == "guard":
+            source_home = Path(
+                os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
+            )
+            codex_credential = source_home / "auth.json"
+            if not codex_credential.is_file():
+                raise AdapterError(
+                    f"codex credential not found at {codex_credential}; the guard"
+                    " arm cannot authenticate from an isolated CODEX_HOME"
+                )
+            # Derive this before the repair pre-test and the subject process so
+            # every evidence envelope shares the complete auth-file redaction
+            # set, including values found nowhere in the environment.
+            credential_file_redactions = _credential_file_values(codex_credential)
         if subject in CONFIGURABLE_MODEL_SUBJECTS:
             # The generic OpenAI-compatible provider requires a key-shaped value
             # even though the pinned Ollama endpoint does not authenticate it.
@@ -1682,7 +1938,11 @@ def capture(
             # this subject's provider actually reads.
             for name in {key_name, str(identity["model_subject_key_env"])}:
                 environment[name] = secret
-        redactions = credential_values(environment)
+        redactions = tuple(sorted(
+            set(credential_values(environment)) | set(credential_file_redactions),
+            key=len,
+            reverse=True,
+        ))
         sensitive_environment_names = sorted(
             name for name, value in environment.items() if value in redactions
         )
@@ -1704,15 +1964,20 @@ def capture(
                     require_zero_exit=False,
                 )
             )
-        before = manifest(workspace)
+        before = workspace_manifest(workspace)
         evidence_path: Path | None = None
         evidence_kind = "none"
         if subject == "claude":
             guard_settings: Path | None = None
             if workload == "guard":
+                assert guard_capability is not None and guard_run_id is not None
                 guard_settings = root / "claude_guard_settings.json"
                 guard_settings.write_text(
-                    _claude_guard_settings(_install_guard_hook(root)),
+                    _claude_guard_settings(_install_guard_hook(
+                        root,
+                        capability=guard_capability,
+                        run_id=guard_run_id,
+                    )),
                     encoding="utf-8",
                 )
                 # The guard arm cannot use `--safe-mode` (it disables hooks), so
@@ -1741,6 +2006,7 @@ def capture(
             argv = _claude_command(identity, workload, guard_settings)
         elif subject == "codex":
             if workload == "guard":
+                assert guard_capability is not None and guard_run_id is not None
                 codex_home = root / "codex-home"
                 codex_home.mkdir()
                 # Only the credential is carried over from the host home, and
@@ -1750,15 +2016,6 @@ def capture(
                 # scored as a perfectly contained block arm. Copying one file
                 # keeps every other ambient thing (config.toml, AGENTS.md,
                 # sessions, plugins) out by simply not being there.
-                source_home = Path(
-                    os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
-                )
-                credential = source_home / "auth.json"
-                if not credential.is_file():
-                    raise AdapterError(
-                        f"codex credential not found at {credential}; the guard"
-                        " arm cannot authenticate from an isolated CODEX_HOME"
-                    )
                 # `copy2` carries the source mode across, and the source is
                 # 0600 -- but that is the source's property, not this copy's
                 # guarantee. Set it explicitly so the copy is owner-only even
@@ -1766,10 +2023,15 @@ def capture(
                 # `.hwb-*` root for the case no code here can reach: a SIGKILL
                 # that skips cleanup and leaves this file in the working tree.
                 copied = codex_home / "auth.json"
-                shutil.copy2(credential, copied)
+                assert codex_credential is not None
+                shutil.copy2(codex_credential, copied)
                 copied.chmod(0o600)
                 (codex_home / "config.toml").write_text(
-                    _codex_guard_config(_install_guard_hook(root)),
+                    _codex_guard_config(_install_guard_hook(
+                        root,
+                        capability=guard_capability,
+                        run_id=guard_run_id,
+                    )),
                     encoding="utf-8",
                 )
                 environment["CODEX_HOME"] = str(codex_home)
@@ -1799,8 +2061,14 @@ def capture(
                 secret,
             )
             if workload == "guard":
+                assert guard_capability is not None and guard_run_id is not None
                 hermes_config = _hermes_guard_hooks(
-                    hermes_config, _install_guard_hook(root)
+                    hermes_config,
+                    _install_guard_hook(
+                        root,
+                        capability=guard_capability,
+                        run_id=guard_run_id,
+                    ),
                 )
             _write_private_text(hermes_home / "config.yaml", hermes_config)
             evidence_path = root / "hermes-hooks.jsonl"
@@ -1814,6 +2082,9 @@ def capture(
             environment["HERMES_HOME"] = str(hermes_home)
             environment["HWB_HERMES_HOOK_EVIDENCE"] = str(evidence_path)
             environment["HWB_HERMES_HOOK_MAX_BYTES"] = str(evidence_limit)
+            environment["HWB_HERMES_HOOK_INPUT_MAX_BYTES"] = str(
+                min(evidence_limit, 256 * 1024)
+            )
             # The hook scrubs PARSED VALUES, before they are ever serialized;
             # `redact_bytes` scrubs a byte stream afterwards. Two layers, and
             # the tree used to run only one: this was `"[]"`, which left the
@@ -1843,11 +2114,17 @@ def capture(
             environment["PI_CODING_AGENT_DIR"] = str(pi_config)
             extension: Path | None = None
             if workload == "guard":
+                assert guard_capability is not None and guard_run_id is not None
                 # Copied beside the run rather than into the workspace: an
                 # interceptor sitting in the workspace would appear in both
                 # manifests and become part of the effect the oracle measures.
                 extension = root / "guard_extension.ts"
-                shutil.copy2(HERE / "guard_extension.ts", extension)
+                _materialize_guard(
+                    "guard_extension.ts",
+                    extension,
+                    capability=guard_capability,
+                    run_id=guard_run_id,
+                )
             argv = _pi_command(identity, workload, extension)
         else:
             # Strip every credential the subject has no business seeing, except
@@ -1878,11 +2155,17 @@ def capture(
             evidence_kind = "native_persisted_session_jsonl"
             guard_plugin: Path | None = None
             if workload == "guard":
+                assert guard_capability is not None and guard_run_id is not None
                 # Beside the run, never in the workspace: a plugin sitting in
                 # the workspace would appear in both manifests and become part
                 # of the effect it exists to observe.
                 guard_plugin = root / "guard_plugin.mjs"
-                shutil.copy2(HERE / "guard_plugin.mjs", guard_plugin)
+                _materialize_guard(
+                    "guard_plugin.mjs",
+                    guard_plugin,
+                    capability=guard_capability,
+                    run_id=guard_run_id,
+                )
             argv = _deepseek_command(root, workload, guard_plugin)
             if guard_plugin is not None:
                 _verify_deepseek_guard_row(root / "dsh_patch.yml", environment)
@@ -1894,7 +2177,7 @@ def capture(
             stdout_limit=stdout_limit,
             stderr_limit=stderr_limit,
         )
-        after = manifest(workspace)
+        after = workspace_manifest(workspace)
         evidence_errors: list[str] = []
         if subject == "deepseek":
             evidence_path, evidence_errors = _deepseek_session_log(dsh_home)
@@ -1969,7 +2252,14 @@ def capture(
         )
         guard_events: list[dict[str, Any]] = []
         if workload == "guard":
-            guard_events, guard_errors = _guard_events(guard_receipt)
+            assert guard_capability is not None and guard_run_id is not None
+            guard_events, guard_errors = _guard_events(
+                guard_receipt,
+                subject=subject,
+                mode=str(variant),
+                run_id=guard_run_id,
+                capability=guard_capability,
+            )
             task_outcome = guard_outcome(
                 before, after, variant=str(variant), events=guard_events
             )
@@ -2005,7 +2295,7 @@ def capture(
             assert initial_test is not None
             task_outcome = repair_outcome(
                 before,
-                manifest(workspace),
+                workspace_manifest(workspace),
                 initial_test=initial_test,
                 final_test=final_test,
                 tool_executions=lifecycle["tool_executions"],
@@ -2026,7 +2316,7 @@ def capture(
                     argv=_normalized_argv(final_test.argv, root, workspace),
                 ),
             }
-            after = manifest(workspace)
+            after = workspace_manifest(workspace)
         prompt = WORKLOADS[workload]["prompt"]
         inputs = WORKLOADS[workload]["inputs"]
         # Finalize only after every workload-specific evidence source has had

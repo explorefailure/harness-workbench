@@ -93,8 +93,11 @@ the stored bytes silently means something different.
 Spawn in a new session (so the child is a process-group leader) → read both
 streams until EOF, deadline, or byte limit → on any bound, signal the *group*,
 not the process → wait a declared grace → escalate to `SIGKILL` → observe
-whether the group is still alive → record the reason. Terminal state is
-whichever bound fired first, recorded by name.
+whether the group is still alive → record the reason. Terminal state names
+the bound that fired; if both already-readable streams cross their ceilings,
+`stdout_stderr_limit` records both without depending on selector iteration
+order. The per-stream overflow and source-byte fields retain the full
+observation.
 
 The group is the unit of control, not the process. A subject that spawns a
 shell that spawns a build leaves orphans that hold the workspace open and

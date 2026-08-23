@@ -8,7 +8,8 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 ## 0.1.0rc2 — unreleased
 
 Preparation note: this candidate has no tag, no GitHub release, and no assets.
-Nothing below is published. The heading gains a date only at step 1 of
+Its source is visible in public pull request #9, but nothing below has been
+published as a release. The heading gains a date only at step 1 of
 [`RELEASING.md`](RELEASING.md).
 
 - **New public module `harness_workbench.capture`.** Bounded subprocess
@@ -22,10 +23,12 @@ Nothing below is published. The heading gains a date only at step 1 of
   synthesized exit code.
 - Route the public library surface in the conformance record, and add a
   mechanical check that fails until every module declaring `__all__` is routed
-  there. `capture` reached the published `0.1.0rc1` candidate unrouted because
-  no check looked at modules. The check reads the shipped subject tree's
-  imports as syntax, resolving package-relative spellings (`from .. import
-  runner`) to the same module the absolute spelling names, and reads `__all__`
+  there. `capture` was added after the published `0.1.0rc1` tag and was
+  initially unrouted in the unreleased development tree because no check
+  looked at modules; the published rc1 artefacts do not contain it. The check
+  reads the shipped subject tree's imports as syntax, resolving
+  package-relative spellings (`from .. import runner`) to the same module the
+  absolute spelling names, and reads `__all__`
   as an assignment anywhere in a module rather than at the start of a line, so
   neither a declared surface nor a dependency on internal code can move by
   being written a different way. Dynamic `importlib` calls are outside it and
@@ -77,6 +80,13 @@ Nothing below is published. The heading gains a date only at step 1 of
   should have been checking anyway.
 - Identify a subject call by its request and its id rather than by its id
   alone, which is not unique.
+- Correct the live-subject prerequisites: the committed `opencode-go` profile
+  requires a valid API key, outbound network access, and a potentially
+  spend-bearing remote call. Hermes uses that remote profile; `local-ollama`
+  is a separate optional local profile.
+- Record the successful hosted CI and CodeQL preparation checks for exact PR
+  checkpoint `f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3` without treating them
+  as tag, asset, or release-final evidence.
 
 ## 0.1.0rc1 — 2026-08-12
 

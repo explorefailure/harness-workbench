@@ -251,8 +251,8 @@ pretending their native event and interception surfaces are the same.
 The next work is promotion evidence, not another adapter name:
 
 - complete a repeatable second workload for DeepSeek and Hermes;
-- rerun the source and installed-artifact gates after reconciliation;
-- obtain hosted Linux/macOS matrix evidence for the exact candidate; and
+- rerun the source, installed-artifact, and hosted Linux/macOS gates after the
+  audit remediations land; and
 - keep merge, tag, and release behind explicit owner review.
 
 Until those gates close, the adapters are an experimental candidate surface,
@@ -294,10 +294,15 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. Local release checks exercised macOS. The next two facts describe
-the published `v0.1.0-rc.1` and **not** the `0.1.0rc2` candidate in this tree,
-which has no hosted CI evidence yet. Immutable-tag CI exercised the
-full Linux/macOS matrix, and the release-final conformance record is attached to the
+that test set. For candidate `0.1.0rc2`, exact public PR checkpoint
+`f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3` passed the full Linux/macOS matrix
+(all eight CPython cells) and the package job in [CI run
+32604245910](https://github.com/explorefailure/harness-workbench/actions/runs/32604245910),
+and passed [CodeQL run
+32604245892](https://github.com/explorefailure/harness-workbench/actions/runs/32604245892).
+That is preparation evidence for that commit, not release-final evidence, and
+the post-audit candidate must rerun it. The published `v0.1.0-rc.1` separately
+has Immutable-tag CI and a release-final conformance record attached to its
 [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
@@ -396,7 +401,13 @@ $ hwb subjects --into ./subjects
 
 `hwb subjects` with no destination lists what ships instead of copying it.
 Once the tree is yours, its own suite runs with no network and no third-party
-client installed; the subject runs need that subject present:
+client installed; live subject runs have additional requirements. The
+committed active profile is the remote `opencode-go` gateway: DeepSeek,
+Hermes, and Pi runs require a valid `HWB_OPENCODE_KEY`, outbound network
+access, and may consume paid quota or incur spend. Hermes—the pinned Nous
+client—makes a remote API call under that active profile. `local-ollama` is a
+separate optional local profile, not the configuration those commands use by
+default:
 
 ```sh
 cd subjects

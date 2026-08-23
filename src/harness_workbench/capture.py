@@ -62,6 +62,7 @@ CREDENTIAL_MIN_LENGTH = 8
 TIMEOUT = "timeout"
 STDOUT_LIMIT = "stdout_limit"
 STDERR_LIMIT = "stderr_limit"
+STDOUT_STDERR_LIMIT = "stdout_stderr_limit"
 SIGNALLED = "signalled"
 
 
@@ -244,6 +245,17 @@ def run_bounded(
 
         def terminate(why: str) -> None:
             nonlocal reason, sent_at
+            if (
+                reason in (STDOUT_LIMIT, STDERR_LIMIT)
+                and why in (STDOUT_LIMIT, STDERR_LIMIT)
+                and reason != why
+            ):
+                # Both pipes can already be readable when one ceiling first
+                # initiates termination. Preserve that complete observation
+                # instead of leaving one overflow flag contradicting a
+                # single-stream reason chosen by selector iteration order.
+                reason = STDOUT_STDERR_LIMIT
+                return
             if reason is not None:
                 return
             reason = why
@@ -660,9 +672,12 @@ def minimal_environment(
 def contained_path(root: Path, value: Any, *, label: str = "path") -> Path:
     """Resolve a caller-declared relative path, refusing anything that escapes.
 
-    Rejects absolute paths and any `..` component before touching the
-    filesystem. Adapters take paths from config and from subjects, and subjects
-    do propose paths outside the workspace -- one of them did it during probing.
+    Rejects absolute paths and any `..` component, then resolves existing
+    symlink parents before deciding containment. ``strict=False`` deliberately
+    covers a not-yet-existing final path: an existing parent symlink must not
+    turn a future write into an outside-root write. Adapters take paths from
+    config and from subjects, and subjects do propose paths outside the
+    workspace -- one of them did it during probing.
 
     Raises CaptureError, because unlike a subject's behaviour this is a request
     that cannot be honoured at all.
@@ -672,6 +687,17 @@ def contained_path(root: Path, value: Any, *, label: str = "path") -> Path:
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
         raise CaptureError(f"{label} must stay below its declared root: {value}")
+    try:
+        resolved_root = root.resolve(strict=False)
+        resolved = (resolved_root / relative).resolve(strict=False)
+        resolved.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise CaptureError(
+            f"{label} must stay below its declared root: {value}"
+        ) from error
+    # Preserve the caller's root spelling for normal paths (notably macOS
+    # aliases such as /tmp -> /private/tmp); resolution above is the security
+    # decision, not an API-level path rewrite.
     return root / relative
 
 
@@ -706,6 +732,7 @@ __all__ = [
     "SIGNALLED",
     "STDERR_LIMIT",
     "STDOUT_LIMIT",
+    "STDOUT_STDERR_LIMIT",
     "TIMEOUT",
     "capture_bytes",
     "capture_file",

@@ -1,10 +1,12 @@
 """Deterministic tests for the cross-harness adapter boundary."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -83,6 +85,73 @@ class CommonTests(unittest.TestCase):
             self.assertTrue(outcome(before, manifest(root))["passed"])
             (root / "shared.txt").write_bytes(EXPECTED_CONTENT + b".")
             self.assertFalse(outcome(before, manifest(root))["passed"])
+
+    def test_workspace_manifest_exposes_directories_and_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "nested").mkdir()
+            (root / "target.txt").write_text("target", encoding="utf-8")
+            (root / "link.txt").symlink_to("target.txt")
+            entries = {
+                entry["path"]: entry for entry in adapters.workspace_manifest(root)
+            }
+        self.assertEqual("directory", entries["nested"]["kind"])
+        self.assertEqual("symlink", entries["link.txt"]["kind"])
+        self.assertNotIn("sha256", entries["link.txt"])
+        self.assertNotIn("kind", entries["target.txt"])
+
+    def test_workspace_manifest_preserves_regular_manifest_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "one.txt").write_text("one", encoding="utf-8")
+            (root / "two.txt").write_text("two", encoding="utf-8")
+            self.assertEqual(manifest(root), adapters.workspace_manifest(root))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO creation is unsupported")
+    def test_workspace_manifest_exposes_fifo_without_opening_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.mkfifo(root / "subject.pipe")
+            entries = {
+                entry["path"]: entry for entry in adapters.workspace_manifest(root)
+            }
+        self.assertEqual("fifo", entries["subject.pipe"]["kind"])
+
+    @unittest.skipUnless(
+        hasattr(socket, "AF_UNIX"), "Unix sockets are unsupported"
+    )
+    def test_workspace_manifest_exposes_unix_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subject_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                subject_socket.bind(str(root / "subject.sock"))
+                entries = {
+                    entry["path"]: entry
+                    for entry in adapters.workspace_manifest(root)
+                }
+            finally:
+                subject_socket.close()
+        self.assertEqual("socket", entries["subject.sock"]["kind"])
+
+    def test_write_oracle_rejects_every_typed_non_regular_effect(self) -> None:
+        shared = {
+            "path": "shared.txt",
+            "size": len(EXPECTED_CONTENT),
+            "mode": 0o644,
+            "sha256": hashlib.sha256(EXPECTED_CONTENT).hexdigest(),
+        }
+        for kind in ("directory", "symlink", "fifo", "socket"):
+            with self.subTest(kind=kind):
+                extra = {"path": f"undeclared-{kind}", "mode": 0o700, "kind": kind}
+                verdict = outcome(
+                    _fixture_manifest(), _fixture_manifest() + [shared, extra]
+                )
+                self.assertFalse(verdict["passed"])
+                self.assertTrue(
+                    any(kind in error for error in verdict["errors"]),
+                    verdict["errors"],
+                )
 
     def test_disposable_vendor_configs_are_owner_only_on_create_and_rewrite(
         self,
@@ -448,6 +517,73 @@ class CommonTests(unittest.TestCase):
         self.assertNotIn("u00e9", json.dumps(captured))
         self.assertGreater(captured["redaction_count"], 0)
 
+    def test_codex_auth_json_only_values_are_redacted_from_capture(self) -> None:
+        secrets_only_in_file = (
+            "auth-file-access-token-unique",
+            "auth-file-refresh-token-unique",
+            "auth-file-account-identifier-unique",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            (codex_home / "auth.json").write_text(json.dumps({
+                "tokens": {
+                    "access_token": secrets_only_in_file[0],
+                    "refresh_token": secrets_only_in_file[1],
+                    "account_id": secrets_only_in_file[2],
+                }
+            }), encoding="utf-8")
+            raw = (" ".join(secrets_only_in_file)).encode()
+            bounded = Bounded(
+                argv=["codex-test"],
+                returncode=0,
+                termination_reason=None,
+                stdout=raw,
+                stderr=raw,
+                stdout_source_bytes=len(raw),
+                stderr_source_bytes=len(raw),
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+            lifecycle = {
+                "acquisition": "native_jsonl",
+                "completeness": "native_terminal_event",
+                "event_types": [],
+                "tool_executions": [],
+                "terminal": {},
+            }
+            apparatus = {
+                "schema": "hwb-subject-apparatus/v0.1",
+                "package": "harness_workbench",
+                "version": "0.0.0-test",
+                "modules": {},
+                "baseline": {"present": True, "agrees": True},
+            }
+            with (
+                mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
+                mock.patch.object(
+                    adapters,
+                    "_verify_identity",
+                    return_value={"name": "codex", "model": "test-model"},
+                ),
+                mock.patch.object(adapters, "_codex_guard_config", return_value=""),
+                mock.patch.object(adapters, "_codex_command", return_value=["codex-test"]),
+                mock.patch.object(adapters, "run_bounded", return_value=bounded),
+                mock.patch.object(
+                    adapters, "_normalize_codex", return_value=(lifecycle, [])
+                ),
+                mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+            ):
+                record = adapters.capture("codex", "guard", variant="block")
+
+        serialized = json.dumps(record)
+        for secret in secrets_only_in_file:
+            self.assertNotIn(secret, serialized)
+        self.assertGreater(record["capture"]["stdout"]["redaction_count"], 0)
+        self.assertGreater(record["capture"]["stderr"]["redaction_count"], 0)
+
     def test_the_hermes_hook_scrubber_is_not_handed_an_empty_list(self) -> None:
         # The second layer, which was switched off. The hook scrubs values
         # before serialization, so it is the one place an encoding cannot
@@ -490,6 +626,75 @@ class CommonTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(refused.returncode, 3)
+
+    def test_hermes_hook_bounds_stdin_before_json_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "hooks.jsonl"
+            environment = {
+                **os.environ,
+                "HWB_HERMES_HOOK_EVIDENCE": str(evidence),
+                "HWB_HERMES_HOOK_MAX_BYTES": "4096",
+                "HWB_HERMES_HOOK_INPUT_MAX_BYTES": "64",
+                "HWB_REDACT_VALUES_JSON": "[]",
+            }
+            refused = subprocess.run(
+                [sys.executable, str(adapters.HERE / "hook.py")],
+                input=b'{"value":"' + (b"x" * 4096) + b'"}',
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                check=False,
+            )
+            evidence_created = evidence.exists()
+        self.assertEqual(3, refused.returncode)
+        self.assertIn(b"input limit exceeded", refused.stderr)
+        self.assertFalse(evidence_created)
+
+    def test_concurrent_hermes_hooks_cannot_overshoot_append_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "hooks.jsonl"
+            payload = {"event": "pre_tool_call", "value": "x" * 8192}
+            raw = json.dumps(payload).encode("utf-8")
+            encoded = (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            limit = len(encoded) * 3
+            environment = {
+                **os.environ,
+                "HWB_HERMES_HOOK_EVIDENCE": str(evidence),
+                "HWB_HERMES_HOOK_MAX_BYTES": str(limit),
+                "HWB_HERMES_HOOK_INPUT_MAX_BYTES": str(len(raw) + 1),
+                "HWB_REDACT_VALUES_JSON": "[]",
+            }
+            processes = [
+                subprocess.Popen(
+                    [sys.executable, str(adapters.HERE / "hook.py")],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=environment,
+                )
+                for _ in range(12)
+            ]
+            for process in processes:
+                assert process.stdin is not None
+                process.stdin.write(raw)
+                process.stdin.close()
+            statuses = [process.wait(timeout=30) for process in processes]
+            for process in processes:
+                assert process.stdout is not None and process.stderr is not None
+                process.stdout.read()
+                process.stderr.read()
+                process.stdout.close()
+                process.stderr.close()
+            lines = evidence.read_bytes().splitlines()
+
+        self.assertEqual(3, statuses.count(0))
+        self.assertEqual(9, statuses.count(3))
+        self.assertLessEqual(sum(len(line) + 1 for line in lines), limit)
+        self.assertEqual(3, len(lines))
+        for line in lines:
+            self.assertEqual(payload, json.loads(line))
 
 
 class ClaudeNormalizerTests(unittest.TestCase):
@@ -571,6 +776,18 @@ class ClaudeNormalizerTests(unittest.TestCase):
         )
         self.assertIn("duplicate Claude tool call: call-1", errors)
 
+    def test_tool_result_before_tool_call_is_rejected(self) -> None:
+        _, errors = adapters._normalize_claude(
+            jsonl(
+                {"type": "system", "subtype": "init"},
+                self.result,
+                self.call,
+                self.terminal,
+            ),
+            self.workspace,
+        )
+        self.assertIn("Claude tool result precedes its call: call-1", errors)
+
 
 class CodexNormalizerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -614,6 +831,12 @@ class CodexNormalizerTests(unittest.TestCase):
             self.stream(self.completed), self.workspace
         )
         self.assertIn("Codex tool completion has no start: item-1", errors)
+
+    def test_tool_completion_before_start_is_rejected(self) -> None:
+        _, errors = adapters._normalize_codex(
+            self.stream(self.completed, self.started), self.workspace
+        )
+        self.assertIn("Codex item completion precedes its start: item-1", errors)
 
     def test_duplicate_terminal_is_rejected(self) -> None:
         raw = self.stream(
@@ -1047,6 +1270,44 @@ class RepairOutcomeTests(unittest.TestCase):
         )
         self.assertTrue(result["passed"])
 
+    def test_declared_repair_effect_must_remain_a_regular_file(self) -> None:
+        before = _profile_fixture_manifest("repair")
+        after = [
+            (
+                {"path": "slugger.py", "mode": 0o777, "kind": "symlink"}
+                if entry["path"] == "slugger.py"
+                else dict(entry)
+            )
+            for entry in before
+        ]
+        executions = [
+            {
+                "effect_kind": "command",
+                "operation": "python_unittest_v",
+                "reported_error": False,
+                "operation_exit_code": 1,
+            },
+            {"effect_kind": "write", "reported_error": False},
+            {
+                "effect_kind": "command",
+                "operation": "python_unittest_v",
+                "reported_error": False,
+                "operation_exit_code": 0,
+            },
+        ]
+        result = repair_outcome(
+            before,
+            after,
+            initial_test=self.process(1),
+            final_test=self.process(0),
+            tool_executions=executions,
+        )
+        self.assertFalse(result["passed"])
+        self.assertIn(
+            "repair effects contain non-regular entries: slugger.py (symlink)",
+            result["errors"],
+        )
+
     def test_green_effect_without_subject_red_green_sequence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1313,11 +1574,46 @@ class ExitStatusTests(unittest.TestCase):
 class GuardCaptureVerdictTests(unittest.TestCase):
     """The adapter verdict is final only after guard evidence is parsed."""
 
+    CAPABILITY = "ab" * 32
+    RUN_ID = "cd" * 16
+
+    @classmethod
+    def signed_event(cls, **values: object) -> dict:
+        lifecycle = {}
+        if values.get("event") == "loaded":
+            lifecycle = {
+                "guarded_tool": "Write",
+                "shell_tool": "Bash",
+                "pid": 1234,
+            }
+        event = {
+            "schema": adapters.GUARD_RECEIPT_SCHEMA,
+            "subject": "claude",
+            "mode": "block",
+            "run_id": cls.RUN_ID,
+            "capability_id": hashlib.sha256(
+                cls.CAPABILITY.encode("ascii")
+            ).hexdigest(),
+            **lifecycle,
+            **values,
+        }
+        event["signature"] = adapters._guard_event_signature(
+            event, cls.CAPABILITY
+        )
+        return event
+
+    @classmethod
+    def receipt(cls, *events: dict) -> bytes:
+        return jsonl(*events)
+
     @staticmethod
     def bounded_guard_run(receipt: bytes | None):
         def run(
             argv: list[str], *, cwd: Path, env: dict[str, str], **_: object
         ) -> Bounded:
+            self_capability = GuardCaptureVerdictTests.CAPABILITY
+            if "HWB_GUARD_CAPABILITY" in env or self_capability in env.values():
+                raise AssertionError("guard capability leaked into subject environment")
             if receipt is not None:
                 Path(env["HWB_GUARD_RECEIPT"]).write_bytes(receipt)
             return Bounded(
@@ -1363,13 +1659,20 @@ class GuardCaptureVerdictTests(unittest.TestCase):
                 adapters, "_normalize_claude", return_value=(lifecycle, [])
             ),
             mock.patch.object(adapters, "_apparatus", return_value=apparatus),
+            mock.patch.object(
+                adapters.secrets,
+                "token_hex",
+                side_effect=[self.CAPABILITY, self.RUN_ID],
+            ),
         ):
             return adapters.capture("claude", "guard", variant="block")
 
     def test_malformed_guard_receipt_fails_adapter_and_status(self) -> None:
         # A valid startup receipt keeps the outcome evaluable; the malformed
         # second line is an adapter fault discovered after lifecycle capture.
-        record = self.capture_guard(b'{"event":"loaded"}\nnot-json\n')
+        record = self.capture_guard(
+            self.receipt(self.signed_event(event="loaded")) + b"not-json\n"
+        )
         status = subject_runner.exit_status(
             record["verdict"]["passed"],
             False,
@@ -1397,7 +1700,9 @@ class GuardCaptureVerdictTests(unittest.TestCase):
         # The block-arm oracle complains because the fake subject attempted no
         # guarded tool. That is an outcome finding, not an adapter fault: the
         # startup receipt itself is complete and readable.
-        record = self.capture_guard(b'{"event":"loaded"}\n')
+        record = self.capture_guard(
+            self.receipt(self.signed_event(event="loaded"))
+        )
         status = subject_runner.exit_status(
             record["verdict"]["passed"],
             False,
@@ -1407,6 +1712,53 @@ class GuardCaptureVerdictTests(unittest.TestCase):
         self.assertTrue(record["outcome"]["evaluable"])
         self.assertFalse(record["outcome"]["passed"])
         self.assertEqual(0, status)
+
+    def test_schema_less_and_forged_receipts_are_not_evaluable(self) -> None:
+        forged = self.signed_event(event="loaded")
+        forged["signature"] = "0" * 64
+        for receipt in (
+            b'{"event":"loaded"}\n',
+            self.receipt(forged),
+        ):
+            with self.subTest(receipt=receipt):
+                record = self.capture_guard(receipt)
+                self.assertFalse(record["outcome"]["evaluable"])
+                self.assertFalse(record["verdict"]["passed"])
+
+    def test_authenticated_receipt_is_bound_to_subject_and_mode(self) -> None:
+        for field, value in (("subject", "codex"), ("mode", "allow")):
+            event = self.signed_event(event="loaded")
+            event[field] = value
+            event["signature"] = adapters._guard_event_signature(
+                event, self.CAPABILITY
+            )
+            with self.subTest(field=field):
+                record = self.capture_guard(self.receipt(event))
+                self.assertFalse(record["outcome"]["evaluable"])
+                self.assertFalse(record["verdict"]["passed"])
+
+    def test_every_guard_is_materialized_with_the_same_run_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for source_name in (
+                "guard_hook.py",
+                "guard_extension.ts",
+                "guard_plugin.mjs",
+            ):
+                with self.subTest(source_name=source_name):
+                    installed = adapters._materialize_guard(
+                        source_name,
+                        root / source_name,
+                        capability=self.CAPABILITY,
+                        run_id=self.RUN_ID,
+                    )
+                    rendered = installed.read_text(encoding="utf-8")
+                    self.assertNotIn(adapters.GUARD_CAPABILITY_PLACEHOLDER, rendered)
+                    self.assertNotIn(adapters.GUARD_RUN_ID_PLACEHOLDER, rendered)
+                    self.assertIn(self.CAPABILITY, rendered)
+                    self.assertIn(self.RUN_ID, rendered)
+                    self.assertIn(adapters.GUARD_RECEIPT_SCHEMA, rendered)
+                    self.assertEqual(0o600, installed.stat().st_mode & 0o777)
 
 
 class RepairCaptureVerdictTests(unittest.TestCase):
@@ -1578,11 +1930,6 @@ class ContractComparisonTests(unittest.TestCase):
     def repair_lifecycle_evidence(
         subject: str, returncode: int
     ) -> tuple[bytes, bytes, dict, list[dict]]:
-        effects = (
-            ("command", "python_unittest_v", 1),
-            ("write", None, None),
-            ("command", "python_unittest_v", 0),
-        )
         names = {
             "claude": ("bash", "write", "bash"),
             "codex": ("command_execution", "file_change", "command_execution"),
@@ -1590,124 +1937,192 @@ class ContractComparisonTests(unittest.TestCase):
             "hermes": ("terminal", "write_file", "terminal"),
             "deepseek": ("bash", "write", "bash"),
         }[subject]
-        acquisition = {
-            "hermes": "shell_hook",
-            "deepseek": "native_persisted_jsonl",
-        }.get(subject, "native_jsonl")
-        arguments_stage = "subject_proposal" if subject in {"claude", "hermes"} else "subject_event"
-        result_stage = "hook_observer" if subject == "hermes" else "subject_reported"
-        executions = []
-        for index, ((effect_kind, operation, exit_code), tool_name) in enumerate(
-            zip(effects, names)
-        ):
-            execution = {
-                "call_id": f"call-{index}",
-                "tool_name": tool_name,
-                "effect_kind": effect_kind,
-                "operation": operation,
-                "arguments_sha256": f"{index + 1:064x}",
-                "arguments_stage": arguments_stage,
-                "reported_error": (
-                    exit_code == 1 and subject in {"claude", "codex"}
-                ),
-                "result_stage": result_stage,
-                "acquisition": acquisition,
-            }
-            if subject in {"pi", "hermes", "deepseek"}:
-                execution["operation_exit_code"] = exit_code
-            if subject == "hermes":
-                execution["request_id"] = f"request-{index}"
-            executions.append(execution)
+        arguments = (
+            {"command": "python3.11 -m unittest -v"},
+            {
+                "file_path": "/workspace/slugger.py",
+                "content": "def slug(value):\n    return value.strip().lower()\n",
+            },
+            {"command": "python3.11 -m unittest -v"},
+        )
+        exit_codes = (1, None, 0)
 
         stdout = b""
         sidecar = b""
         if subject == "claude":
             events = [{"type": "system", "subtype": "init"}]
-            for execution in executions:
-                events.append({
+            for index, (tool_name, tool_arguments, exit_code) in enumerate(
+                zip(names, arguments, exit_codes)
+            ):
+                call_id = f"call-{index}"
+                events.extend(({
                     "type": "assistant",
                     "message": {"content": [{
-                        "type": "tool_use", "id": execution["call_id"],
-                        "name": execution["tool_name"], "input": {},
+                        "type": "tool_use", "id": call_id,
+                        "name": tool_name, "input": tool_arguments,
                     }]},
-                })
+                }, {
+                    "type": "user",
+                    "message": {"content": [{
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "is_error": exit_code == 1,
+                        "content": "ok" if exit_code != 1 else "tests failed",
+                    }]},
+                }))
             events.append({"type": "result", "subtype": "success", "is_error": False})
             stdout = jsonl(*events)
-            terminal = {"status": "success", "is_error": False}
-            profile = ("native_jsonl", "native_terminal_event")
+            lifecycle, complaints = adapters._normalize_claude(
+                stdout, Path("/workspace")
+            )
         elif subject == "codex":
             events = [{"type": "thread.started"}, {"type": "turn.started"}]
-            events.extend({
-                "type": "item.completed",
-                "item": {"id": execution["call_id"], "type": execution["tool_name"]},
-            } for execution in executions)
+            for index, (tool_name, tool_arguments, exit_code) in enumerate(
+                zip(names, arguments, exit_codes)
+            ):
+                item = {
+                    "id": f"call-{index}",
+                    "type": tool_name,
+                    "status": "completed",
+                }
+                if tool_name == "command_execution":
+                    item.update({
+                        "command": tool_arguments["command"],
+                        "exit_code": exit_code,
+                    })
+                else:
+                    item["changes"] = [{
+                        "path": tool_arguments["file_path"], "kind": "update"
+                    }]
+                started = dict(item)
+                started["status"] = "in_progress"
+                events.extend((
+                    {"type": "item.started", "item": started},
+                    {"type": "item.completed", "item": item},
+                ))
             events.append({"type": "turn.completed"})
             stdout = jsonl(*events)
-            terminal = {"status": "turn.completed"}
-            profile = ("native_jsonl", "native_terminal_event")
+            lifecycle, complaints = adapters._normalize_codex(
+                stdout, Path("/workspace")
+            )
         elif subject == "pi":
             events = [{"type": "session"}]
-            for execution in executions:
+            for index, (tool_name, tool_arguments, exit_code) in enumerate(
+                zip(names, arguments, exit_codes)
+            ):
+                call_id = f"call-{index}"
                 events.extend((
                     {
                         "type": "tool_execution_start",
-                        "toolCallId": execution["call_id"],
-                        "toolName": execution["tool_name"],
+                        "toolCallId": call_id,
+                        "toolName": tool_name,
+                        "args": tool_arguments,
                     },
                     {
                         "type": "tool_execution_end",
-                        "toolCallId": execution["call_id"],
-                        "toolName": execution["tool_name"],
+                        "toolCallId": call_id,
+                        "toolName": tool_name,
+                        "isError": exit_code == 1,
+                        **({"exitCode": exit_code} if exit_code is not None else {}),
                     },
                 ))
             events.append({"type": "agent_settled"})
             stdout = jsonl(*events)
-            terminal = {"status": "agent_settled", "settled": 1}
-            profile = ("native_jsonl", "native_event_stream")
+            lifecycle, complaints = adapters._normalize_pi(
+                stdout, Path("/workspace")
+            )
         elif subject == "hermes":
             events = []
-            for execution in executions:
+            for index, (tool_name, tool_arguments, exit_code) in enumerate(
+                zip(names, arguments, exit_codes)
+            ):
                 extra = {
-                    "api_request_id": execution["request_id"],
-                    "tool_call_id": execution["call_id"],
+                    "api_request_id": f"request-{index}",
+                    "tool_call_id": f"call-{index}",
+                    "telemetry_schema_version": adapters.HERMES_TELEMETRY_SCHEMA,
                 }
                 events.extend((
-                    {"hook_event_name": "pre_tool_call", "tool_name": execution["tool_name"], "extra": extra},
-                    {"hook_event_name": "post_tool_call", "tool_name": execution["tool_name"], "extra": extra},
+                    {
+                        "hook_event_name": "pre_tool_call",
+                        "tool_name": tool_name,
+                        "tool_input": tool_arguments,
+                        "extra": dict(extra),
+                    },
+                    {
+                        "hook_event_name": "post_tool_call",
+                        "tool_name": tool_name,
+                        "tool_input": tool_arguments,
+                        "extra": {
+                            **extra,
+                            "status": "error" if exit_code == 1 else "ok",
+                            **(
+                                {"result": json.dumps({"exit_code": exit_code})}
+                                if exit_code is not None else {}
+                            ),
+                        },
+                    },
                 ))
             sidecar = jsonl(*events)
-            terminal = {"status": "process_exit", "returncode": returncode}
-            profile = ("shell_hook_plus_process", "process_boundary_only")
+            stdout = b"done\n"
+            lifecycle, complaints = adapters._normalize_hermes(
+                stdout, sidecar, Path("/workspace"), returncode
+            )
         else:
-            records = [{"type": "session", "version": 0}]
-            events = [{"type": "turn/start", "seq": 0}]
-            for index, execution in enumerate(executions, 1):
-                events.append({
-                    "type": "tool/call", "seq": index,
+            identity = comparator._declared_subject_identity("deepseek")
+            records = [{
+                "type": "session", "version": 0, "id": "session-1",
+                "createdAt": 0, "cwd": "/workspace", "delegationDepth": 0,
+            }]
+            events = [
+                {"type": "turn/start", "seq": 0, "data": {"turn": 1}},
+                {
+                    "type": "request/context", "seq": 1,
                     "data": {
-                        "callId": execution["call_id"],
-                        "name": execution["tool_name"],
+                        "provider": identity["provider"], "model": identity["model"]
+                    },
+                },
+            ]
+            sequence = 2
+            for index, (tool_name, tool_arguments, exit_code) in enumerate(
+                zip(names, arguments, exit_codes)
+            ):
+                call_id = f"call-{index}"
+                events.append({
+                    "type": "tool/call", "seq": sequence,
+                    "data": {
+                        "turn": 1, "step": index + 1,
+                        "callId": call_id, "name": tool_name,
+                        "arguments": json.dumps(tool_arguments),
                     },
                 })
+                sequence += 1
+                result_content = (
+                    [{"type": "text", "text": f"done\n[exit code: {exit_code}]"}]
+                    if exit_code is not None else "ok"
+                )
+                events.append({
+                    "type": "tool/result", "seq": sequence,
+                    "data": {"message": {"content": [{
+                        "type": "tool-result", "toolCallId": call_id,
+                        "isError": exit_code == 1, "content": result_content,
+                    }]}},
+                })
+                sequence += 1
             events.append({
-                "type": "turn/end", "seq": len(events),
+                "type": "turn/end", "seq": sequence,
                 "data": {"reason": {"kind": "completed"}},
             })
             sidecar = jsonl(*(records + events))
-            terminal = {"status": "completed", "returncode": returncode}
-            profile = (
-                "native_persisted_jsonl_plus_process", "native_terminal_event"
+            lifecycle, complaints = adapters._normalize_deepseek(
+                sidecar,
+                Path("/workspace"),
+                returncode,
+                str(identity["provider"]),
+                str(identity["model"]),
             )
-        lifecycle = {
-            "acquisition": profile[0],
-            "completeness": profile[1],
-            "event_types": [
-                event.get("hook_event_name") if subject == "hermes" else event.get("type")
-                for event in events
-            ],
-            "tool_executions": executions,
-            "terminal": terminal,
-        }
+        if complaints:
+            raise AssertionError(f"invalid {subject} repair fixture: {complaints}")
+        executions = lifecycle["tool_executions"]
         return stdout, sidecar, lifecycle, executions
 
     @staticmethod
@@ -1820,9 +2235,9 @@ class ContractComparisonTests(unittest.TestCase):
         argv = self.invocation_argv(subject)
         capture.update({
             "limits": {
-                "stdout_bytes": 1024,
-                "stderr_bytes": 1024,
-                "sidecar_bytes": 1024,
+                "stdout_bytes": 1_048_576,
+                "stderr_bytes": 524_288,
+                "sidecar_bytes": 524_288,
             },
             "overflow": {
                 "stdout": False,
@@ -2509,10 +2924,32 @@ class ContractComparisonTests(unittest.TestCase):
                 "bounded overflow",
                 lambda capture: (
                     capture["overflow"].update({"stdout": True}),
-                    capture["stdout"].update({"source_bytes": 2048}),
+                    capture["stdout"].update({
+                        "source_bytes": capture["limits"]["stdout_bytes"] + 1
+                    }),
                     capture.update({
                         "returncode": -15,
                         "termination_reason": "stdout_limit",
+                    }),
+                ),
+                "adapter verdict passed despite capture fault",
+            ),
+            (
+                "simultaneous bounded overflow",
+                lambda capture: (
+                    capture["overflow"].update({
+                        "stdout": True,
+                        "stderr": True,
+                    }),
+                    capture["stdout"].update({
+                        "source_bytes": capture["limits"]["stdout_bytes"] + 1
+                    }),
+                    capture["stderr"].update({
+                        "source_bytes": capture["limits"]["stderr_bytes"] + 1
+                    }),
+                    capture.update({
+                        "returncode": -15,
+                        "termination_reason": "stdout_stderr_limit",
                     }),
                 ),
                 "adapter verdict passed despite capture fault",
@@ -2551,7 +2988,10 @@ class ContractComparisonTests(unittest.TestCase):
     def test_hidden_capture_faults_fail_closed(self) -> None:
         def excess_source(subject: str, outer: dict) -> None:
             if subject == "codex":
-                outer["adapter"]["capture"]["stdout"]["source_bytes"] = 2048
+                capture = outer["adapter"]["capture"]
+                capture["stdout"]["source_bytes"] = (
+                    capture["limits"]["stdout_bytes"] + 1
+                )
 
         result = self.compare_mutation(excess_source)
         self.assertFalse(result["contract_passed"])
@@ -2699,6 +3139,59 @@ class ContractComparisonTests(unittest.TestCase):
             self.guard_outer(
                 "claude", evaluable=False, adapter_passed=True
             )["verdict"]["passed"]
+        )
+
+    def test_every_execution_fact_is_rederived_from_retained_raw(self) -> None:
+        mutations = {
+            "arguments_sha256": "0" * 64,
+            "effect_kind": "other",
+            "operation": None,
+            "reported_error": False,
+            "operation_exit_code": 0,
+        }
+        for field, value in mutations.items():
+            with self.subTest(field=field):
+                result = self.compare_mutation(
+                    lambda subject, outer: outer["adapter"]["lifecycle"][
+                        "tool_executions"
+                    ][0].update({field: value})
+                    if subject == "deepseek" else None,
+                    factory=self.repair_outer,
+                )
+                self.assertFalse(result["contract_passed"])
+                self.assert_error_contains(
+                    "lifecycle disagrees with retained raw evidence",
+                    result["errors"],
+                )
+
+    def test_incomplete_raw_call_result_lifecycle_is_rejected(self) -> None:
+        def drop_claude_result(subject: str, outer: dict) -> None:
+            if subject != "claude":
+                return
+            captured = outer["adapter"]["capture"]["stdout"]
+            raw = base64.b64decode(captured["base64"], validate=True)
+            events = [json.loads(line) for line in raw.splitlines()]
+            events = [
+                event for event in events
+                if not any(
+                    isinstance(item, dict)
+                    and item.get("type") == "tool_result"
+                    and item.get("tool_use_id") == "call-0"
+                    for item in (
+                        event.get("message", {}).get("content", [])
+                        if isinstance(event.get("message"), dict) else []
+                    )
+                )
+            ]
+            outer["adapter"]["capture"]["stdout"] = capture_bytes(jsonl(*events))
+
+        result = self.compare_mutation(
+            drop_claude_result,
+            factory=self.repair_outer,
+        )
+        self.assertFalse(result["contract_passed"])
+        self.assert_error_contains(
+            "lifecycle disagrees with retained raw evidence", result["errors"]
         )
 
     def test_outer_workload_and_variant_must_bind_the_adapter_request(self) -> None:
@@ -2885,6 +3378,24 @@ class ContractComparisonTests(unittest.TestCase):
             change_fixture,
             "workspace fixture entries changed",
         )
+
+    def test_passing_workspace_cannot_hide_non_regular_nodes(self) -> None:
+        def add_node(subject: str, outer: dict, kind: str) -> None:
+            if subject == "pi":
+                outer["adapter"]["workspace"]["after"].append({
+                    "path": f"undeclared-{kind}",
+                    "mode": 0o700,
+                    "kind": kind,
+                })
+
+        for kind in ("directory", "symlink", "fifo", "socket"):
+            with self.subTest(kind=kind):
+                self.assert_contract_rejected(
+                    lambda subject, outer, kind=kind: add_node(
+                        subject, outer, kind
+                    ),
+                    "write outcome disagrees with exact workspace",
+                )
 
     def test_repair_oracle_process_evidence_is_complete_and_bound(self) -> None:
         cases = (
@@ -3412,11 +3923,21 @@ class GuardHookTests(unittest.TestCase):
     function while the harnesses test a program.
     """
 
+    CAPABILITY = "ef" * 32
+    RUN_ID = "12" * 16
+
     def run_hook(
         self, subject: str, event: str, payload: dict | None, mode: str | None
     ) -> tuple[int, dict | None, str, list[dict]]:
         with tempfile.TemporaryDirectory() as directory:
-            receipt = Path(directory) / "receipt.jsonl"
+            root = Path(directory)
+            receipt = root / "receipt.jsonl"
+            installed = adapters._materialize_guard(
+                "guard_hook.py",
+                root / "guard_hook.py",
+                capability=self.CAPABILITY,
+                run_id=self.RUN_ID,
+            )
             environment = dict(os.environ)
             environment["HWB_GUARD_RECEIPT"] = str(receipt)
             environment.pop("HWB_GUARD_MODE", None)
@@ -3425,7 +3946,7 @@ class GuardHookTests(unittest.TestCase):
             completed = subprocess.run(
                 [
                     sys.executable,
-                    str(adapters.HERE / "guard_hook.py"),
+                    str(installed),
                     "--subject", subject,
                     "--event", event,
                 ],
@@ -3503,7 +4024,14 @@ class GuardHookTests(unittest.TestCase):
                     events[0]["guarded_tool"],
                 )
                 self.assertEqual(
-                    "cross-harness-guard-event/v0.1", events[0]["schema"]
+                    adapters.GUARD_RECEIPT_SCHEMA, events[0]["schema"]
+                )
+                self.assertEqual(self.RUN_ID, events[0]["run_id"])
+                self.assertEqual(
+                    adapters._guard_event_signature(
+                        events[0], self.CAPABILITY
+                    ),
+                    events[0]["signature"],
                 )
 
     def test_a_hook_told_no_mode_refuses_rather_than_guessing(self) -> None:
