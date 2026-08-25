@@ -7,13 +7,14 @@ The current candidate policy is:
 | Stage | Python package version | Git tag | GitHub release |
 |---|---|---|---|
 | first candidate | `0.1.0rc1` | `v0.1.0-rc.1` | prerelease — **published 2026-08-12** |
-| current candidate | `0.1.0rc2` | `v0.1.0-rc.2` | prerelease — not yet created |
-| final promotion | `0.1.0` | `v0.1.0` | full release |
+| second candidate | `0.1.0rc2` | `v0.1.0-rc.2` | prerelease — **published 2026-08-25** |
+| current final promotion | `0.1.0` | `v0.1.0` | full release — not yet created |
 
 A candidate that has already been published is history: never retarget its tag
 or reuse its number. `0.1.0rc2` exists because the source gained public API
-after `0.1.0rc1` shipped — a new importable module, `harness_workbench.capture`
-— so the published prerelease no longer describes this tree.
+after `0.1.0rc1` shipped — a new importable module, `harness_workbench.capture`.
+The final promotion carries the verified rc2 contents into a new commit and
+new build; candidate evidence does not transfer to final bytes.
 
 Tags are signed, annotated, immutable, and must point at the exact commit whose
 source produced the uploaded files. Never move or reuse a failed tag; fix the
@@ -46,15 +47,14 @@ before announcing the repository or creating the prerelease. Record the
 settings evidence in the release conformance record. These are external
 release-gate actions, not changes this procedure or a local commit can perform.
 
-## 1. Prepare a clean candidate commit
+## 1. Prepare a clean release commit
 
 First turn the preparation branch into a release commit: change the README
-status from "preparing" to an accurate candidate-release statement, change the
-changelog heading from `## 0.1.0rc2 — unreleased` to `## 0.1.0rc2 — YYYY-MM-DD`
-with the date of this release commit, remove its preparation note,
-and review
-[`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md).
-That record must continue to say that no GitHub prerelease exists yet and must
+status from "preparing" to an accurate final-candidate statement, move the
+candidate changelog entries under `## 0.1.0 — YYYY-MM-DD` with the date of this
+release commit, and review
+[`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md).
+That record must continue to say that no final GitHub release exists yet and must
 not promote preparation self-runs to release evidence. Commit the release-only
 edits.
 
@@ -148,11 +148,11 @@ this check pass; start another fresh clone.
 
 ## 2. Run the source and artifact gate
 
-For the current candidate, these variables and their agreement check are exact:
+For the current final promotion, these variables and their agreement check are exact:
 
 ```sh
-VERSION=0.1.0rc2
-TAG=v0.1.0-rc.2
+VERSION=0.1.0
+TAG=v0.1.0
 test "$(PYTHONPATH=src python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
@@ -249,9 +249,9 @@ gate. Only a commit that already passed step 2 gets pushed.
 
 ```sh
 cd "$SOURCE_REPO"
-git push origin "$RELEASE_COMMIT":refs/heads/release/0.1.0rc2
+git push origin "$RELEASE_COMMIT":refs/heads/release/0.1.0
 git fetch origin
-test "$(git rev-parse 'origin/release/0.1.0rc2^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release/0.1.0^{commit}')" = "$RELEASE_COMMIT"
 ```
 
 Now re-run the gate against what GitHub actually serves. Step 2 proved the
@@ -265,7 +265,7 @@ test ! -e hwb-release-remote
 git clone https://github.com/explorefailure/harness-workbench.git hwb-release-remote
 cd hwb-release-remote
 git fetch --tags origin
-test "$(git rev-parse 'origin/release/0.1.0rc2^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release/0.1.0^{commit}')" = "$RELEASE_COMMIT"
 git checkout --detach "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_COMMIT")"
@@ -335,7 +335,7 @@ Stop if any required job is absent, pending, skipped, or failing. A maintainer
 must inspect the run in GitHub before continuing. Do not tag first and hope a
 later run passes.
 
-## 4. Create and verify the candidate tag
+## 4. Create and verify the final tag
 
 ```sh
 test -z "$(git tag --list "$TAG")"
@@ -347,14 +347,14 @@ git push origin "$TAG"
 ```
 
 The tag-triggered CI job repeats tag-to-package agreement with read-only GitHub
-permissions. Wait for every tag run to pass before creating the prerelease. If
+permissions. Wait for every tag run to pass before creating the release. If
 the local tag has not been pushed, delete it locally and fix the source. If it
 has been pushed, do not move it: leave the failed candidate documented, increment
 the candidate number to the next unused `0.1.0rcN` with its matching
 `v0.1.0-rc.N` tag, and restart at step 1. Never reuse or retarget a candidate
 number that has been pushed, whether or not its release was created.
 
-## 5. Create the GitHub prerelease
+## 5. Create the GitHub release
 
 From `hwb-release-remote` — the checkout whose bytes came from GitHub and whose
 `SHA256SUMS` matched the offline gate — with the files still in `dist/`:
@@ -363,13 +363,13 @@ From `hwb-release-remote` — the checkout whose bytes came from GitHub and whos
 python tools/release_checksums.py check dist
 gh release create "$TAG" \
   dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
-  --verify-tag --prerelease --generate-notes \
+  --verify-tag --generate-notes \
   --title "Harness Workbench $TAG"
 gh release view "$TAG" \
   --json assets,isDraft,isPrerelease,tagName,targetCommitish,url
 ```
 
-Check that the release is not a draft, is marked as a prerelease, names the
+Check that the release is not a draft, is not marked as a prerelease, names the
 right tag, and contains one wheel, one sdist, and `SHA256SUMS`. Download those
 GitHub-hosted assets into an empty directory and repeat the gate against the
 downloaded bytes:
@@ -389,7 +389,7 @@ Stop and mark the release with a clear warning if uploaded bytes or first-run
 behavior differ. Never replace assets silently.
 
 After the downloaded bytes pass, finalize the release copy of
-`docs/release-conformance-0.1.0rc2.md` with the exact release commit, tag and
+`docs/release-conformance-0.1.0.md` with the exact release commit, tag and
 verification, run URLs, setting/route evidence, asset filenames and SHA-256
 values, downloaded-asset result, assessor/approver, and residual limitations.
 Publish that finalized copy beside the assets or in the GitHub release body.
@@ -398,30 +398,7 @@ commit exists; the release copy is the content-addressed per-artefact record.
 Do not rewrite the tagged source commit or claim an outside assurance label for
 an author-side run.
 
-## 6. Promote to final `v0.1.0`
-
-The final is a new commit and a new build, not a rename of the candidate files.
-Apply accepted candidate fixes, change `__version__` from `0.1.0rcN` to
-`0.1.0`, update the README status, and move the changelog entries from the
-candidate heading to a dated `0.1.0` release heading. Then start
-again from step 1 with:
-
-```sh
-VERSION=0.1.0
-TAG=v0.1.0
-python tools/verify_release_tag.py "$TAG"
-```
-
-Run the complete source, matrix, build, strict Twine, archive, separate-install,
-checksum, signed-tag, and downloaded-asset gates again. Create the final release
-without `--prerelease`:
-
-```sh
-gh release create "$TAG" \
-  dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
-  --verify-tag --generate-notes \
-  --title "Harness Workbench $TAG"
-```
+## 6. Close the final promotion
 
 Only after the final GitHub release and downloaded assets pass verification may
 the README say that v0.1.0 is released. Publishing to a package index is a

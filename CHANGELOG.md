@@ -5,7 +5,12 @@ releases. Python package versions use PEP 440; release-candidate Git tags use
 the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 `v0.1.0-rc.1`).
 
-## 0.1.0rc2 — 2026-08-25
+## 0.1.0 — 2026-08-25
+
+This final promotion carries the verified `0.1.0rc2` contents forward without
+accepted candidate fixes. It is a new commit and build; rc2 verification does
+not transfer to the final tag or assets, so the complete release gate is run
+again.
 
 - Update the experimental Hermes subject from `0.16.0` to official stable
   `0.20.5` / `v2026.8.19`. The pin now binds the annotated release tag object,
@@ -143,6 +148,8 @@ release-final conformance record. It is not published to PyPI.
 
 ## Published releases
 
+- [`0.1.0rc2` — 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.2)
+  — second public GitHub prerelease; not published to PyPI.
 - [`0.1.0rc1` — 2026-08-12](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
   — first public GitHub prerelease; not published to PyPI.
 

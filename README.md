@@ -58,14 +58,14 @@ It is built for two jobs:
   evidence surfaces into one envelope. See
   [Measuring another harness](#measuring-another-harness).
 
-Latest published release: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
-public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
+Latest published release: **[`v0.1.0-rc.2`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.2)
+public GitHub prerelease** (package version `0.1.0rc2`), published 2026-08-25
 with wheel and source-distribution assets. It is not published to PyPI.
 
-This tree is the **approved source candidate for `0.1.0rc2`**. It is not yet
-tagged or published, and has no release assets. The difference that matters to
-a reader is a new public module, `harness_workbench.capture`, which recipients
-of `v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+.
+This tree is the **approved source candidate for final `0.1.0`**. It is not yet
+tagged or published, and has no final-release assets. It carries the verified
+rc2 contents forward without accepted candidate fixes. Zero runtime
+dependencies, Python 3.11+.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -78,7 +78,7 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 
 ## Try it
 
-The prerelease is not published to PyPI. Install it from a clone in a virtual
+The project is not published to PyPI. Install it from a clone in a virtual
 environment:
 
 ```console
@@ -88,7 +88,7 @@ $ python3 -m venv .venv
 $ . .venv/bin/activate
 $ pip install .
 $ hwb --version
-hwb 0.1.0rc2
+hwb 0.1.0
 ```
 
 Create `hello.json` with one command and no features:
@@ -209,11 +209,10 @@ ordinary successful run could hide:
   after changing the harness, model, provider, or extension. Compare the tools,
   decisions, events, and durable outcomes—not just the final answer.
 
-These experiments need structured access to the target harness. The candidate
-subject tree provides that access for five harnesses, but no adapter is part of
-the published prerelease. Until promotion evidence and owner review close, this
-list describes candidate experiments—not capabilities claimed for the current
-release.
+These experiments need structured access to the target harness. The subject
+tree provides that access for five harnesses, but no adapter envelope is part
+of the public library API. This list describes experiments—not capabilities
+claimed for a third-party harness.
 
 ### Experiments you can run now
 
@@ -243,14 +242,14 @@ Start with a small, deterministic workload whenever possible:
 ## What I'm building next
 
 Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. Candidate `0.1.0rc2`
-now includes an experimental subject tree for Pi, Claude Code, Codex CLI,
+own harness behavior can be added as Workbench features. Final `0.1.0` includes
+the experimental subject tree verified in rc2 for Pi, Claude Code, Codex CLI,
 DeepSeek Harness, and Hermes Agent. They share one evidence envelope without
 pretending their native event and interception surfaces are the same.
 
 The adapter promotion review is complete: the whole
 `cross-harness-adapter-run/v0.1` envelope remains experiment-local for
-`0.1.0rc2`. Its exact-five-subject validator, live pin/model coupling, and
+`0.1.0`. Its exact-five-subject validator, live pin/model coupling, and
 closed field sets are useful for sealed comparisons but are not a
 vendor-neutral, additively evolving public API. The generic boundary already
 promoted is `capture` plus `canon`; see the
@@ -302,17 +301,17 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. For candidate `0.1.0rc2`, exact post-audit checkpoint
-`d1a339fe989b456580bc6b2d8216f2ab66b235e9` passed the full Linux/macOS matrix
-(all eight CPython cells) and the package job in [CI run
-32815107448](https://github.com/explorefailure/harness-workbench/actions/runs/32815107448),
-and passed [CodeQL run
-32815107568](https://github.com/explorefailure/harness-workbench/actions/runs/32815107568).
-That is preparation evidence for that exact pre-freeze commit, not
-release-final evidence; the release-only commit must rerun every gate. The
-published `v0.1.0-rc.1` separately has Immutable-tag CI and a
-release-final conformance record attached to its
-[GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
+that test set. Published candidate `0.1.0rc2`, exact commit
+`66ce4ed853ac4a60f975bddf7e84cfccd4505cc6`, passed the full Linux/macOS matrix
+(all eight CPython cells) and package job in [CI run
+32895018013](https://github.com/explorefailure/harness-workbench/actions/runs/32895018013),
+passed [CodeQL run
+32895018016](https://github.com/explorefailure/harness-workbench/actions/runs/32895018016),
+and passed Immutable-tag CI in [run
+32895591807](https://github.com/explorefailure/harness-workbench/actions/runs/32895591807).
+Its release-final conformance record is attached to the prerelease. Those
+results prove the rc2 commit and assets only; this final-version commit must
+rerun every gate before `v0.1.0` is created.
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
@@ -495,7 +494,7 @@ option reference.
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
 | [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
-| [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md) | the source-bundled pre-release conformance record for the approved, **unreleased** `0.1.0rc2` source candidate; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) for the published `v0.1.0-rc.1` is attached to that GitHub prerelease |
+| [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the approved, **unreleased** final `0.1.0` source candidate; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,

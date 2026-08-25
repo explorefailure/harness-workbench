@@ -184,10 +184,10 @@ import verify_release_tag  # noqa: E402
 
 
 class TestReleaseVersion(unittest.TestCase):
-    def test_candidate_version_and_public_tag_are_exact(self):
-        self.assertEqual("0.1.0rc2", harness_workbench.__version__)
-        self.assertEqual("0.1.0rc2", verify_release_tag.source_version())
-        verify_release_tag.verify("v0.1.0-rc.2", harness_workbench.__version__)
+    def test_final_version_and_public_tag_are_exact(self):
+        self.assertEqual("0.1.0", harness_workbench.__version__)
+        self.assertEqual("0.1.0", verify_release_tag.source_version())
+        verify_release_tag.verify("v0.1.0", harness_workbench.__version__)
 
     def test_final_version_and_tag_policy_is_explicit(self):
         self.assertEqual(
@@ -200,11 +200,11 @@ class TestReleaseVersion(unittest.TestCase):
         )
 
     def test_mismatched_or_noncanonical_tags_are_rejected(self):
-        rejected = ("v0.1.0", "0.1.0-rc.2", "v0.1.0rc2", "v0.1.0-rc.02",
-                    "v0.1.0-rc.1")
+        rejected = ("v0.1.0-rc.2", "0.1.0", "v0.1.0rc2", "v0.1.0-rc.02",
+                    "v0.1.0.0")
         for tag in rejected:
             with self.subTest(tag=tag), self.assertRaises(verify_release_tag.TagError):
-                verify_release_tag.verify(tag, "0.1.0rc2")
+                verify_release_tag.verify(tag, "0.1.0")
 
     def test_cli_reports_the_source_version(self):
         env = os.environ.copy()
@@ -217,7 +217,7 @@ class TestReleaseVersion(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        self.assertEqual("hwb 0.1.0rc2\n", completed.stdout)
+        self.assertEqual("hwb 0.1.0\n", completed.stdout)
 
     def test_issue_template_version_placeholders_are_current(self):
         """A reader-facing example version must not name a superseded candidate.
@@ -834,7 +834,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         with (ROOT / "pyproject.toml").open("rb") as stream:
             project = tomllib.load(stream)["project"]
         notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
 
@@ -873,44 +873,47 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertNotIn("Codex", record)
         self.assertNotIn("release-preparation agent", record)
 
-    def test_candidate_publication_status_is_current(self):
+    def test_final_candidate_publication_status_is_current(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("public GitHub prerelease", readme)
         self.assertIn(
-            "releases/tag/v0.1.0-rc.1",
+            "releases/tag/v0.1.0-rc.2",
             readme,
         )
         self.assertIn("not published to PyPI", readme)
         self.assertNotIn("has not been tagged, released, or made public", readme)
-        self.assertIn("0.1.0rc1 — 2026-08-12", changelog)
-        self.assertIn("published as the public GitHub prerelease", changelog)
+        self.assertIn("0.1.0rc2` — 2026-08-25", changelog)
+        self.assertIn("second public GitHub prerelease", changelog)
         self.assertIn("not published to PyPI", changelog)
         self.assertNotIn("Published releases\n\nNone yet", changelog)
         # The repository-owned record is intentionally the pre-publication
         # source record; the release-final record is a GitHub release asset.
         self.assertIn("Prepared candidate record — NOT RELEASED", record)
         self.assertIn(
-            "f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3",
+            "66ce4ed853ac4a60f975bddf7e84cfccd4505cc6",
             record,
         )
         self.assertIn(
-            "https://github.com/explorefailure/harness-workbench/actions/runs/32604245910",
+            "https://github.com/explorefailure/harness-workbench/actions/runs/32895018013",
             record,
         )
         self.assertIn(
-            "https://github.com/explorefailure/harness-workbench/actions/runs/32604245892",
+            "https://github.com/explorefailure/harness-workbench/actions/runs/32895018016",
             record,
         )
         self.assertIn("zero open code-scanning alerts", record)
         for document in (changelog, record):
             self.assertNotIn("unpushed", document)
             self.assertNotIn("public PR head remains", document)
-        self.assertIn("results do not transfer forward", changelog)
-        self.assertIn("require exact-head hosted checks after publication", record)
+        self.assertRegex(
+            changelog,
+            r"rc2 verification does\s+not transfer to the final tag or assets",
+        )
+        self.assertIn("do not transfer to the final release commit", record)
         self.assertIn("Release commit: **PENDING**", record)
         self.assertIn("Signed tag and verification: **PENDING**", record)
 
@@ -945,7 +948,7 @@ class TestReleaseSurfaces(unittest.TestCase):
 
     def test_capture_provenance_distinguishes_rc1_tag_from_development(self):
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("added after the published `0.1.0rc1` tag", changelog)
@@ -1438,7 +1441,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertIn("--max-archive-depth 2 dist", releasing)
 
     def test_conformance_record_routes_every_release_claim_surface(self):
-        record_path = ROOT / "docs" / "release-conformance-0.1.0rc2.md"
+        record_path = ROOT / "docs" / "release-conformance-0.1.0.md"
         record = record_path.read_text(encoding="utf-8")
 
         # Reader-facing Markdown at the root and under docs, every shipped
@@ -1486,7 +1489,7 @@ class TestReleaseSurfaces(unittest.TestCase):
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        link = "docs/release-conformance-0.1.0rc2.md"
+        link = "docs/release-conformance-0.1.0.md"
         self.assertIn(f"]({link})", readme)
         self.assertIn(f"]({link})", releasing)
 
@@ -1780,7 +1783,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         row, even the sentence explaining the omission. Routing means the name
         is in the manifest, so read only the manifest.
         """
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
         heading = "### Exact public library-module manifest"
@@ -2052,7 +2055,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertTrue(checked, "no module declares __all__; this check is vacuous")
 
     def test_conformance_record_pins_standards_and_stays_pre_release(self):
-        record = (ROOT / "docs" / "release-conformance-0.1.0rc2.md").read_text(
+        record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
         pins = (
