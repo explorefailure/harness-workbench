@@ -1,0 +1,37 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "plan_fixture",
+  "task": "plan_task.md",
+  "inputs": [
+    "plan_adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "plan_mode_extension.ts",
+    "plan_provider.ts",
+    "pin.json",
+    "plan_task.md",
+    "plan_fixture/seed.txt"
+  ],
+  "extensions": ["plan_mode_extension.ts", "plan_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--tools", "read,bash,write",
+    "--provider", "hwb-plan-scripted",
+    "--model", "plan-policy",
+    "--system-prompt", "Run the deterministic plan-mode policy fixture."
+  ],
+  "capture_limits": {
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 1048576,
+    "evidence_bytes": 1048576
+  },
+  "network_mode": "Pi offline; plan-mode provider and fixture perform no requests"
+}

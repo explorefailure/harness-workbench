@@ -1,0 +1,39 @@
+model:
+  default: qwen3.5:9b
+  provider: custom
+  base_url: http://127.0.0.1:11434/v1
+  # Hermes reads the custom provider's key from THIS block, not OPENAI_API_KEY,
+  # whenever a model runtime block exists. The token below is substituted with
+  # the active profile's secret when the temporary config is rendered; the
+  # committed file never contains a credential.
+  api_key: __HWB_PROVIDER_KEY__
+toolsets:
+  - file
+hooks_auto_accept: true
+hooks:
+  pre_tool_call:
+    - matcher: write_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: read_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: patch
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: terminal
+      command: python3.11 hook.py
+      timeout: 5
+  post_tool_call:
+    - matcher: write_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: read_file
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: patch
+      command: python3.11 hook.py
+      timeout: 5
+    - matcher: terminal
+      command: python3.11 hook.py
+      timeout: 5

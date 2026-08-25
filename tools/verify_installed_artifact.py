@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Install one release artifact into a clean venv and exercise its public UX."""
+"""Install one artifact and exercise its public UX and offline subject tree."""
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+
+PINNED_BUILD_BACKEND = "83.0.0"
 
 
 def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -45,7 +49,11 @@ def main() -> None:
         env.pop("PYTHONPATH", None)
         env["PYTHONNOUSERSITE"] = "1"
 
-        run([python, "-m", "pip", "install", "--disable-pip-version-check", str(artifact)], cwd=work, env=env)
+        installable = prepare_installable_artifact(artifact, work, env)
+        run([
+            python, "-m", "pip", "install", "--disable-pip-version-check",
+            "--no-index", "--no-deps", str(installable),
+        ], cwd=work, env=env)
         run([python, "-m", "pip", "check"], cwd=work, env=env)
         version_check = (
             "import importlib.metadata as m, importlib.util, harness_workbench as p; "
@@ -60,6 +68,7 @@ def main() -> None:
             raise SystemExit("hwb --version disagrees with installed metadata")
         run([hwb, "--help"], cwd=work, env=env)
         run([python, "-m", "harness_workbench", "--help"], cwd=work, env=env)
+        verify_materialized_subjects(hwb, python, work, env)
 
         spec = work / "hello.json"
         spec.write_text(json.dumps({
@@ -78,6 +87,63 @@ def main() -> None:
         run([hwb, "show", run_id], cwd=work, env=env)
         run([hwb, "verify", run_id], cwd=work, env=env)
         print(f"verified installed artifact {artifact.name} with run {run_id}")
+
+
+def prepare_installable_artifact(
+    artifact: Path, work: Path, env: dict[str, str]
+) -> Path:
+    """Turn an sdist into a wheel with the caller's pinned backend, offline.
+
+    A clean venv must not resolve ``build-system.requires`` from an index: that
+    would make the verification step network-dependent and silently replace
+    the backend pin used to create the release artifacts.  The release
+    environment already owns the exact backend, so build there without PEP 517
+    isolation, forbid index access, then install only the resulting wheel in
+    the clean venv.
+    """
+    if not artifact.name.endswith(".tar.gz"):
+        return artifact
+    backend = importlib.metadata.version("setuptools")
+    if backend != PINNED_BUILD_BACKEND:
+        raise SystemExit(
+            "source distribution verification requires setuptools=="
+            f"{PINNED_BUILD_BACKEND}, found {backend}"
+        )
+    wheelhouse = work / "sdist-wheel"
+    wheelhouse.mkdir()
+    build_env = dict(env)
+    build_env["PIP_NO_INDEX"] = "1"
+    run([
+        sys.executable, "-m", "pip", "wheel",
+        "--disable-pip-version-check", "--no-index", "--no-deps",
+        "--no-build-isolation", "--wheel-dir", str(wheelhouse),
+        str(artifact),
+    ], cwd=work, env=build_env)
+    wheels = sorted(wheelhouse.glob("*.whl"))
+    if len(wheels) != 1:
+        raise SystemExit(
+            f"source distribution produced {len(wheels)} wheels, expected one"
+        )
+    return wheels[0]
+
+
+def verify_materialized_subjects(
+    hwb: str, python: str, work: Path, env: dict[str, str]
+) -> None:
+    """Prove the installed artifact ships a self-consistent offline tree."""
+    destination = work / "subjects"
+    run([hwb, "subjects", "--into", str(destination)], cwd=work, env=env)
+    run(
+        [
+            python,
+            "-m", "unittest", "discover",
+            "-s", str(destination),
+            "-p", "test_experiment.py",
+            "-v",
+        ],
+        cwd=work,
+        env=env,
+    )
 
 
 def artifact_version(python: str, cwd: Path, env: dict[str, str]) -> str:

@@ -1,0 +1,39 @@
+{
+  "schema": "cross-harness-pins/v0.1",
+  "claude_code": {
+    "version": "2.1.233",
+    "model": "claude-haiku-4-5-20251001",
+    "executable_sha256": "bc466b6cde63edafc773f471a1fb98787fabb31f52240c8616ce7e1f587b212d"
+  },
+  "codex_cli": {
+    "version": "0.144.1",
+    "model": "gpt-5.6-luna",
+    "executable_sha256": "29915529b97697def1a957b0505e770aa6a45744435d62fc263e98d7619e167a"
+  },
+  "deepseek_harness": {
+    "version": "0.1.0-rc.6",
+    "provider": "workbench-ollama",
+    "comment": "No model is pinned here. DeepSeek is a configurable-model subject, so model_selection.json chooses its model and the adapter overwrites anything this block claimed. The key said qwen3.5:9b long after that model was replaced, which is exactly what a pin nobody reads decays into.",
+    "executable_sha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62",
+    "npm_integrity": "sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg=="
+  },
+  "hermes_agent": {
+    "version": "0.20.5",
+    "release_tag": "v2026.8.19",
+    "tag_object": "b05e680e63d39d5a8e3ec0f5842a41d1c4209c03",
+    "source_commit": "fcbd1076a93841fa88855acce810e342a5b78101",
+    "uv_lock_sha256": "64a66f8a0ce1d23ea10c16ca89b7104f1828a8f21cf1dd95d7cb74e4bd3efa10",
+    "launcher_sha256": "4e656ecdef40ef0c4eb136f66cf27e935a1137bc36fd079db4e75f8d3a757d84"
+  },
+  "ollama": {
+    "model": "gpt-oss:20b",
+    "model_digest": "17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7",
+    "comment": "Superseded as the model authority by model_selection.json; retained as the local profile's content pin. qwen3.5:9b was replaced after it failed the repair workload in every harness tested."
+  },
+  "pi_coding_agent": {
+    "version": "0.84.1",
+    "executable_sha256": "840d1e8e689ed9e4937bcb00b9a810e02a8567d9afb10a47097f11ca93ea1521",
+    "node_version": "22.22.3",
+    "npm_package": "@earendil-works/pi-coding-agent"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "receipt"
+    },
+    {
+      "name": "retry",
+      "config": {
+        "max": 2
+      }
+    },
+    {
+      "name": "sample",
+      "config": {
+        "n": 3
+      }
+    },
+    {
+      "name": "timing"
+    }
+  ],
+  "steps": [
+    {
+      "id": "deepseek-adapter",
+      "argv": [
+        "./run_subject.sh",
+        "deepseek"
+      ],
+      "inputs": [
+        "run_subject.sh",
+        "runner.py",
+        "adapters.py",
+        "oracles.py",
+        "workloads.py",
+        "pin.json",
+        "model_selection.json",
+        "task.md",
+        "hook.py",
+        "hermes_config.yaml",
+        "dsh_patch.yml"
+      ]
+    }
+  ]
+}

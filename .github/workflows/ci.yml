@@ -36,6 +36,9 @@ jobs:
       - name: Run full test suite
         run: python -m unittest discover -s tests -v
 
+      - name: Run offline subject adapter suite
+        run: PYTHONPATH=src python -m unittest discover -s src/harness_workbench/subjects -p 'test_experiment.py' -v
+
   package:
     name: Build and verify release artifacts
     runs-on: ubuntu-latest
@@ -58,8 +61,15 @@ jobs:
             exit 1
           fi
 
+      # The pinned tools only, never the project: installing the project runs an
+      # in-tree build and leaves a `build/` directory that the next build would
+      # reuse. `setuptools` is pinned because it is the build backend and
+      # `requires` is only a floor; the build steps below pass
+      # `--no-isolation` so this pin is the backend that actually runs.
       - name: Install release tooling
-        run: python -m pip install --disable-pip-version-check '.[release]'
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
 
       - name: Derive deterministic archive timestamp from the candidate commit
         run: |
@@ -72,8 +82,8 @@ jobs:
           RAW_SDIST_DIR="$RUNNER_TEMP/hwb-raw-sdist"
           test ! -e "$RAW_SDIST_DIR"
           mkdir "$RAW_SDIST_DIR"
-          python -m build --wheel --outdir dist
-          python -m build --sdist --outdir "$RAW_SDIST_DIR"
+          python -m build --no-isolation --wheel --outdir dist
+          python -m build --no-isolation --sdist --outdir "$RAW_SDIST_DIR"
           python tools/normalize_sdist.py "$RAW_SDIST_DIR"/*.tar.gz --output-dir dist
           rm -rf -- "$RAW_SDIST_DIR"
 

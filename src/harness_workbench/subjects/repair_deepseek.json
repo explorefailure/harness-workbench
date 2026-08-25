@@ -1,0 +1,53 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "discovery",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "receipt"
+    },
+    {
+      "name": "retry",
+      "config": {
+        "max": 2
+      }
+    },
+    {
+      "name": "sample",
+      "config": {
+        "n": 3
+      }
+    },
+    {
+      "name": "timing"
+    }
+  ],
+  "steps": [
+    {
+      "id": "deepseek-repair-adapter",
+      "argv": [
+        "./run_subject.sh",
+        "deepseek",
+        "repair"
+      ],
+      "inputs": [
+        "run_subject.sh",
+        "runner.py",
+        "adapters.py",
+        "oracles.py",
+        "workloads.py",
+        "pin.json",
+        "model_selection.json",
+        "repair_task.md",
+        "repair_fixture/slugger.py",
+        "repair_fixture/test_slugger.py",
+        "hook.py",
+        "hermes_config.yaml",
+        "dsh_patch.yml"
+      ]
+    }
+  ]
+}

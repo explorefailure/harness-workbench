@@ -39,8 +39,18 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# The exact release toolchain, including the build backend. `requires` above is
+# a floor, and `python -m build` resolves a floor freshly in an isolated
+# environment, so the same commit built minutes apart produced different wheel
+# bytes and different member modes under setuptools 79.0.1 and 84.0.0 -- 84
+# drops the executable bit from `.py` package data that the source tree marks
+# executable. The release gate therefore builds with `--no-isolation` against
+# this pin. Third parties building from source are still governed by the floor;
+# only the release path is pinned. `RELEASING.md` writes these versions
+# literally and a test asserts the two lists agree.
 release = [
     "build==1.5.0",
+    "setuptools==83.0.0",
     "twine==7.0.0",
 ]
 
@@ -61,7 +71,32 @@ package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-harness_workbench = ["builtin/*/*.py", "builtin/*/FEATURE.json"]
+# The subject tree ships for the same reason the builtin features do: so an
+# install can demonstrate itself against real harnesses. It is DATA, never
+# imported -- `hwb subjects init` copies it into a directory the user owns,
+# where each spec's `inputs` digest covers the exact adapter bytes that ran.
+harness_workbench = [
+    "builtin/*/*.py",
+    "builtin/*/FEATURE.json",
+    "subjects/*.py",
+    "subjects/*.json",
+    "subjects/*.md",
+    "subjects/*.sh",
+    "subjects/*.yml",
+    "subjects/*.yaml",
+    # The interceptors are not Python and were not shipping. `guard_extension.ts`
+    # (Pi) has been in the tree and absent from every built wheel, because this
+    # list enumerated the languages the tree happened to contain when it was
+    # written. `subject_files()` walks the SOURCE checkout, so nothing here
+    # noticed. A test now asserts every file in the tree is matched by one of
+    # these globs, which is the only version of this rule that cannot rot.
+    "subjects/*.ts",
+    "subjects/*.mjs",
+    # Materialized trees are independent Git workspaces. Keep interrupted
+    # per-run roots (including copied Codex auth) unstageable there too.
+    "subjects/.gitignore",
+    "subjects/repair_fixture/*.py",
+]
 
 [tool.setuptools.dynamic]
 # A literal assignment lets setuptools read the value without importing the

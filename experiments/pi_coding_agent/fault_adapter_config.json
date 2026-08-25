@@ -1,0 +1,36 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "fault_fixture",
+  "task": "fault_task.md",
+  "inputs": [
+    "fault_adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "fault_provider.ts",
+    "pin.json",
+    "fault_task.md",
+    "fault_fixture/marker.txt"
+  ],
+  "extensions": ["fault_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--no-tools",
+    "--provider", "hwb-fault-scripted",
+    "--model", "provider-error",
+    "--system-prompt", "Run the declared deterministic fault fixture."
+  ],
+  "capture_limits": {
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 1048576,
+    "evidence_bytes": 1048576
+  },
+  "network_mode": "Pi offline; fault provider performs no requests"
+}

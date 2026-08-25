@@ -1,0 +1,861 @@
+"""The capture primitive, tested where it now lives.
+
+These moved here from the Pi experiment when the code did. A primitive whose
+tests stay behind in one caller is a primitive only that caller is allowed to
+change safely, which defeats the point of promoting it.
+
+stdlib unittest -- no test dependency, so `python3 -m unittest` just works.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, "src"))
+
+from harness_workbench import capture  # noqa: E402
+
+
+POSIX = os.name == "posix"
+
+
+class DigestTests(unittest.TestCase):
+    def test_digest_bytes_is_bare_hex(self):
+        self.assertEqual(
+            hashlib.sha256(b"abc").hexdigest(), capture.digest_bytes(b"abc")
+        )
+
+    def test_digest_file_agrees_with_canon_minus_the_prefix(self):
+        """One digest rule. The prefix is presentation, the hex is the commitment."""
+        from harness_workbench import canon
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "f.bin"
+            path.write_bytes(b"payload")
+            self.assertEqual(
+                canon.digest_file(str(path)), "sha256:" + capture.digest_file(path)
+            )
+
+
+class BoundedEvidenceTests(unittest.TestCase):
+    def test_complete_process_observation_is_serialized_without_a_verdict(self):
+        result = capture.Bounded(
+            argv=["tool", "--secret", "credential-value"],
+            returncode=-15,
+            termination_reason="timeout",
+            stdout=b"credential-value",
+            stderr=b"problem",
+            stdout_source_bytes=32,
+            stderr_source_bytes=7,
+            stdout_overflow=True,
+            stderr_overflow=False,
+            group_alive_before_cleanup=True,
+            group_alive_after_cleanup=False,
+            forwarded_signals=(2,),
+        )
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=16,
+            stderr_limit=8,
+            redactions=("credential-value",),
+            argv=("tool", "<redacted-argument>"),
+        )
+        self.assertEqual(["tool", "<redacted-argument>"], evidence["argv"])
+        self.assertEqual(
+            {"stdout_bytes": 16, "stderr_bytes": 8}, evidence["limits"]
+        )
+        self.assertEqual(32, evidence["stdout"]["source_bytes"])
+        self.assertNotIn("credential-value", evidence["stdout"]["text"])
+        self.assertEqual("timeout", evidence["termination_reason"])
+        self.assertTrue(evidence["timed_out"])
+        self.assertEqual({"stdout": True, "stderr": False}, evidence["overflow"])
+        self.assertEqual([2], evidence["forwarded_signals"])
+        self.assertNotIn("passed", evidence)
+
+
+class ManifestTests(unittest.TestCase):
+    def test_manifest_preserves_unicode_nested_path_mode_and_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "nested dir" / "naïve file.txt"
+            path.parent.mkdir()
+            raw = "héllo\r\n".encode("utf-8")
+            path.write_bytes(raw)
+            path.chmod(0o640)
+            entries = capture.manifest(root)
+        self.assertEqual(
+            [
+                {
+                    "path": "nested dir/naïve file.txt",
+                    "size": len(raw),
+                    "mode": 0o640,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            ],
+            entries,
+        )
+
+    @unittest.skipUnless(POSIX, "symlink contract is POSIX-only")
+    def test_manifest_skips_symlinks_rather_than_following_them(self):
+        """Following one would digest outside bytes under an inside path."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "real.txt").write_bytes(b"real")
+            (root / "link.txt").symlink_to(root / "real.txt")
+            self.assertEqual(["real.txt"], [e["path"] for e in capture.manifest(root)])
+
+
+class RedactionTests(unittest.TestCase):
+    def test_credential_values_selects_by_name_and_ignores_short_values(self):
+        env = {
+            "ANTHROPIC_API_KEY": "long-enough-secret",
+            "SHORT_TOKEN": "abc",
+            "PATH": "/usr/bin",
+        }
+        self.assertEqual(("long-enough-secret",), capture.credential_values(env))
+
+    def test_longest_value_is_redacted_first(self):
+        """A short secret inside a long one must not leave the long one's tail."""
+        raw = b"prefix-SECRETVALUE-suffix"
+        stored, count = capture.redact_bytes(raw, ("SECRETVALUE", "SECRET"))
+        self.assertEqual(1, count)
+        self.assertEqual(b"prefix-[REDACTED]-suffix", stored)
+
+    def test_json_escaped_form_is_redacted_too(self):
+        secret = 'a"b\\c-secret'
+        raw = ('{"k":"' + secret.replace("\\", "\\\\").replace('"', '\\"') + '"}').encode()
+        stored, count = capture.redact_bytes(raw, (secret,))
+        self.assertEqual(1, count)
+        self.assertNotIn(b"secret", stored)
+
+    def test_ascii_escaped_json_form_is_redacted_too(self):
+        """`json.dumps` escapes non-ASCII BY DEFAULT, and that form once slipped.
+
+        A secret with any non-ASCII byte reached stored evidence as `\\uXXXX`
+        while `redaction_count` said 0 -- indistinguishable from bytes that
+        never held a secret. Python's default, not an exotic encoder: every
+        `json.dumps` without `ensure_ascii=False` produces this, including one
+        in this repository.
+        """
+        secret = "sécret-value-ünicode"
+        raw = json.dumps({"k": secret}).encode("utf-8")
+        self.assertIn(b"\\u00e9", raw)
+        stored, count = capture.redact_bytes(raw, (secret,))
+        self.assertEqual(1, count)
+        self.assertNotIn(b"\\u00e9", stored)
+        self.assertNotIn(secret.encode("utf-8"), stored)
+
+    def test_every_valid_json_string_escape_spelling_is_redacted(self):
+        secret = 'auth/token-"\\-é-😀'
+        spellings = (
+            json.dumps(secret, ensure_ascii=False),
+            json.dumps(secret, ensure_ascii=True),
+            json.dumps(secret, ensure_ascii=True).replace("/", "\\/"),
+            '"\\u0061uth\\u002ftoken-\\"\\\\-\\u00e9-\\ud83d\\ude00"',
+        )
+        for spelling in spellings:
+            with self.subTest(spelling=spelling):
+                raw = ('{"credential":' + spelling + '}').encode("utf-8")
+                stored, count = capture.redact_bytes(raw, (secret,))
+                self.assertEqual(1, count)
+                self.assertNotIn(b"auth", stored)
+                self.assertIn(b"[REDACTED]", stored)
+
+    def test_solidus_escaped_fragment_is_redacted_outside_complete_json(self):
+        stored, count = capture.redact_bytes(
+            b"logged=auth\\/token-value", ("auth/token-value",)
+        )
+        self.assertEqual(1, count)
+        self.assertEqual(b"logged=[REDACTED]", stored)
+
+    def test_truncated_credential_sensitive_capture_is_suppressed_whole(self):
+        secret = "auth/token-value"
+        incomplete_unicode_json = (
+            b'{"message":"' + b"x" * 4096
+            + b"\\u0061\\u0075\\u0074\\u0068\\u002f"
+            + b"\\u0074\\u006f\\u006b\\u0065\\u006e-value"
+            + b"-suffix-with-no-closing-quote"
+        )
+        for raw in (incomplete_unicode_json, b"entirely ordinary output"):
+            with self.subTest(raw_length=len(raw)):
+                item = capture.capture_bytes(
+                    raw,
+                    redactions=(secret,),
+                    source_bytes=len(raw) + 1,
+                )
+                self.assertEqual(
+                    capture.TRUNCATED_CREDENTIAL_CAPTURE,
+                    base64.b64decode(item["base64"]),
+                )
+                self.assertEqual(1, item["redaction_count"])
+                self.assertEqual(len(raw) + 1, item["source_bytes"])
+
+        # Truncation is not globally destructive. The fail-closed tradeoff is
+        # activated only when a credential redaction set exists.
+        ordinary = capture.capture_bytes(
+            b"ordinary prefix", source_bytes=len(b"ordinary prefix") + 1
+        )
+        self.assertEqual(
+            b"ordinary prefix", base64.b64decode(ordinary["base64"])
+        )
+
+    def test_split_incomplete_unicode_json_is_suppressed_on_both_streams(self):
+        secret = "auth/token-value"
+        encoded = (
+            b'{"message":"' + b"x" * 1024
+            + b"\\u0061\\u0075\\u0074\\u0068\\u002f"
+            + b"\\u0074\\u006f\\u006b\\u0065\\u006e-value"
+            + b"-long-suffix-without-a-closing-quote"
+        )
+        credential_offset = encoded.index(b"\\u0061")
+        splits = (
+            credential_offset + 2,
+            credential_offset + len(b"\\u0061\\u0075"),
+            len(encoded) - 5,
+        )
+        for stream in ("stdout", "stderr"):
+            for split in splits:
+                with self.subTest(stream=stream, split=split):
+                    fd = 1 if stream == "stdout" else 2
+                    script = (
+                        "import os; "
+                        f"raw={encoded!r}; split={split}; fd={fd}; "
+                        "os.write(fd, raw[:split]); "
+                        "os.write(fd, raw[split:]); os.write(fd, b'!')"
+                    )
+                    with tempfile.TemporaryDirectory() as directory:
+                        result = capture.run_bounded(
+                            [sys.executable, "-c", script],
+                            cwd=Path(directory),
+                            env=dict(os.environ),
+                            timeout=10,
+                            stdout_limit=(len(encoded) if stream == "stdout" else 4096),
+                            stderr_limit=(len(encoded) if stream == "stderr" else 4096),
+                        )
+                    evidence = capture._bounded_evidence(
+                        result,
+                        stdout_limit=(len(encoded) if stream == "stdout" else 4096),
+                        stderr_limit=(len(encoded) if stream == "stderr" else 4096),
+                        redactions=(secret,),
+                    )
+                    self.assertEqual(
+                        capture.TRUNCATED_CREDENTIAL_CAPTURE,
+                        base64.b64decode(evidence[stream]["base64"]),
+                    )
+                    self.assertGreater(
+                        evidence[stream]["source_bytes"], evidence[stream]["bytes"]
+                    )
+
+    def test_lone_surrogate_credential_is_redacted_without_encoding_failure(self):
+        secret = "credential-\udcff-value"
+        json_raw = json.dumps({"token": secret}, ensure_ascii=True).encode("ascii")
+        raw_bytes = b"token=" + secret.encode("utf-8", errors="surrogatepass")
+        for raw in (json_raw, raw_bytes):
+            with self.subTest(raw=raw):
+                item = capture.capture_bytes(raw, redactions=(secret,))
+                serialized = json.dumps(item)
+                self.assertNotIn("\\udcff", serialized)
+                self.assertNotIn(
+                    secret.encode("utf-8", errors="surrogatepass"),
+                    base64.b64decode(item["base64"]),
+                )
+                self.assertGreater(item["redaction_count"], 0)
+
+    def test_split_writes_are_redacted_after_bounded_stream_assembly(self):
+        secret = "split-auth/token-value"
+        script = (
+            "import os,time; "
+            f"parts={list(secret.encode('utf-8'))!r}; "
+            "[os.write(1, bytes([part])) for part in parts]; "
+            "[os.write(2, bytes([part])) for part in parts]"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = capture.run_bounded(
+                [sys.executable, "-c", script],
+                cwd=Path(directory),
+                env=dict(os.environ),
+                timeout=10,
+                stdout_limit=1024,
+                stderr_limit=1024,
+            )
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            redactions=(secret,),
+        )
+        for stream in ("stdout", "stderr"):
+            self.assertNotIn(secret, evidence[stream]["text"])
+            self.assertEqual(1, evidence[stream]["redaction_count"])
+
+    def test_stdout_and_stderr_limit_prefixes_are_not_retained(self):
+        secret = "limit-auth/token-value"
+        for stream in ("stdout", "stderr"):
+            result = capture.Bounded(
+                argv=["tool"],
+                returncode=-15,
+                termination_reason=(
+                    capture.STDOUT_LIMIT if stream == "stdout"
+                    else capture.STDERR_LIMIT
+                ),
+                stdout=secret[:12].encode() if stream == "stdout" else b"",
+                stderr=secret[:12].encode() if stream == "stderr" else b"",
+                stdout_source_bytes=13 if stream == "stdout" else 0,
+                stderr_source_bytes=13 if stream == "stderr" else 0,
+                stdout_overflow=stream == "stdout",
+                stderr_overflow=stream == "stderr",
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+            evidence = capture._bounded_evidence(
+                result,
+                stdout_limit=12,
+                stderr_limit=12,
+                redactions=(secret,),
+            )
+            self.assertNotIn(secret[:12], evidence[stream]["text"])
+            self.assertGreater(evidence[stream]["redaction_count"], 0)
+
+    def test_a_secret_is_counted_once_per_occurrence_not_once_per_variant(self):
+        """Several spellings are supported; one occurrence must count once.
+
+        Otherwise `redaction_count` inflates with the encoder list rather than
+        with what was actually found, and stops describing the evidence.
+        """
+        secret = "sécret-value-ünicode"
+        raw = b"plain=" + secret.encode("utf-8")
+        _, count = capture.redact_bytes(raw, (secret,))
+        self.assertEqual(1, count)
+
+    def test_redaction_count_is_exactly_derivable_from_retained_markers(self):
+        first = "FIRST-CREDENTIAL-VALUE"
+        second = "SECOND-CREDENTIAL-VALUE"
+        raw = (
+            b"literal=[REDACTED] first=" + first.encode("utf-8")
+            + b" again=" + first.encode("utf-8")
+            + b" second=" + second.encode("utf-8")
+        )
+        item = capture.capture_bytes(raw, redactions=(first, second))
+        stored = base64.b64decode(item["base64"], validate=True)
+        self.assertEqual(4, stored.count(capture.REDACTION_MARKER))
+        self.assertEqual(
+            capture.retained_redaction_count(stored),
+            item["redaction_count"],
+        )
+
+        ordinary = capture.capture_bytes(b"ordinary output")
+        self.assertEqual(0, ordinary["redaction_count"])
+        literal = capture.capture_bytes(b"literal [REDACTED] output")
+        self.assertEqual(1, literal["redaction_count"])
+        truncated = capture.capture_bytes(
+            b"partial",
+            redactions=(first,),
+            source_bytes=len(b"partial") + 1,
+        )
+        self.assertEqual(1, truncated["redaction_count"])
+
+    def test_capture_bytes_digests_what_was_stored_not_what_arrived(self):
+        item = capture.capture_bytes(b"tok=SECRETVALUE", redactions=("SECRETVALUE",))
+        stored = base64.b64decode(item["base64"])
+        self.assertEqual(hashlib.sha256(stored).hexdigest(), item["sha256"])
+        self.assertEqual(1, item["redaction_count"])
+        self.assertEqual(len(b"tok=SECRETVALUE"), item["source_bytes"])
+
+    def test_capture_bytes_reports_none_text_for_invalid_utf8(self):
+        self.assertIsNone(capture.capture_bytes(b"\xff\xfe")["text"])
+
+
+class EnvironmentTests(unittest.TestCase):
+    def test_minimal_environment_drops_host_credentials_and_redirects_home(self):
+        sensitive = {
+            "ANTHROPIC_API_KEY": "must-not-cross",
+            "OPENAI_API_KEY": "must-not-cross",
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, sensitive, clear=False
+        ):
+            env = capture.minimal_environment(Path(directory), {"X": "1"})
+            self.assertTrue(Path(env["HOME"]).is_dir())
+        for name in sensitive:
+            self.assertNotIn(name, env)
+        self.assertEqual("1", env["X"])
+        self.assertNotEqual(os.environ.get("HOME"), env["HOME"])
+
+
+class ContainmentTests(unittest.TestCase):
+    def test_traversal_and_absolute_paths_are_refused(self):
+        root = Path("/tmp/root")
+        for value in ("../escape", "/etc/passwd", "a/../../b", "", None):
+            with self.subTest(value=value):
+                with self.assertRaises(capture.CaptureError):
+                    capture.contained_path(root, value)
+
+    def test_relative_path_resolves_below_the_root(self):
+        self.assertEqual(
+            Path("/tmp/root/a/b"), capture.contained_path(Path("/tmp/root"), "a/b")
+        )
+
+    @unittest.skipUnless(POSIX, "symlink contract is POSIX-only")
+    def test_symlink_parent_cannot_escape_for_existing_or_future_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "root"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "existing.txt").write_text("outside", encoding="utf-8")
+            (root / "redirect").symlink_to(outside, target_is_directory=True)
+
+            for value in ("redirect/existing.txt", "redirect/future/deep.txt"):
+                with self.subTest(value=value):
+                    with self.assertRaises(capture.CaptureError):
+                        capture.contained_path(root, value)
+
+            self.assertEqual(
+                root / "future" / "deep.txt",
+                capture.contained_path(root, "future/deep.txt"),
+            )
+
+    def test_subject_reported_outside_path_is_labelled_not_dropped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(
+                "<outside-workspace>", capture.relative_to_root("/etc/passwd", root)
+            )
+            self.assertEqual("a/b", capture.relative_to_root("a/b", root))
+            self.assertIsNone(capture.relative_to_root(17, root))
+
+
+class SidecarTests(unittest.TestCase):
+    def test_jsonl_projection_is_derived_only_from_redacted_stored_bytes(self):
+        # A fixed synthetic marker, not a credential or user-supplied value.
+        redaction_marker = "auth/token-value"
+        variants = (
+            json.dumps({"value": redaction_marker}).encode("utf-8") + b"\n",
+            b'{"value":"auth\\/token-value"}\n',
+            b'{"value":"\\u0061uth\\u002ftoken-value"}\n',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            for raw in variants:
+                with self.subTest(raw=raw):
+                    path.write_bytes(raw)
+                    item = capture.capture_file(
+                        path,
+                        required=True,
+                        format_name="jsonl",
+                        redactions=(redaction_marker,),
+                    )
+                    serialized = json.dumps(item)
+                    stored = base64.b64decode(item["base64"])
+                    self.assertNotIn(redaction_marker, serialized)
+                    self.assertNotIn(b"auth/token-value", stored)
+                    self.assertNotIn(b"auth\\/token-value", stored)
+                    retained_strings: list[str] = []
+
+                    def collect_strings(value: object) -> None:
+                        if isinstance(value, str):
+                            retained_strings.append(value)
+                        elif isinstance(value, list):
+                            for member in value:
+                                collect_strings(member)
+                        elif isinstance(value, dict):
+                            for key, member in value.items():
+                                collect_strings(key)
+                                collect_strings(member)
+
+                    collect_strings(json.loads(serialized))
+                    for spelling in (
+                        redaction_marker,
+                        r"auth\/token-value",
+                        r"\u0061uth\u002ftoken-value",
+                    ):
+                        self.assertFalse(
+                            any(spelling in value for value in retained_strings),
+                            (spelling, retained_strings),
+                        )
+                    self.assertEqual([{"value": "[REDACTED]"}], item["jsonl"])
+                    self.assertGreater(item["redaction_count"], 0)
+
+    def test_lone_surrogate_credential_is_safe_in_full_jsonl_envelope(self):
+        # A fixed synthetic marker, not a credential or user-supplied value.
+        redaction_marker = "credential-\udcff-value"
+        raw = (
+            json.dumps({"value": redaction_marker}, ensure_ascii=True).encode("ascii")
+            + b"\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            path.write_bytes(raw)
+            item = capture.capture_file(
+                path,
+                required=True,
+                format_name="jsonl",
+                redactions=(redaction_marker,),
+            )
+        serialized = json.dumps(item)
+        self.assertNotIn("\\udcff", serialized)
+        self.assertEqual([{"value": "[REDACTED]"}], item["jsonl"])
+        self.assertGreater(item["redaction_count"], 0)
+
+    def test_boundary_and_digest_pressure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.bin"
+            raw = b"abcdefgh"
+            path.write_bytes(raw)
+            exact = capture.capture_file(
+                path, required=True, format_name="binary", max_bytes=len(raw)
+            )
+            self.assertEqual(base64.b64encode(raw).decode("ascii"), exact["base64"])
+            self.assertEqual(len(raw), exact["size"])
+            self.assertEqual([], exact["errors"])
+
+            oversized = capture.capture_file(
+                path, required=True, format_name="binary", max_bytes=len(raw) - 1
+            )
+            self.assertIsNone(oversized["base64"])
+            # Refused, not truncated -- but the file's own digest still records
+            # which bytes were refused.
+            self.assertEqual(
+                hashlib.sha256(raw).hexdigest(), oversized["file_sha256"]
+            )
+            self.assertRegex(oversized["errors"][0], "exceeds 7-byte")
+
+    def test_framing_and_encoding_matrix(self):
+        cases = (
+            ("crlf", b'{"value":1}\r\n{"value":2}\r\n', "jsonl", 0, 2),
+            ("blank", b'{"value":1}\n\n', "jsonl", 0, 1),
+            ("partial", b'{"value":', "jsonl", 1, 0),
+            ("invalid-utf8", b"\xff\xfe", "utf8", 1, None),
+            ("binary", b"\xff\xfe", "bytes", 0, None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.bin"
+            for name, raw, format_name, error_count, record_count in cases:
+                with self.subTest(name=name):
+                    path.write_bytes(raw)
+                    item = capture.capture_file(
+                        path, required=True, format_name=format_name, max_bytes=1024
+                    )
+                    self.assertEqual(error_count, len(item["errors"]), item)
+                    if record_count is not None:
+                        self.assertEqual(record_count, len(item["jsonl"] or []))
+                    self.assertEqual(raw, base64.b64decode(item["base64"]))
+                    self.assertEqual(
+                        hashlib.sha256(raw).hexdigest(), item["file_sha256"]
+                    )
+
+    def test_missing_required_file_is_a_recorded_state_not_an_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            item = capture.capture_file(
+                Path(directory) / "absent", required=True, format_name="jsonl"
+            )
+        self.assertFalse(item["exists"])
+        self.assertRegex(item["errors"][0], "required evidence file")
+        # Absence must not digest as empty bytes: "no evidence" and "empty
+        # evidence" are different findings.
+        self.assertIsNone(item["file_sha256"])
+
+    def test_absent_and_optional_records_no_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            item = capture.capture_file(
+                Path(directory) / "absent", required=False, format_name="jsonl"
+            )
+        self.assertEqual([], item["errors"])
+
+    @unittest.skipUnless(POSIX, "symlink contract is POSIX-only")
+    def test_non_regular_paths_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.write_bytes(b"secret")
+            (root / "link").symlink_to(target)
+            item = capture.capture_file(
+                root / "link", required=True, format_name="binary"
+            )
+        self.assertRegex(item["errors"][0], "not a regular file")
+
+    def test_nonpositive_limit_is_refused(self):
+        with self.assertRaises(capture.CaptureError):
+            capture.capture_file(Path("/tmp/x"), required=False, max_bytes=0)
+
+
+class ParseJsonlTests(unittest.TestCase):
+    def test_valid_records_survive_a_truncated_final_line(self):
+        """A subject killed mid-write must not cost every record before it."""
+        records, errors = capture.parse_jsonl(b'{"a":1}\n{"b":')
+        self.assertEqual([{"a": 1}], records)
+        self.assertEqual(1, len(errors))
+
+    def test_objects_only_rejects_scalars(self):
+        records, errors = capture.parse_jsonl(b"1\n", objects_only=True)
+        self.assertEqual([], records)
+        self.assertEqual(1, len(errors))
+
+    def test_non_utf8_is_reported_once(self):
+        records, errors = capture.parse_jsonl(b"\xff")
+        self.assertEqual([], records)
+        self.assertEqual(1, len(errors))
+
+
+@unittest.skipUnless(POSIX, "process-group contract is POSIX-only")
+class BoundedRunTests(unittest.TestCase):
+    def _run(self, script, **kwargs):
+        with tempfile.TemporaryDirectory() as directory:
+            return capture.run_bounded(
+                [sys.executable, "-c", script],
+                cwd=Path(directory),
+                env=dict(os.environ),
+                **kwargs,
+            )
+
+    def test_clean_run_reports_no_bound_and_no_orphan(self):
+        result = self._run("print('ok')", timeout=10)
+        self.assertEqual(0, result.returncode)
+        self.assertIsNone(result.termination_reason)
+        self.assertEqual(b"ok\n", result.stdout)
+        self.assertFalse(result.group_alive_before_cleanup)
+        self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_nonzero_child_exit_is_captured_without_hanging(self):
+        result = self._run("raise SystemExit(7)", timeout=5)
+        self.assertEqual(7, result.returncode)
+        self.assertFalse(result.timed_out)
+        self.assertIsNone(result.termination_reason)
+        self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_output_limit_stops_and_bounds_the_owned_process(self):
+        result = self._run(
+            "import os,time; os.write(1, b'x' * 65536); time.sleep(30)",
+            timeout=10,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            termination_grace=1.0,
+        )
+        self.assertEqual(capture.STDOUT_LIMIT, result.termination_reason)
+        self.assertTrue(result.stdout_overflow)
+        # Kept exactly the limit, and still reports how much was thrown away.
+        self.assertEqual(1024, len(result.stdout))
+        self.assertGreater(result.stdout_source_bytes, 1024)
+        self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_one_cycle_with_both_stream_limits_has_a_combined_reason(self):
+        self.assertEqual(
+            capture.STDOUT_STDERR_LIMIT,
+            capture._stream_limit_reason({"stdout", "stderr"}),
+        )
+        self.assertEqual(
+            capture.STDOUT_LIMIT,
+            capture._stream_limit_reason({"stdout"}),
+        )
+        self.assertEqual(
+            capture.STDERR_LIMIT,
+            capture._stream_limit_reason({"stderr"}),
+        )
+
+    def test_two_stream_limits_preserve_both_overflow_facts(self):
+        result = self._run(
+            "import os,signal,time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "os.write(1, b'x' * 2048); os.write(2, b'y' * 2048); "
+            "time.sleep(30)",
+            timeout=10,
+            stdout_limit=1024,
+            stderr_limit=1024,
+            termination_grace=0.5,
+        )
+        # The writes are sequential. The OS may report one pipe ready before
+        # the other, so only a selector cycle that observes both is combined.
+        self.assertIn(
+            result.termination_reason,
+            {
+                capture.STDOUT_LIMIT,
+                capture.STDERR_LIMIT,
+                capture.STDOUT_STDERR_LIMIT,
+            },
+        )
+        self.assertTrue(result.stdout_overflow)
+        self.assertTrue(result.stderr_overflow)
+        self.assertEqual(1024, len(result.stdout))
+        self.assertEqual(1024, len(result.stderr))
+        self.assertGreater(result.stdout_source_bytes, 1024)
+        self.assertGreater(result.stderr_source_bytes, 1024)
+        self.assertFalse(result.group_alive_after_cleanup)
+        evidence = capture._bounded_evidence(
+            result,
+            stdout_limit=1024,
+            stderr_limit=1024,
+        )
+        self.assertEqual(result.termination_reason, evidence["termination_reason"])
+        self.assertEqual(
+            {"stdout": True, "stderr": True}, evidence["overflow"]
+        )
+
+    def test_timeout_kills_the_owned_process_group(self):
+        result = self._run(
+            "import subprocess,sys,time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            "time.sleep(30)",
+            timeout=0.4,
+            termination_grace=1.0,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(capture.TIMEOUT, result.termination_reason)
+        self.assertFalse(result.group_alive_after_cleanup)
+        # The real signal-derived status, not a synthesized 124.
+        self.assertNotEqual(124, result.returncode)
+
+    def test_timeout_retains_later_stdout_and_stderr_overflow(self):
+        for descriptor, stream in ((1, "stdout"), (2, "stderr")):
+            with self.subTest(stream=stream):
+                result = self._run(
+                    "import os,signal,time; "
+                    f"signal.signal(signal.SIGTERM, lambda *_: "
+                    f"(os.write({descriptor}, b'x' * 4096), exit(0))); "
+                    "time.sleep(30)",
+                    timeout=0.3,
+                    stdout_limit=128,
+                    stderr_limit=128,
+                    termination_grace=1.0,
+                )
+                self.assertEqual(capture.TIMEOUT, result.termination_reason)
+                self.assertTrue(result.timed_out)
+                self.assertTrue(getattr(result, f"{stream}_overflow"))
+                self.assertGreater(
+                    getattr(result, f"{stream}_source_bytes"), 128
+                )
+
+    def test_single_stream_limit_is_not_rewritten_by_teardown_overflow(self):
+        cases = ((1, 2, "stdout"), (2, 1, "stderr"))
+        for initiating_fd, teardown_fd, initiating_stream in cases:
+            with self.subTest(initiating_stream=initiating_stream):
+                result = self._run(
+                    "import os,signal,time; "
+                    f"signal.signal(signal.SIGTERM, lambda *_: "
+                    f"(os.write({teardown_fd}, b't' * 4096), exit(0))); "
+                    f"os.write({initiating_fd}, b'i' * 4096); time.sleep(30)",
+                    timeout=10,
+                    stdout_limit=128,
+                    stderr_limit=128,
+                    termination_grace=1.0,
+                )
+                expected = (
+                    capture.STDOUT_LIMIT
+                    if initiating_stream == "stdout"
+                    else capture.STDERR_LIMIT
+                )
+                self.assertEqual(expected, result.termination_reason)
+                self.assertTrue(result.stdout_overflow)
+                self.assertTrue(result.stderr_overflow)
+
+    def test_child_ignoring_sigterm_is_escalated_and_still_bounded(self):
+        started = time.monotonic()
+        result = self._run(
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "time.sleep(30)",
+            timeout=0.3,
+            termination_grace=0.5,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(capture.TIMEOUT, result.termination_reason)
+        self.assertFalse(result.group_alive_after_cleanup)
+        self.assertLess(elapsed, 15)
+
+    def test_detached_descriptor_holder_does_not_hang_capture(self):
+        """A grandchild in its own session must not extend a bounded run.
+
+        It inherits the pipe, so waiting for EOF would wait on a process this
+        run never controlled. The child's exit ends the read instead.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_path = root / "escaped.pid"
+            script = (
+                "import pathlib,subprocess,sys; "
+                "p=subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)'], start_new_session=True); "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(p.pid))"
+            )
+            started = time.monotonic()
+            result = capture.run_bounded(
+                [sys.executable, "-c", script],
+                cwd=root,
+                env=dict(os.environ),
+                timeout=10.0,
+            )
+            elapsed = time.monotonic() - started
+            escaped = int(pid_path.read_text())
+            try:
+                os.kill(escaped, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        self.assertLess(elapsed, 5.0)
+        self.assertEqual(0, result.returncode)
+        self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_orphan_left_in_the_group_is_reported_not_swallowed(self):
+        """The subject leaks; the adapter must be able to say so."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_path = root / "orphan.pid"
+            script = (
+                "import pathlib,subprocess,sys,os; "
+                "p=subprocess.Popen([sys.executable, '-c', "
+                "'import time,sys; sys.stdout.close(); time.sleep(30)']); "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(p.pid))"
+            )
+            result = capture.run_bounded(
+                [sys.executable, "-c", script],
+                cwd=root,
+                env=dict(os.environ),
+                timeout=10.0,
+                termination_grace=1.0,
+            )
+            try:
+                os.kill(int(pid_path.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+        # Whatever it observed before cleanup, cleanup must leave nothing.
+        self.assertFalse(result.group_alive_after_cleanup)
+
+    def test_nonpositive_bounds_are_refused(self):
+        for kwargs in (
+            {"timeout": 0},
+            {"stdout_limit": 0},
+            {"stderr_limit": -1},
+            {"termination_grace": 0},
+        ):
+            with self.subTest(**kwargs):
+                with self.assertRaises(capture.CaptureError):
+                    self._run("pass", **kwargs)
+
+    def test_signal_forwarding_degrades_off_the_main_thread(self):
+        """signal.signal is main-thread-only; a soak must still get a bound."""
+        import threading
+
+        box = {}
+
+        def body():
+            box["result"] = self._run("print('threaded')", timeout=10)
+
+        thread = threading.Thread(target=body)
+        thread.start()
+        thread.join(30)
+        self.assertIn("result", box)
+        self.assertEqual(0, box["result"].returncode)
+        self.assertEqual((), box["result"].forwarded_signals)
+
+
+if __name__ == "__main__":
+    unittest.main()

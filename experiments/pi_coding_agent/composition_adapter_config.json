@@ -1,0 +1,20 @@
+{
+  "schema": "pi-hwb-adapter-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "composition_fixture",
+  "task": "composition_task.md",
+  "inputs": [
+    "composition_adapter_config.json", "adapter.py", "normalizer.py",
+    "composition_provider.ts", "pin.json", "composition_task.md",
+    "composition_fixture/seed.txt"
+  ],
+  "extensions": ["composition_provider.ts"],
+  "pi_arguments": [
+    "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
+    "--no-prompt-templates", "--no-context-files", "--no-approve", "--offline",
+    "--tools", "write", "--provider", "hwb-composition", "--model", "composition",
+    "--system-prompt", "Run the deterministic extension-composition fixture."
+  ],
+  "capture_limits": {"stdout_bytes": 8388608, "stderr_bytes": 1048576, "evidence_bytes": 1048576},
+  "network_mode": "Pi offline; composition provider and fixture perform no requests"
+}

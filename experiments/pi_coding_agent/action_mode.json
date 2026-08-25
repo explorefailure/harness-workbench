@@ -1,0 +1,16 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "confirmation",
+  "features_root": "harness_workbench:builtin",
+  "features": [{"name": "freeze"}, {"name": "receipt"}],
+  "step_timeout_ms": 60000,
+  "steps": [{
+    "id": "pi-plan-mode-control",
+    "argv": ["./run_plan_mode.sh", "act"],
+    "inputs": [
+      "run_plan_mode.sh", "plan_adapter_config.json", "adapter.py", "normalizer.py",
+      "plan_runner.py", "plan_oracle.py", "verify_plan_pair.py", "plan_mode_extension.ts", "plan_provider.ts",
+      "pin.json", "plan_task.md", "plan_fixture/seed.txt"
+    ]
+  }]
+}

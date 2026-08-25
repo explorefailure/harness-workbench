@@ -1,0 +1,875 @@
+"""Running an untrusted child and coming back with evidence you can defend.
+
+Every adapter needs the same thing and none of it is about any particular
+harness: bound a subprocess, keep what it emitted without letting it exhaust
+you, digest what you kept, and be able to say afterwards which bound fired.
+
+One rule governs the whole module: **a bound firing is a measurement, not an
+error.** Timeouts, byte limits and nonzero exits are returned in the result;
+this module raises only when it cannot measure at all. An adapter that has to
+catch an exception to learn that its subject timed out will eventually catch
+one it did not mean to, and record a timeout that never happened.
+
+The second rule is that nothing here reports success by staying quiet. Every
+bound and every cleanup returns a positive observation, because three silent
+instrumentation failures once produced a perfectly clean run that measured
+nothing at all -- and absence of error looked exactly like success.
+
+What is deliberately absent: this module never parses harness events. It will
+tell you some bytes are line-delimited JSON, which is a format fact. It does
+not know what a tool call is, and it does not decide whether the subject did
+the task. Those are a normalizer's and an oracle's job, and keeping them out
+is what lets one primitive serve harnesses that agree on nothing else.
+"""
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import threading
+import time
+from typing import Any, Iterable, Mapping, Sequence
+
+from . import canon
+
+
+# Positive defaults, never zero or None. A limit of zero disables the bound in
+# most APIs that accept one, so an unset limit would silently become "unbounded"
+# -- the one state this module exists to prevent.
+DEFAULT_STDOUT_LIMIT = 1_048_576
+DEFAULT_STDERR_LIMIT = 524_288
+DEFAULT_SIDECAR_LIMIT = 524_288
+
+# Environment names a child may keep. Everything else is dropped, so a variable
+# has to be named here or passed as an explicit override to reach the subject.
+# An allowlist rather than a denylist: a new credential variable appearing on
+# some future host must not reach a subject because nobody thought to ban it.
+PASSTHROUGH_NAMES = ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SYSTEMROOT")
+
+# Substrings that make an environment value worth scrubbing from captured bytes.
+CREDENTIAL_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
+
+# Below this length a "secret" is more likely to be a flag than a credential,
+# and redacting it would corrupt evidence to protect nothing.
+CREDENTIAL_MIN_LENGTH = 8
+
+TIMEOUT = "timeout"
+STDOUT_LIMIT = "stdout_limit"
+STDERR_LIMIT = "stderr_limit"
+STDOUT_STDERR_LIMIT = "stdout_stderr_limit"
+SIGNALLED = "signalled"
+REDACTION_MARKER = b"[REDACTED]"
+TRUNCATED_CREDENTIAL_CAPTURE = (
+    b"[REDACTED: TRUNCATED CREDENTIAL-SENSITIVE CAPTURE]"
+)
+
+
+class CaptureError(ValueError):
+    """The capture cannot be performed without guessing.
+
+    Raised for impossible requests -- a nonpositive limit, a path that escapes
+    its root -- never for anything the subject did. See the module rule: what
+    the subject did is returned, not raised.
+    """
+
+
+def digest_bytes(data: bytes) -> str:
+    """Bare-hex SHA-256 of exactly these bytes.
+
+    Public because every adapter needs it and the alternative is each one
+    importing hashlib and picking its own encoding. `canon` covers canonical
+    JSON and files; raw in-memory bytes are the gap, and an adapter that has to
+    fill a gap itself is how two digest conventions start.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
+def digest_file(path: Path) -> str:
+    """Bare hex for a file, computed by `canon` and stripped at the wire edge.
+
+    `canon.digest_file` is the project's one file-digest rule and is not
+    reimplemented here. It returns `sha256:<hex>`; captured evidence stores bare
+    hex, and sealed records already contain those bytes. The prefix is a display
+    convention and the sealed bytes are a commitment, so the conversion happens
+    here, once, rather than by reformatting evidence that has already been sealed.
+    """
+    return canon.digest_file(str(path)).split(":", 1)[1]
+
+
+@dataclass(frozen=True)
+class Bounded:
+    """What a bounded run observed. Every field is an observation, not a verdict.
+
+    `returncode` is the child's real exit status and is never synthesized. An
+    earlier implementation mapped a timeout to 124 and a byte limit to 125,
+    which are indistinguishable from a subject that genuinely exited 124 --
+    `termination_reason` carries that fact instead, and carries it by name.
+
+    `*_source_bytes` is what the subject tried to emit; `stdout`/`stderr` are
+    what was kept. Without the pair, a truncated capture and a quiet subject
+    look identical. `termination_reason` names the bound that initiated
+    termination. Overflow flags remain independent observations because a
+    process can emit past one or both stream limits while handling a timeout,
+    forwarded signal, or single-stream limit that already began teardown.
+    """
+
+    argv: list[str]
+    returncode: int
+    termination_reason: str | None
+    stdout: bytes
+    stderr: bytes
+    stdout_source_bytes: int
+    stderr_source_bytes: int
+    stdout_overflow: bool
+    stderr_overflow: bool
+    # A cleanup you never check is not a cleanup. A subject that spawns a shell
+    # that spawns a build leaves orphans holding the workspace open, which
+    # corrupts the *next* run's before-manifest -- a failure that shows up
+    # somewhere other than where it was caused.
+    group_alive_before_cleanup: bool
+    group_alive_after_cleanup: bool
+    forwarded_signals: tuple[int, ...] = ()
+
+    @property
+    def timed_out(self) -> bool:
+        return self.termination_reason == TIMEOUT
+
+
+def _group_alive(pgid: int) -> bool:
+    """Whether any process remains in the group.
+
+    PermissionError counts as alive: the group exists, this process merely may
+    not signal it. Reporting "gone" there would turn a containment failure into
+    a clean receipt.
+    """
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _signal_group(pgid: int, signum: int) -> None:
+    """Signal the whole group, tolerating a group that has already exited."""
+    try:
+        os.killpg(pgid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stream_limit_reason(streams: set[str]) -> str:
+    """Name the stream bound observed in one pre-termination read cycle."""
+    if streams == {"stdout", "stderr"}:
+        return STDOUT_STDERR_LIMIT
+    if "stdout" in streams:
+        return STDOUT_LIMIT
+    return STDERR_LIMIT
+
+
+def _wait_for_group_exit(pgid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _group_alive(pgid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return not _group_alive(pgid)
+
+
+def run_bounded(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout: float = 120.0,
+    stdout_limit: int = DEFAULT_STDOUT_LIMIT,
+    stderr_limit: int = DEFAULT_STDERR_LIMIT,
+    termination_grace: float = 5.0,
+    forward_signals: bool = True,
+) -> Bounded:
+    """Run `argv` under a wall clock and per-stream byte ceilings.
+
+    The child is started in its own session, so it leads a process group, and
+    **every termination signals the group rather than the process**. A subject
+    holding a shell will outlive a signal sent to the shell alone; the orphans
+    then hold the workspace open and corrupt the next run's manifest.
+
+    Escalation is fixed and observable: SIGTERM to the group, `termination_grace`
+    seconds, SIGKILL to the group, then record whether anything survived. The
+    surviving-group observation is returned rather than raised, because a leaked
+    process is evidence about the subject and callers must be able to record it.
+
+    Output past a limit is dropped, not buffered: memory stays bounded by the
+    limits themselves, and `*_source_bytes` preserves how much was discarded.
+
+    Raises CaptureError only for a request that cannot be measured -- a
+    nonpositive timeout or limit. Everything the child does is returned.
+    """
+    if timeout <= 0 or stdout_limit <= 0 or stderr_limit <= 0 or termination_grace <= 0:
+        raise CaptureError("process timeout and capture limits must be positive")
+
+    argv = list(argv)
+    forwarded: list[int] = []
+    process: subprocess.Popen[bytes] | None = None
+    previous: dict[int, Any] = {}
+
+    # Signal handlers may only be installed from the main thread. A soak or a
+    # server calling this from a worker must still get a bounded run, so
+    # forwarding degrades rather than raising -- and `forwarded_signals` stays
+    # empty, which is an honest record of what was observed.
+    installing = forward_signals and threading.current_thread() is threading.main_thread()
+
+    def _forward(signum: int, _frame: Any) -> None:
+        forwarded.append(signum)
+        if process is not None and process.poll() is None:
+            _signal_group(process.pid, signal.SIGTERM)
+
+    if installing:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _forward)
+
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": stdout_limit, "stderr": stderr_limit}
+    overflow = {"stdout": False, "stderr": False}
+    source = {"stdout": 0, "stderr": 0}
+    reason: str | None = None
+    sent_at: float | None = None
+    alive_before = False
+    alive_after = False
+
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=str(cwd),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        assert process.stdout is not None and process.stderr is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        deadline = time.monotonic() + timeout
+
+        def terminate(why: str) -> None:
+            nonlocal reason, sent_at
+            if reason is not None:
+                return
+            reason = why
+            sent_at = time.monotonic()
+            if process is not None and process.poll() is None:
+                _signal_group(process.pid, signal.SIGTERM)
+
+        try:
+            while selector.get_map():
+                now = time.monotonic()
+                if reason is None and now >= deadline:
+                    terminate(TIMEOUT)
+                if reason is None and forwarded:
+                    terminate(SIGNALLED)
+                if (
+                    reason is not None
+                    and sent_at is not None
+                    and now - sent_at >= termination_grace
+                ):
+                    # The grace expired with the streams still open: the child
+                    # ignored SIGTERM, or a grandchild inherited the pipe and
+                    # holds it. Stop reading and escalate; waiting on EOF here
+                    # is how a bounded run becomes unbounded.
+                    if process.poll() is None:
+                        _signal_group(process.pid, signal.SIGKILL)
+                    break
+                read_any = False
+                # One selector result is one pre-termination sampling cycle.
+                # Read every stream in that result before choosing the bound
+                # that initiates teardown. Output provoked by SIGTERM arrives
+                # in a later cycle and remains an independent overflow fact;
+                # it must not rewrite the already observed initiating reason.
+                ready = selector.select(timeout=0.05)
+                cycle_limit_streams: set[str] = set()
+                for key, _ in ready:
+                    stream = key.data
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), 65_536)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    read_any = True
+                    source[stream] += len(chunk)
+                    room = limits[stream] - len(buffers[stream])
+                    if room > 0:
+                        buffers[stream].extend(chunk[:room])
+                    if len(chunk) > room:
+                        overflow[stream] = True
+                        if reason is None:
+                            cycle_limit_streams.add(stream)
+                if reason is None and cycle_limit_streams:
+                    terminate(_stream_limit_reason(cycle_limit_streams))
+                if process.poll() is not None and not read_any:
+                    # The child is gone and the pipe is drained -- anything
+                    # still holding it is a grandchild that outlived its parent.
+                    # Reading to EOF here would block on a process this run does
+                    # not control, so stop: the orphan is a finding, reported by
+                    # the group check below, not something to wait for.
+                    break
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+    finally:
+        if process is not None:
+            # Reap the child *before* sampling the group. The child leads its
+            # own group, so a not-yet-reaped exit status makes the group look
+            # occupied and turns every clean run into a reported orphan.
+            if process.poll() is None:
+                if not _wait_for_group_exit(process.pid, termination_grace):
+                    _signal_group(process.pid, signal.SIGKILL)
+                    if not _wait_for_group_exit(process.pid, termination_grace):
+                        process.kill()
+            process.wait()
+            alive_before = _group_alive(process.pid)
+            if alive_before:
+                _signal_group(process.pid, signal.SIGTERM)
+                if not _wait_for_group_exit(process.pid, termination_grace):
+                    _signal_group(process.pid, signal.SIGKILL)
+                    _wait_for_group_exit(process.pid, termination_grace)
+            alive_after = _group_alive(process.pid)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+    return Bounded(
+        argv=argv,
+        returncode=process.returncode if process is not None else -1,
+        termination_reason=reason,
+        stdout=bytes(buffers["stdout"]),
+        stderr=bytes(buffers["stderr"]),
+        stdout_source_bytes=source["stdout"],
+        stderr_source_bytes=source["stderr"],
+        stdout_overflow=overflow["stdout"],
+        stderr_overflow=overflow["stderr"],
+        group_alive_before_cleanup=alive_before,
+        group_alive_after_cleanup=alive_after,
+        forwarded_signals=tuple(forwarded),
+    )
+
+
+def credential_values(environment: Mapping[str, str]) -> tuple[str, ...]:
+    """The values worth scrubbing from captured bytes, longest first.
+
+    Matched on the *name* and scrubbed by *value*, because a subject echoes the
+    value. Sorted longest-first so a secret that contains a shorter secret is
+    replaced whole -- redacting the short one first would leave the tail of the
+    long one in the evidence, which reads as safe and is not.
+    """
+    values = {
+        value
+        for name, value in environment.items()
+        if any(marker in name.upper() for marker in CREDENTIAL_MARKERS)
+        and isinstance(value, str)
+        and len(value) >= CREDENTIAL_MIN_LENGTH
+    }
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _redact_json_strings(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
+    """Redact known values after decoding complete JSON string tokens.
+
+    This semantic pass covers every valid JSON spelling of a string, including
+    optional solidus escapes, mixed ``\\uXXXX`` escapes, and surrogate pairs.
+    Only a complete JSON string that decodes to a known value is rewritten;
+    arbitrary non-JSON output is left for the exact byte-variant pass below.
+    """
+    output = bytearray()
+    cursor = 0
+    count = 0
+    ordered = tuple(sorted(set(values), key=len, reverse=True))
+    while cursor < len(raw):
+        if raw[cursor] != 0x22:  # '"'
+            output.append(raw[cursor])
+            cursor += 1
+            continue
+        end = cursor + 1
+        escaped = False
+        while end < len(raw):
+            byte = raw[end]
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # '\\'
+                escaped = True
+            elif byte == 0x22:
+                break
+            end += 1
+        if end >= len(raw):
+            output.extend(raw[cursor:])
+            break
+        token = raw[cursor : end + 1]
+        try:
+            decoded = json.loads(token.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            output.extend(token)
+            cursor = end + 1
+            continue
+        redacted = decoded
+        token_count = 0
+        if isinstance(decoded, str):
+            for value in ordered:
+                occurrences = redacted.count(value)
+                if occurrences:
+                    redacted = redacted.replace(value, "[REDACTED]")
+                    token_count += occurrences
+        if token_count:
+            # ensure_ascii makes even a decoded lone surrogate representable;
+            # only affected strings are canonicalized.
+            output.extend(json.dumps(redacted, ensure_ascii=True).encode("ascii"))
+            count += token_count
+        else:
+            output.extend(token)
+        cursor = end + 1
+    return bytes(output), count
+
+
+def _credential_byte_variants(value: str) -> set[bytes]:
+    """Exact non-JSON-fragment spellings supported by byte redaction."""
+    # `surrogatepass` gives every Python string a deterministic byte spelling,
+    # including lone surrogates that strict UTF-8 refuses. `surrogateescape`
+    # additionally reconstructs undecodable environment bytes where possible.
+    raw_variants = {value.encode("utf-8", errors="surrogatepass")}
+    try:
+        raw_variants.add(value.encode("utf-8", errors="surrogateescape"))
+    except UnicodeEncodeError:
+        pass
+    json_variants = {
+        json.dumps(value, ensure_ascii=False)[1:-1].encode(
+            "utf-8", errors="surrogatepass"
+        ),
+        json.dumps(value, ensure_ascii=True)[1:-1].encode("utf-8"),
+    }
+    return {
+        *raw_variants,
+        *json_variants,
+        *(variant.replace(b"/", b"\\/") for variant in json_variants),
+    }
+
+
+def redact_bytes(raw: bytes, values: Sequence[str]) -> tuple[bytes, int]:
+    """Replace each value with `[REDACTED]`, returning the bytes and a count.
+
+    The count is the number of non-overlapping fixed markers in the retained
+    representation. That makes it independently checkable; it deliberately
+    does not claim whether a marker was inserted here or emitted literally by
+    the subject, because the retained bytes cannot prove that history.
+
+    Complete JSON strings are decoded before matching, so every valid JSON
+    spelling of the value is covered: mandatory escapes, optional ``\\/``,
+    arbitrary ``\\uXXXX`` choices, mixed literal/escaped text and surrogate
+    pairs. Exact raw and common JSON-fragment spellings are also matched when
+    they occur outside a complete JSON string.
+
+    `ensure_ascii=True` is not a third-party quirk to be generous about; it is
+    Python's `json.dumps` DEFAULT, and this project's own Hermes hook
+    serializes with it. A secret containing any non-ASCII byte is written as
+    `\\uXXXX` escapes, which the raw form and the non-ASCII-preserving form
+    both miss -- and the capture is then stored with the secret still present.
+    That is worse than an obvious failure, and it was live until it was looked
+    for.
+
+    Percent-encoded and base64 transforms remain deliberately unsupported: no
+    subject here emits credentials that way, and treating arbitrary transforms
+    as secrets would corrupt ordinary evidence without a bounded guarantee.
+    """
+    redacted, _ = _redact_json_strings(raw, values)
+    for value in values:
+        variants = _credential_byte_variants(value)
+        for variant in sorted(variants, key=len, reverse=True):
+            if not variant:
+                continue
+            occurrences = redacted.count(variant)
+            if occurrences:
+                redacted = redacted.replace(variant, REDACTION_MARKER)
+    # This field is retained evidence, so it must be independently derivable
+    # from retained bytes. Count non-overlapping fixed markers, including any
+    # marker text the subject emitted literally; it is a representation count,
+    # not an unverifiable claim about how many source secrets once existed.
+    return redacted, retained_redaction_count(redacted)
+
+
+def retained_redaction_count(stored: bytes) -> int:
+    """The exact redaction count independently visible in retained bytes."""
+    if stored == TRUNCATED_CREDENTIAL_CAPTURE:
+        return 1
+    return stored.count(REDACTION_MARKER)
+
+
+def capture_bytes(
+    raw: bytes,
+    *,
+    redactions: Sequence[str] = (),
+    source_bytes: int | None = None,
+) -> dict[str, Any]:
+    """The stored-evidence envelope: what was kept, what it came from, its digest.
+
+    `sha256` is of the bytes as *stored*, after redaction -- the digest must
+    describe the artefact that exists, or verifying it against the record fails
+    for a scrubbed capture that is perfectly correct.
+
+    `text` is None for bytes that are not valid UTF-8 rather than being coerced.
+    A subject that emits broken encoding has told you something, and
+    `errors="replace"` would silently discard it while changing the bytes a
+    reader compares against the digest.
+
+    If credentials are configured, a truncated capture retains no subject
+    bytes at all. Its payload is the fixed
+    ``TRUNCATED_CREDENTIAL_CAPTURE`` marker. This fail-closed policy gives up
+    partial stdout/stderr evidence because an incomplete JSON string cannot be
+    parsed soundly and may contain a fully escaped credential anywhere in the
+    retained prefix. Source-byte counts and overflow metadata still describe
+    the observation.
+    """
+    observed_source_bytes = len(raw) if source_bytes is None else source_bytes
+    if observed_source_bytes < len(raw):
+        raise CaptureError(
+            "source byte count cannot be smaller than captured bytes"
+        )
+    truncated = observed_source_bytes > len(raw)
+    if truncated and redactions:
+        # Fail closed over the WHOLE retained prefix. A truncated byte stream
+        # can contain an unterminated JSON string whose credential was encoded
+        # much earlier than the final credential-length tail. Without the
+        # missing suffix there is no sound semantic boundary, so preserving any
+        # of the prefix would make short and long malformed strings behave
+        # differently. The evidence loss is deliberate and explicit: counts,
+        # overflow, source bytes and the marker remain; subject output does not.
+        stored = TRUNCATED_CREDENTIAL_CAPTURE
+    else:
+        stored, _ = redact_bytes(raw, redactions)
+    redaction_count = retained_redaction_count(stored)
+    envelope: dict[str, Any] = {
+        "bytes": len(stored),
+        "source_bytes": observed_source_bytes,
+        "sha256": digest_bytes(stored),
+        "base64": base64.b64encode(stored).decode("ascii"),
+        "redaction_count": redaction_count,
+    }
+    try:
+        envelope["text"] = stored.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        envelope["text"] = None
+    return envelope
+
+
+def _bounded_evidence(
+    result: Bounded,
+    *,
+    stdout_limit: int,
+    stderr_limit: int,
+    redactions: Sequence[str] = (),
+    argv: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Serialize one complete bounded-process observation without judging it.
+
+    A return code can be an outcome fact (the repair oracle's red test) or an
+    adapter fault (the subject process).  This function intentionally decides
+    neither.  It preserves the same evidence shape for both so callers cannot
+    accidentally retain a return code while discarding the bound that produced
+    it.
+    """
+    return {
+        "argv": list(result.argv if argv is None else argv),
+        "limits": {
+            "stdout_bytes": stdout_limit,
+            "stderr_bytes": stderr_limit,
+        },
+        "stdout": capture_bytes(
+            result.stdout,
+            redactions=redactions,
+            source_bytes=result.stdout_source_bytes,
+        ),
+        "stderr": capture_bytes(
+            result.stderr,
+            redactions=redactions,
+            source_bytes=result.stderr_source_bytes,
+        ),
+        "returncode": result.returncode,
+        "termination_reason": result.termination_reason,
+        "timed_out": result.timed_out,
+        "overflow": {
+            "stdout": result.stdout_overflow,
+            "stderr": result.stderr_overflow,
+        },
+        "process_group": {
+            "alive_before_cleanup": result.group_alive_before_cleanup,
+            "alive_after_cleanup": result.group_alive_after_cleanup,
+        },
+        "forwarded_signals": list(result.forwarded_signals),
+    }
+
+
+def parse_jsonl(
+    raw: bytes, *, objects_only: bool = False
+) -> tuple[list[Any], list[str]]:
+    """Decode line-delimited JSON, collecting errors instead of raising.
+
+    Malformed evidence is the normal case, not the exceptional one: a subject
+    killed mid-write leaves a truncated final line. Returning the records that
+    did parse alongside the complaints keeps a partial run analysable, where
+    raising would discard every valid record because the last one was cut off.
+    """
+    records: list[Any] = []
+    errors: list[str] = []
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        return [], [f"evidence is not UTF-8: {error}"]
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            errors.append(f"line {number} is not JSON: {error.msg}")
+            continue
+        if objects_only and not isinstance(record, dict):
+            errors.append(f"line {number} is not a JSON object")
+            continue
+        records.append(record)
+    return records, errors
+
+
+def capture_file(
+    path: Path,
+    *,
+    required: bool,
+    format_name: str = "bytes",
+    max_bytes: int = DEFAULT_SIDECAR_LIMIT,
+    redactions: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Capture a sidecar file, recording its absence as a state rather than an error.
+
+    A missing required file yields `exists: False` and an entry in `errors`; it
+    does not raise. A run that failed to instrument must stay comparable to one
+    that succeeded, and an exception here would remove it from the comparison
+    entirely -- which is how an instrumentation failure becomes invisible.
+
+    `format_name` of `utf8` or `jsonl` turns a decode failure into a recorded
+    error. `bytes` makes no claim, so binary evidence is not reported as broken.
+    Oversize evidence is refused rather than truncated: a sidecar is usually a
+    log whose meaning depends on being whole, and half a session log invites
+    conclusions the bytes do not support.
+    """
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise CaptureError("sidecar max_bytes must be a positive integer")
+
+    errors: list[str] = []
+    regular = path.is_file() and not path.is_symlink()
+    exists = path.exists()
+    raw: bytes | None = b""
+    size = 0
+
+    if not exists:
+        if required:
+            errors.append("required evidence file was not created")
+    elif not regular:
+        errors.append("evidence path is not a regular file")
+    else:
+        size = path.stat().st_size
+        if size > max_bytes:
+            errors.append(
+                f"evidence exceeds {max_bytes}-byte capture limit: {size} bytes"
+            )
+            raw = None
+        else:
+            raw = path.read_bytes()
+
+    envelope = capture_bytes(
+        raw if raw is not None else b"",
+        redactions=redactions,
+        # Refused oversize sidecars store zero bytes rather than a truncated
+        # prefix. Preserve their observed size below without misclassifying the
+        # empty retained payload as a truncated process capture.
+        source_bytes=size if raw is not None else 0,
+    )
+    if raw is None:
+        # Nothing was stored, so the stored-bytes digest describes emptiness.
+        # The file's own digest is still recorded, because "too big to keep" and
+        # "not there" must not produce the same evidence.
+        envelope["base64"] = None
+        envelope["text"] = None
+        envelope["source_bytes"] = size
+    envelope.update(
+        {
+            "exists": exists,
+            "format": format_name,
+            "size": size,
+            "max_bytes": max_bytes,
+            "file_sha256": digest_file(path) if regular else None,
+            "jsonl": None,
+            "errors": errors,
+        }
+    )
+
+    if raw is not None and exists and not errors:
+        if format_name in {"utf8", "jsonl"} and envelope["text"] is None:
+            errors.append("evidence is not UTF-8")
+        if format_name == "jsonl" and envelope["text"] is not None:
+            # The parsed projection is retained evidence too. Derive it from
+            # the safely redacted stored bytes, never from the unredacted file.
+            stored = base64.b64decode(envelope["base64"], validate=True)
+            records, decode_errors = parse_jsonl(stored)
+            envelope["jsonl"] = records
+            errors.extend(decode_errors)
+    return envelope
+
+
+def manifest(root: Path) -> list[dict[str, Any]]:
+    """Every regular file below `root`, sorted, with mode and digest.
+
+    Collected by the adapter from *outside* the subject, which is the only
+    reason it is evidence: a subject's own report that it wrote a file is a
+    claim, and this is the independent check on it.
+
+    Symlinks are skipped rather than followed. Following one would digest bytes
+    from outside the tree and attribute them to a path inside it.
+    """
+    entries: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        stat = path.stat()
+        entries.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "mode": stat.st_mode & 0o777,
+                "size": stat.st_size,
+                "sha256": digest_file(path),
+            }
+        )
+    return entries
+
+
+def minimal_environment(
+    root: Path,
+    overrides: Mapping[str, str] | None = None,
+    *,
+    passthrough: Iterable[str] = PASSTHROUGH_NAMES,
+    home: str = "home",
+) -> dict[str, str]:
+    """Build a child environment from an allowlist plus a disposable HOME.
+
+    This is the half of credential hygiene that `credential_values` cannot do.
+    Scrubbing catches a secret the subject echoes; it cannot catch one the
+    subject writes into a file, or uses to reach the network. Not passing the
+    secret in the first place covers what scrubbing misses, and scrubbing covers
+    the secret a subject legitimately needs. Neither alone is sufficient, which
+    is why both ship.
+
+    HOME is redirected into `root` so a subject that writes config, caches
+    credentials, or drops a session log does it somewhere the caller can
+    manifest and discard -- not into the operator's real home directory.
+
+    This is disclosure, not containment. Nothing here stops a subject that
+    chooses to read an absolute path.
+    """
+    env: dict[str, str] = {}
+    for name in passthrough:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    fake_home = root / home
+    fake_home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(fake_home)
+    if overrides:
+        env.update(overrides)
+    return env
+
+
+def contained_path(root: Path, value: Any, *, label: str = "path") -> Path:
+    """Resolve a caller-declared relative path, refusing anything that escapes.
+
+    Rejects absolute paths and any `..` component, then resolves existing
+    symlink parents before deciding containment. ``strict=False`` deliberately
+    covers a not-yet-existing final path: an existing parent symlink must not
+    turn a future write into an outside-root write. Adapters take paths from
+    config and from subjects, and subjects do propose paths outside the
+    workspace -- one of them did it during probing.
+
+    Raises CaptureError, because unlike a subject's behaviour this is a request
+    that cannot be honoured at all.
+    """
+    if not isinstance(value, str) or not value:
+        raise CaptureError(f"{label} must be a non-empty relative path")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise CaptureError(f"{label} must stay below its declared root: {value}")
+    try:
+        resolved_root = root.resolve(strict=False)
+        resolved = (resolved_root / relative).resolve(strict=False)
+        resolved.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise CaptureError(
+            f"{label} must stay below its declared root: {value}"
+        ) from error
+    # Preserve the caller's root spelling for normal paths (notably macOS
+    # aliases such as /tmp -> /private/tmp); resolution above is the security
+    # decision, not an API-level path rewrite.
+    return root / relative
+
+
+def relative_to_root(raw: Any, root: Path) -> str | None:
+    """Describe a path a *subject* reported, relative to the workspace.
+
+    Returns `<outside-workspace>` rather than raising or dropping the entry: a
+    subject naming a path it should not have named is a finding, and both
+    discarding it and crashing on it would destroy that finding. None means the
+    subject did not report a string at all.
+    """
+    if not isinstance(raw, str):
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = root / path
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return "<outside-workspace>"
+
+
+__all__ = [
+    "Bounded",
+    "CaptureError",
+    "CREDENTIAL_MARKERS",
+    "CREDENTIAL_MIN_LENGTH",
+    "DEFAULT_SIDECAR_LIMIT",
+    "DEFAULT_STDERR_LIMIT",
+    "DEFAULT_STDOUT_LIMIT",
+    "PASSTHROUGH_NAMES",
+    "SIGNALLED",
+    "STDERR_LIMIT",
+    "STDOUT_LIMIT",
+    "STDOUT_STDERR_LIMIT",
+    "TIMEOUT",
+    "capture_bytes",
+    "capture_file",
+    "contained_path",
+    "credential_values",
+    "digest_bytes",
+    "digest_file",
+    "manifest",
+    "minimal_environment",
+    "parse_jsonl",
+    "redact_bytes",
+    "relative_to_root",
+    "run_bounded",
+]

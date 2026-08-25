@@ -19,6 +19,8 @@ from typing import Any, Dict, Tuple
 # commands too, but do not make such a verdict.
 COMMANDS: Dict[str, Dict[str, Any]] = {
     "run": {"help": "execute a spec", "verdict_engine": False},
+    "subjects": {"help": "copy the shipped external-harness subject tree into a directory",
+                 "verdict_engine": False},
     "ls": {"help": "list runs", "verdict_engine": False},
     "show": {"help": "inspect one run", "verdict_engine": False},
     "verify": {"help": "check a run has not been edited", "verdict_engine": True},

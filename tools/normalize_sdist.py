@@ -21,6 +21,10 @@ NEUTRAL_UID = 0
 NEUTRAL_GID = 0
 NEUTRAL_UNAME = "root"
 NEUTRAL_GNAME = "root"
+NEUTRAL_FILE_MODE = 0o644
+NEUTRAL_EXEC_MODE = 0o755
+NEUTRAL_DIR_MODE = 0o755
+NEUTRAL_LINK_MODE = 0o777
 MAX_GZIP_MTIME = (1 << 32) - 1
 
 
@@ -97,12 +101,31 @@ def validate_members(members: list[tarfile.TarInfo]) -> None:
                 )
 
 
+def normalized_mode(member: tarfile.TarInfo) -> int:
+    """The member's mode reduced to the one bit that carries meaning.
+
+    Modes came straight from the checkout, and a checkout's modes come from the
+    builder's umask: the same commit built under `umask 077` produced a
+    different archive than under `umask 022`, differing in nothing but
+    permission bits. Ownership and timestamps were already neutralized, so the
+    archive looked reproducible while quietly depending on an environment
+    variable nobody recorded. Git tracks exactly one permission bit, so keep
+    that one and fix the rest.
+    """
+    if member.isdir():
+        return NEUTRAL_DIR_MODE
+    if member.issym() or member.islnk():
+        return NEUTRAL_LINK_MODE
+    return NEUTRAL_EXEC_MODE if member.mode & 0o100 else NEUTRAL_FILE_MODE
+
+
 def _normalized_info(member: tarfile.TarInfo, epoch: int) -> tarfile.TarInfo:
     info = copy.copy(member)
     info.uid = NEUTRAL_UID
     info.gid = NEUTRAL_GID
     info.uname = NEUTRAL_UNAME
     info.gname = NEUTRAL_GNAME
+    info.mode = normalized_mode(member)
     info.mtime = epoch
     info.devmajor = 0
     info.devminor = 0

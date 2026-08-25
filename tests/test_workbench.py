@@ -3657,14 +3657,195 @@ class TestPackageIdentity(unittest.TestCase):
         project = read_text(os.path.join(ROOT, "pyproject.toml"))
         self.assertIn('name = "harness-workbench"', project)
         self.assertIn('hwb = "harness_workbench.cli:main"', project)
-        self.assertIn('harness_workbench = ["builtin/*/*.py", '
-                      '"builtin/*/FEATURE.json"]', project)
+        # Structural, not literal: the claim is that package data is declared
+        # under the import namespace and not the legacy one. Pinning the exact
+        # formatting made this fail whenever a shipped tree was added, which is
+        # not what the test is about.
+        import tomllib
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
+            package_data = tomllib.load(fh)["tool"]["setuptools"]["package-data"]
+        self.assertEqual(["harness_workbench"], list(package_data))
+        for glob in ("builtin/*/*.py", "builtin/*/FEATURE.json"):
+            self.assertIn(glob, package_data["harness_workbench"])
         self.assertTrue(os.path.isfile(
             os.path.join(ROOT, "src", "harness_workbench", "__init__.py")))
         self.assertFalse(os.path.exists(os.path.join(ROOT, "src", "hwb")))
 
     def test_builtin_locator_uses_the_import_namespace(self):
         self.assertEqual(features.BUILTIN, "harness_workbench:builtin")
+
+    def test_subject_tree_ships_runnable_and_is_never_imported(self):
+        from harness_workbench import subject_tree
+
+        shipped = subject_tree.subject_files()
+        self.assertTrue(shipped, "no subject tree shipped with the package")
+        # The tree is only useful if a spec, its adapter, and something to run
+        # all arrive together.
+        for required in ("adapters.py", "oracles.py", "runner.py",
+                         "run_subject.sh", "claude.json", "pin.json",
+                         "model_selection.json", "README.md"):
+            self.assertIn(required, shipped)
+
+        # DATA, NEVER IMPORTED. Core reaching into the subject tree would make
+        # five externally-pinned third-party integrations part of the package's
+        # own import graph, and a broken adapter would then break `import
+        # harness_workbench` rather than one experiment.
+        #
+        # Parsed, and walked, rather than matched as substrings. This checked
+        # `"from .subjects"` and `"import subjects\n"` against the top-level
+        # modules only, which is three separate ways to miss: a subpackage was
+        # never opened, `from harness_workbench.subjects import x` does not
+        # contain either string, and neither does `import subjects.adapters`.
+        # The rule is about the import GRAPH, so read the imports.
+        import ast
+
+        package = os.path.join(ROOT, "src", "harness_workbench")
+        offenders = []
+        for directory, _, filenames in os.walk(package):
+            # The subject tree is allowed to import itself; it is the only
+            # thing that may.
+            if "subjects" in os.path.relpath(directory, package).split(os.sep):
+                continue
+            for filename in sorted(filenames):
+                if not filename.endswith(".py"):
+                    continue
+                path = os.path.join(directory, filename)
+                tree = ast.parse(read_text(path), filename=path)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        # `level` covers `from .subjects` and `from ..subjects`.
+                        name = node.module or ""
+                        if name == "subjects" or name.endswith(".subjects") \
+                                or name.startswith("subjects."):
+                            offenders.append(f"{path}: from {name}")
+                    elif isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if alias.name == "subjects" \
+                                    or alias.name.startswith("subjects.") \
+                                    or ".subjects" in alias.name:
+                                offenders.append(f"{path}: import {alias.name}")
+        self.assertEqual([], offenders)
+
+    def test_subject_tree_does_not_reimplement_the_capture_primitive(self):
+        # The tree carried a standalone second implementation of `capture` for
+        # as long as it existed, and the two drifted: the copy synthesized exit
+        # code 124 for a timeout, which is indistinguishable from a subject
+        # that genuinely exits 124. Consuming the primitive fixed that once;
+        # this keeps it fixed, because the cheapest way to satisfy a fifth
+        # harness's odd requirement is to paste a private variant back in.
+        import ast
+        from harness_workbench import capture
+
+        package = os.path.join(ROOT, "src", "harness_workbench")
+        subjects = os.path.join(package, "subjects")
+        reserved = set(capture.__all__)
+        # Names are the weak half of this check and were once the whole of it.
+        # Of the deleted common.py's ten primitive members only six collided
+        # with `__all__`; `ProcessResult`, `canonical_digest`, `file_digest`
+        # and `normalized_path` would all have sailed through, and so would a
+        # PRIVATE variant -- which is precisely what gets pasted back in.
+        #
+        # So the modules a reimplementation cannot avoid importing are the
+        # other half. Bounded capture needs `selectors` and `signal`; owning a
+        # process group needs them too. Nothing in this tree may import them:
+        # the primitive does that, once, on everyone's behalf. `subprocess` is
+        # allowed only where a process is genuinely not being measured.
+        #
+        # WHAT THIS STILL MISSES, verified by trying it: a private helper that
+        # reimplements bounded FILE reading -- the deleted `_bounded_evidence`
+        # -- collides with no reserved name and imports nothing forbidden, and
+        # passes. Static checks over names and imports cannot see it. Saying so
+        # here rather than implying the guard is total, because a control
+        # trusted past its range is worse than one known to be partial.
+        forbidden_imports = {"selectors": (), "signal": (),
+                             "subprocess": ("test_experiment.py", "hook.py")}
+        for entry in sorted(os.listdir(subjects)):
+            if not entry.endswith(".py"):
+                continue
+            tree = ast.parse(read_text(os.path.join(subjects, entry)))
+            # ast.walk, not tree.body: a method or a nested def is still a
+            # reimplementation, and module-level rebinding is the cheapest one.
+            for node in ast.walk(tree):
+                name = None
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                    name = node.name
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    name = node.id
+                if name is not None:
+                    self.assertNotIn(
+                        name, reserved,
+                        "%s defines %s, which the capture primitive already "
+                        "exports" % (entry, name))
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    module = (node.module if isinstance(node, ast.ImportFrom)
+                              else None)
+                    names = ([module] if module else
+                             [a.name for a in node.names])
+                    for imported in names:
+                        root_module = (imported or "").split(".")[0]
+                        allowed = forbidden_imports.get(root_module)
+                        if allowed is not None and entry not in allowed:
+                            self.fail(
+                                "%s imports %s; bounded capture and process "
+                                "ownership belong to harness_workbench.capture"
+                                % (entry, root_module))
+
+    def test_subject_tree_materializes_without_clobbering(self):
+        from harness_workbench import subject_tree
+
+        tmp = tempfile.mkdtemp(prefix="hb-subjects-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        destination = os.path.join(tmp, "materialized")
+        written, skipped = subject_tree.materialize(destination)
+        # The shipped files plus the apparatus manifest, which is generated
+        # rather than copied and so is not one of `subject_files()`.
+        self.assertEqual(
+            sorted(written),
+            sorted(subject_tree.subject_files() + [subject_tree.APPARATUS]))
+        self.assertEqual([], skipped)
+
+        target = os.path.join(destination, "adapters.py")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("# edited by whoever owns this copy\n")
+
+        written, skipped = subject_tree.materialize(destination)
+        # The manifest is rewritten every time and is the one thing the skip
+        # rule must NOT protect: it describes which primitive is importable
+        # now, so a stale copy of it is a false statement rather than someone's
+        # edited work.
+        self.assertEqual([subject_tree.APPARATUS], written)
+        self.assertEqual(sorted(skipped), subject_tree.subject_files())
+        self.assertEqual("# edited by whoever owns this copy\n",
+                         read_text(target))
+
+        written, skipped = subject_tree.materialize(destination, force=True)
+        self.assertEqual([], skipped)
+        self.assertNotIn("edited by whoever", read_text(target))
+
+    def test_materialize_records_which_primitive_the_tree_was_cut_against(self):
+        # The adapters import `capture` from the installed package, so those
+        # bytes decide how a subject is measured from outside everything a spec
+        # can declare. This is the baseline the adapter compares itself to.
+        import json
+        from harness_workbench import canon, capture, subject_tree
+
+        tmp = tempfile.mkdtemp(prefix="hb-apparatus-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        destination = os.path.join(tmp, "materialized")
+        subject_tree.materialize(destination)
+
+        manifest = json.loads(
+            read_text(os.path.join(destination, subject_tree.APPARATUS)))
+        self.assertEqual("hwb-subject-apparatus/v0.1", manifest["schema"])
+        # Both modules, not just the obvious one: `capture.digest_file` wraps
+        # `canon.digest_file`, so a change in canon moves every digest in a
+        # record while capture.py stays byte-identical.
+        self.assertEqual({"canon", "capture"}, set(manifest["modules"]))
+        for name, module in (("canon", canon), ("capture", capture)):
+            self.assertEqual(
+                canon.digest_file(module.__file__).split(":", 1)[1],
+                manifest["modules"][name]["sha256"])
 
     def test_source_and_project_metadata_have_one_version_authority(self):
         import tomllib
@@ -3694,7 +3875,7 @@ class TestPackageIdentity(unittest.TestCase):
         self.assertEqual(["LICENSE", "NOTICE"], project["license-files"])
         self.assertEqual([{"name": "Garrett Davis"}], project["maintainers"])
         self.assertEqual(
-            ["build==1.5.0", "twine==7.0.0"],
+            ["build==1.5.0", "setuptools==83.0.0", "twine==7.0.0"],
             project["optional-dependencies"]["release"],
         )
         self.assertEqual(
@@ -3990,22 +4171,18 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
             self.assertIn("`%s`" % name, text,
                           "README does not list the shipped feature %s" % name)
 
-    def test_the_readme_does_not_overclaim_the_test_count(self):
-        # Asserted as a CEILING, not equality: under-claiming is harmless and
-        # equality would fail on every test added, which trains people to
-        # ignore the failure. Overclaiming is the thing that is a lie.
+    def test_the_readme_does_not_publish_a_moving_test_count(self):
+        # A ceiling still goes stale in the reader's direction: 61 remains
+        # technically true after the suite reaches 153, but it describes the
+        # command less accurately every time a regression is added. The exact
+        # count belongs in a freeze-commit conformance record, not evergreen UX.
         import re
-        m = re.search(r"(\d+) tests", doc("README.md"))
-        self.assertIsNotNone(m, "README no longer states a test count")
-        claimed = int(m.group(1))
-        # Count the suite, not this file.  The deterministic property corpus
-        # deliberately lives in its own module so generated contracts do not
-        # make this already-large behavioural suite harder to navigate.
-        actual = unittest.defaultTestLoader.discover(
-            os.path.join(ROOT, "tests")).countTestCases()
-        self.assertLessEqual(claimed, actual,
-                             "README claims %d tests, there are %d"
-                             % (claimed, actual))
+        text = doc("README.md")
+        self.assertIsNone(
+            re.search(r"\b\d+ tests\b", text),
+            "README carries a moving test count",
+        )
+        self.assertIn("# offline; no subject installed", text)
 
     def test_every_spec_field_the_loader_reads_is_documented(self):
         """The reference must cover the whole surface, not the popular part.
@@ -4165,6 +4342,11 @@ REGISTERED_TRANSCRIPTS = {
     # Exits 1 on purpose: nothing in that spec detects anything, so `caught 0/3`
     # is the honest verdict and a zero exit would be the lie.
     "hwb catch mine.json": {"cwd": _ATTACH, "exit": 1},
+    # The cwd is arbitrary: `subjects` copies out of the installed package and
+    # reads nothing from the working directory. It needs *a* sandbox, not a
+    # fixture, so it reuses one rather than adding an example that exists only
+    # to be a destination.
+    "hwb subjects --into ./subjects": {"cwd": _FLAKY},
     'hwb show "$RUN"': {"cwd": _ATTACH, "run_first": "mine.json"},
     'hwb confine "$RUN"': {"cwd": _ATTACH, "run_first": "mine.json"},
 }

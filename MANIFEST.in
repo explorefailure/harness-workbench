@@ -16,6 +16,13 @@ recursive-include docs *.md
 recursive-include examples *.md *.json *.sh *.py *.txt
 recursive-include tools *.py
 
+# setuptools ships `tests/test*.py` on its own, and nothing else under tests/.
+# That default is a trap the moment a test imports a helper beside it: the
+# sdist arrives with `test_capture_soak.py` and without the `capture_soak`
+# module it imports, so the suite fails at collection in the one environment
+# nobody runs before publishing. Ship the directory, not the naming pattern.
+recursive-include tests *.py
+
 # Run stores are outputs, not source, and are no longer tracked -- but they
 # still exist on disk after anyone runs the examples, and MANIFEST.in reads
 # the FILESYSTEM rather than git. Without a prune per store the sdist sweeps

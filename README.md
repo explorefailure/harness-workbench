@@ -47,17 +47,38 @@ the harness around that work behaved as intended.
 [`Measure your own code`](docs/measuring-your-own-code.md) ·
 [`How the evidence works`](#what-gets-recorded)
 
-Status: **[`v0.1.0-rc.1`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
-public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
-with wheel and source-distribution assets. It is not published to PyPI. Zero
-runtime dependencies, Python 3.11+, 326 tests. **Actively developed, solo
-maintained.**
+It is built for two jobs:
+
+- **Test your own harness ideas.** Write a feature, attach it to a step, then
+  invert it and check that something noticed. See
+  [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md).
+- **Test somebody else's harness.** `hwb subjects --into ./subjects` copies a
+  ready-made tree that runs Claude Code, Codex CLI, DeepSeek Harness, Hermes
+  Agent, and Pi as measured subjects, projecting five different native
+  evidence surfaces into one envelope. See
+  [Measuring another harness](#measuring-another-harness).
+
+Latest published release: **[`v0.1.0-rc.2`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.2)
+public GitHub prerelease** (package version `0.1.0rc2`), published 2026-08-25
+with wheel and source-distribution assets. It is not published to PyPI.
+
+This tree is the **approved source candidate for final `0.1.0`**. It is not yet
+tagged or published, and has no final-release assets. It carries the verified
+rc2 contents forward without accepted candidate fixes. Zero runtime
+dependencies, Python 3.11+.
+
+Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
+documentation, and tests are welcome for best-effort review; larger changes
+should start with an issue. There is no response, merge, compatibility, or
+support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
+process, [SUPPORT.md](SUPPORT.md) for public help, and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ---
 
 ## Try it
 
-The prerelease is not published to PyPI. Install it from a clone in a virtual
+The project is not published to PyPI. Install it from a clone in a virtual
 environment:
 
 ```console
@@ -67,7 +88,7 @@ $ python3 -m venv .venv
 $ . .venv/bin/activate
 $ pip install .
 $ hwb --version
-hwb 0.1.0rc1
+hwb 0.1.0
 ```
 
 Create `hello.json` with one command and no features:
@@ -188,10 +209,10 @@ ordinary successful run could hide:
   after changing the harness, model, provider, or extension. Compare the tools,
   decisions, events, and durable outcomes—not just the final answer.
 
-These experiments need structured access to the target harness. The upcoming
-adapters will provide that access, starting with Pi. Until an adapter is
-released and verified, this list describes the problems I am building toward,
-not capabilities claimed for the current release.
+These experiments need structured access to the target harness. The subject
+tree provides that access for five harnesses, but no adapter envelope is part
+of the public library API. This list describes experiments—not capabilities
+claimed for a third-party harness.
 
 ### Experiments you can run now
 
@@ -221,23 +242,28 @@ Start with a small, deterministic workload whenever possible:
 ## What I'm building next
 
 Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. I'm now building
-first-class adapters for popular AI coding harnesses:
+own harness behavior can be added as Workbench features. Final `0.1.0` includes
+the experimental subject tree verified in rc2 for Pi, Claude Code, Codex CLI,
+DeepSeek Harness, and Hermes Agent. They share one evidence envelope without
+pretending their native event and interception surfaces are the same.
 
-- **Pi—first:** I'm starting with an adapter that can launch isolated Pi runs,
-  capture structured events and tool activity, preserve the original evidence,
-  and test its behavior under controlled changes and failures.
+The adapter promotion review is complete: the whole
+`cross-harness-adapter-run/v0.1` envelope remains experiment-local for
+`0.1.0`. Its exact-five-subject validator, live pin/model coupling, and
+closed field sets are useful for sealed comparisons but are not a
+vendor-neutral, additively evolving public API. The generic boundary already
+promoted is `capture` plus `canon`; see the
+[review](docs/adapter-envelope-promotion-review.md).
 
-- **Shared foundation, proven twice:** Each adapter will use a consistent way
-  to run experiments and preserve evidence while respecting the differences
-  between harnesses. After Pi, I'll test that approach against a second coding
-  harness before expanding it further.
+The next work is immutable release evidence, not another adapter name:
 
-- **Candidates after that:** Claude Code, OpenAI Codex, and NousResearch Hermes
-  Agent are candidates, not promised integrations.
+- run the complete source and installed-artifact gate on the release-only
+  commit, then require its hosted Linux/macOS and CodeQL checks;
+- create and verify the signed immutable tag; and
+- verify clean installs from the GitHub-downloaded wheel and source archive.
 
-- **Tested before release:** I'll verify every adapter against the real harness
-  before presenting it as supported.
+Until those gates close, the adapters are an experimental candidate surface,
+not a supported integration promise.
 
 Harness Workbench will remain independent of any particular model, provider,
 or agent framework.
@@ -275,15 +301,25 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. Local release checks exercised macOS. Immutable-tag CI exercised
-the full Linux/macOS matrix; the release-final conformance record is attached
-to the [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
+that test set. Published candidate `0.1.0rc2`, exact commit
+`66ce4ed853ac4a60f975bddf7e84cfccd4505cc6`, passed the full Linux/macOS matrix
+(all eight CPython cells) and package job in [CI run
+32895018013](https://github.com/explorefailure/harness-workbench/actions/runs/32895018013),
+passed [CodeQL run
+32895018016](https://github.com/explorefailure/harness-workbench/actions/runs/32895018016),
+and passed Immutable-tag CI in [run
+32895591807](https://github.com/explorefailure/harness-workbench/actions/runs/32895591807).
+Its release-final conformance record is attached to the prerelease. Those
+results prove the rc2 commit and assets only; this final-version commit must
+rerun every gate before `v0.1.0` is created.
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
-than merely untested there: its interruption and filesystem measurements rely
-on POSIX behavior. Workload commands are passed directly to `subprocess`
-without a shell, so users choose their own command or request `/bin/sh -c`
-explicitly.
+than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
+terminate a direct child at published checkpoints, filesystem measurements
+preserve and inspect executable modes, symlinks, and special nodes such as
+FIFOs, and the shipped examples execute `/bin/sh` scripts. Workload commands
+are passed directly to `subprocess` without a shell, so users choose their own
+POSIX command or request `/bin/sh -c` explicitly.
 
 ## Security boundary
 
@@ -362,6 +398,76 @@ quality labels.
 Full guide: [`docs/measuring.md`](docs/measuring.md), including a section on
 what the instrument **cannot** see.
 
+## Measuring another harness
+
+A *feature* is a control you own and can invert. A *subject* is a harness you
+run from the outside and measure. The shipped subject tree covers five:
+
+```console
+$ hwb subjects --into ./subjects
+```
+
+`hwb subjects` with no destination lists what ships instead of copying it.
+Once the tree is yours, its own suite runs with no network and no third-party
+client installed; live subject runs have additional requirements. The
+committed active profile is the remote `opencode-go` gateway: DeepSeek,
+Hermes, and Pi runs require a valid `HWB_OPENCODE_KEY`, outbound network
+access, and may consume paid quota or incur spend. Hermes—the pinned Nous
+client—makes a remote API call under that active profile. `local-ollama` is a
+separate optional local profile, not the configuration those commands use by
+default:
+
+```sh
+cd subjects
+python3 -m unittest test_experiment.py            # offline; no subject installed
+python3 runner.py --subject claude --workload repair
+```
+
+The tree is copied out rather than run in place, and that is the point: each
+spec declares its adapter sources in `inputs`, so `freeze` and `receipt`
+digest the exact bytes that ran. An adapter imported from the installed
+package would instead make "which adapter ran" a property of whichever
+version happened to be installed.
+
+**It is not a stable API.** Every subject is pinned to an exact third-party
+release, and one of them is a developer preview that documents breaking
+changes as expected. The tree ships so the workbench can demonstrate itself
+against real harnesses; `src/` imports nothing from it, and the pins are
+yours to update.
+
+Each subject exposes a different interception surface — some can deny a tool
+call, fewer can rewrite its input, fewer still can rewrite its result. Those
+differences are the interesting part, and
+[`SHARED_ADAPTER_CONTRACT.md`](src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md)
+records them per harness.
+
+### The capture primitive
+
+Writing adapters twice surfaced one thing that is not about any harness:
+bounding a hostile child process and coming back with evidence you can defend.
+That much is core, in `harness_workbench.capture`:
+
+```python
+from harness_workbench import capture
+
+env = capture.minimal_environment(root, {"MY_HARNESS_OFFLINE": "1"})
+result = capture.run_bounded(argv, cwd=workspace, env=env, timeout=120)
+evidence = capture.capture_bytes(
+    result.stdout, redactions=capture.credential_values(os.environ)
+)
+```
+
+A bound firing is a measurement, not an error: timeouts, byte limits and
+nonzero exits come back in `result`, and `run_bounded` raises only when it
+cannot measure at all. The child leads its own process group and every
+termination signals the group, because a subject holding a shell outlives a
+signal sent to the shell alone — and `group_alive_after_cleanup` reports
+whether anything survived rather than assuming nothing did.
+
+The envelope shape, what it refuses to promote, and why is in
+[`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md).
+The adapters themselves stay out of core, for the reason above.
+
 ## Commands
 
 Two kinds, and mixing them up is the most common first mistake:
@@ -369,6 +475,7 @@ Two kinds, and mixing them up is the most common first mistake:
 - **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy`
 - **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
   `replay` `interfere` `order`
+- **take neither** — `ls`, and `subjects` (copies the shipped subject tree)
 
 Use `hwb --help` or `hwb <command> --help` for the registered command and
 option reference.
@@ -384,7 +491,10 @@ option reference.
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
 | [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
-| [`docs/release-conformance-0.1.0rc1.md`](docs/release-conformance-0.1.0rc1.md) | the source-bundled pre-release conformance record; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) is attached to the GitHub prerelease |
+| [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
+| [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
+| [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
+| [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the approved, **unreleased** final `0.1.0` source candidate; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,
@@ -407,8 +517,24 @@ questions and non-sensitive bugs, and discuss larger changes there before
 substantial implementation. The complete posture and local checks are in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
 
-Maintainers should use the complete candidate and final-release procedure in
-[`RELEASING.md`](RELEASING.md). A raw backend-built sdist must not be
+Release tooling is pinned in the `release` extra — the build backend included,
+because `[build-system].requires` is only a floor and an isolated build
+resolves it freshly — so local and CI artifact checks use the same versions:
+
+```sh
+python3 -m pip install '.[release]'
+python3 -m build --no-isolation --wheel
+python3 -m twine check --strict dist/*.whl
+```
+
+That is the development convenience. The release gate installs the same pinned
+versions without installing the project, because installing the project leaves
+behind the `build/` directory the gate refuses to start with.
+
+Maintainers should use the complete, fail-closed candidate and final-release
+procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,
+commit-derived timestamps, ownership-neutral source-distribution repacking,
+tag/version agreement, and checksums. A raw backend-built sdist must not be
 uploaded; building an archive is not by itself a release.
 
 ## Licence

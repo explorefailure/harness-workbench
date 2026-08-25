@@ -39,6 +39,17 @@ interrupts/
 .hwbblast-*
 *.freeze.lock
 
+# `capture()`'s per-run root, created with `dir=HERE` so the subject tree is
+# the working directory a harness is launched from. Same `git add -A` hazard
+# as the campaign scratch above, and worse in one specific way: the Codex
+# guard arm copies `~/.codex/auth.json` into this directory, because an
+# isolated CODEX_HOME otherwise authenticates as nobody. `TemporaryDirectory`
+# removes it on any ordinary exit, but a SIGKILL -- an OOM, a spend limit
+# killing the run, a closed lid -- leaves the credential on disk inside the
+# working tree. An ignore rule is the only part of that chain that does not
+# depend on the process living long enough to clean up after itself.
+.hwb-*
+
 # The flaky example counts its invocations here. State, not source --
 # committing it would ship the example already "warmed up" and it would
 # pass first try for everyone who cloned it, which is the one thing it
@@ -47,3 +58,7 @@ examples/flaky/.flaky-state
 
 # Efficacy campaigns' shared scratch spec.
 .hwbefficacy-*
+
+# Written by `hwb subjects --into`: it fingerprints the install a tree was
+# cut against, so it is per-copy state and never source.
+apparatus.json

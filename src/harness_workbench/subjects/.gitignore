@@ -1,0 +1,2 @@
+# Per-run roots can retain isolated client credentials after SIGKILL.
+.hwb-*
