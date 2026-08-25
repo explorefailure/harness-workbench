@@ -650,7 +650,21 @@ class BoundedRunTests(unittest.TestCase):
         self.assertGreater(result.stdout_source_bytes, 1024)
         self.assertFalse(result.group_alive_after_cleanup)
 
-    def test_simultaneous_stream_limits_have_one_faithful_combined_reason(self):
+    def test_one_cycle_with_both_stream_limits_has_a_combined_reason(self):
+        self.assertEqual(
+            capture.STDOUT_STDERR_LIMIT,
+            capture._stream_limit_reason({"stdout", "stderr"}),
+        )
+        self.assertEqual(
+            capture.STDOUT_LIMIT,
+            capture._stream_limit_reason({"stdout"}),
+        )
+        self.assertEqual(
+            capture.STDERR_LIMIT,
+            capture._stream_limit_reason({"stderr"}),
+        )
+
+    def test_two_stream_limits_preserve_both_overflow_facts(self):
         result = self._run(
             "import os,signal,time; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
@@ -661,7 +675,16 @@ class BoundedRunTests(unittest.TestCase):
             stderr_limit=1024,
             termination_grace=0.5,
         )
-        self.assertEqual("stdout_stderr_limit", result.termination_reason)
+        # The writes are sequential. The OS may report one pipe ready before
+        # the other, so only a selector cycle that observes both is combined.
+        self.assertIn(
+            result.termination_reason,
+            {
+                capture.STDOUT_LIMIT,
+                capture.STDERR_LIMIT,
+                capture.STDOUT_STDERR_LIMIT,
+            },
+        )
         self.assertTrue(result.stdout_overflow)
         self.assertTrue(result.stderr_overflow)
         self.assertEqual(1024, len(result.stdout))
@@ -674,7 +697,7 @@ class BoundedRunTests(unittest.TestCase):
             stdout_limit=1024,
             stderr_limit=1024,
         )
-        self.assertEqual("stdout_stderr_limit", evidence["termination_reason"])
+        self.assertEqual(result.termination_reason, evidence["termination_reason"])
         self.assertEqual(
             {"stdout": True, "stderr": True}, evidence["overflow"]
         )

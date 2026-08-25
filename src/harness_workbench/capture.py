@@ -165,6 +165,15 @@ def _signal_group(pgid: int, signum: int) -> None:
         pass
 
 
+def _stream_limit_reason(streams: set[str]) -> str:
+    """Name the stream bound observed in one pre-termination read cycle."""
+    if streams == {"stdout", "stderr"}:
+        return STDOUT_STDERR_LIMIT
+    if "stdout" in streams:
+        return STDOUT_LIMIT
+    return STDERR_LIMIT
+
+
 def _wait_for_group_exit(pgid: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while _group_alive(pgid) and time.monotonic() < deadline:
@@ -308,12 +317,7 @@ def run_bounded(
                         if reason is None:
                             cycle_limit_streams.add(stream)
                 if reason is None and cycle_limit_streams:
-                    if cycle_limit_streams == {"stdout", "stderr"}:
-                        terminate(STDOUT_STDERR_LIMIT)
-                    elif "stdout" in cycle_limit_streams:
-                        terminate(STDOUT_LIMIT)
-                    else:
-                        terminate(STDERR_LIMIT)
+                    terminate(_stream_limit_reason(cycle_limit_streams))
                 if process.poll() is not None and not read_any:
                     # The child is gone and the pipe is drained -- anything
                     # still holding it is a grandchild that outlived its parent.
