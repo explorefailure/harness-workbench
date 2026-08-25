@@ -248,11 +248,16 @@ now includes an experimental subject tree for Pi, Claude Code, Codex CLI,
 DeepSeek Harness, and Hermes Agent. They share one evidence envelope without
 pretending their native event and interception surfaces are the same.
 
-The next work is promotion evidence, not another adapter name:
+The adapter promotion review is complete: the whole
+`cross-harness-adapter-run/v0.1` envelope remains experiment-local for
+`0.1.0rc2`. Its exact-five-subject validator, live pin/model coupling, and
+closed field sets are useful for sealed comparisons but are not a
+vendor-neutral, additively evolving public API. The generic boundary already
+promoted is `capture` plus `canon`; see the
+[review](docs/adapter-envelope-promotion-review.md).
 
-- resolve whether Hermes's strict stdout movement has a narrow defensible
-  normalization rather than adding a broad allowance, then perform the
-  explicit adapter API/schema promotion review;
+The next work is release evidence, not another adapter name:
+
 - rerun the source, installed-artifact, and hosted Linux/macOS gates after the
   audit remediations land; and
 - keep merge, tag, and release behind explicit owner review.
@@ -487,6 +492,7 @@ option reference.
 | [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
+| [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
 | [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md) | the source-bundled pre-release conformance record, covering the **unreleased** `0.1.0rc2` candidate this tree prepares; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) for the published `v0.1.0-rc.1` is attached to that GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The

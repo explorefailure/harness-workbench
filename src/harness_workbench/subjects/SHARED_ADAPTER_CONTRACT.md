@@ -360,9 +360,10 @@ them fail:
   security boundary.
 - No assumption that process exit zero proves the requested task succeeded.
 - No assumption that a durable effect proves the harness finished cleanly.
-- No extraction into Workbench core until the current-source five-subject
-  comparison, DeepSeek repair repeat, API/schema review, and remaining
-  containment/redaction edge cases are complete.
+- No extraction of this five-subject envelope into Workbench core. The
+  API/schema review is complete and defers promotion for `0.1.0rc2`; another
+  review requires the vendor-neutral boundary and compatibility evidence named
+  in `docs/adapter-envelope-promotion-review.md`.
 
 ## Hermes `0.20.5` evidence recut — 2026-08-25 UTC
 
@@ -390,11 +391,33 @@ Execution varied between one and two tool calls, so exact task behavior was
 stable but raw execution evidence was not byte-stable. No stdout allowance is
 declared from this result alone.
 
+The follow-up review closes that decision: **do not normalize or allow these
+axes in `hwb steady v0.1`.** Across the nine draws, subject identity, request,
+apparatus, capabilities, invocation, isolation, workspace, outcome, verdict,
+and oracle evidence each have one exact value. Capture and lifecycle each have
+nine distinct values. Seven draws used only `write_file`; two used
+`write_file` followed by `read_file`, producing two genuinely different native
+event sequences. Raw stdout also carries varying model reasoning and final
+text, while stderr and the shell-hook sidecar carry session/request IDs,
+temporary paths, durations, and tool results.
+
+`steady` allowances name whole stored-output axes, not JSON fields. Allowing
+the three `stdout.bin` axes would therefore hide the complete adapter envelope,
+including the real one-tool/two-tool routing difference, lifecycle evidence,
+adapter verdict, and outcome verdict. Stripping those facts before capture
+would weaken the raw evidence contract. A future semantic-stability product
+could compare an explicitly versioned projection while retaining raw bytes,
+but that would be a new contract considered during API/schema review—not a
+narrow normalization of this campaign. The strict `UNSTABLE` verdict stands
+and is interpreted as execution-evidence nondeterminism alongside stable exact
+task behavior.
+
 Across the four recuts, the gateway reported percentage-point deltas of +16
 rolling, +6 weekly, and +3 monthly. Credential scans found no configured key
 bytes in the sealed stores. Partial contract comparisons parsed the Hermes
-records without a Hermes structural complaint; a current five-subject verdict
-still requires current-source peer records for Claude, Codex, DeepSeek, and Pi.
+records without a Hermes structural complaint. Those partial checks did not
+constitute a five-subject verdict; the same-apparatus repair comparison below
+supplies that verdict with current-source peers.
 
 ## DeepSeek current-source repair recut — 2026-08-25 UTC
 
@@ -484,6 +507,10 @@ repair comparison also passes with no contract errors. Gate 3 is now complete
 for all five subjects: the post-fix current-source DeepSeek repair recut passed
 adapter and outcome 3/3. The current Hermes recut is structurally valid and
 task-successful, while its no-allowance steadiness campaign is honestly
-`UNSTABLE` on retained stdout bytes. Promotion remains blocked on
-interpretation of the strict steadiness result and the explicit core API/schema
-review.
+`UNSTABLE` on retained stdout bytes. The explicit core API/schema review is
+complete and defers promotion for `0.1.0rc2`: this exact-five-subject,
+live-pin, closed-field contract remains experiment-local, while the already
+extracted `capture` and `canon` primitives remain the supported core boundary.
+The strict steadiness result has been interpreted and retains its no-allowance
+`UNSTABLE` verdict. See `docs/adapter-envelope-promotion-review.md` in the
+source repository.

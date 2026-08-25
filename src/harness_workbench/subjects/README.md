@@ -344,10 +344,19 @@ contract with no errors. It deliberately preserves negative subject evidence:
 Claude failed closed on a changed native tool-result shape, Codex passed repair
 outcome 2/3, Hermes passed 3/4 with one recovered timeout, and DeepSeek and Pi
 passed 3/3. Exact run IDs and hashes are in `SHARED_ADAPTER_CONTRACT.md`.
-Promotion of the shared adapter contract into Workbench core is still blocked
-on interpretation of the strict steadiness result and an explicit core
-API/schema review. Before a
-public GitHub release, rerun the repository's existing release procedure and
+The explicit core API/schema review is complete and defers promotion for
+`0.1.0rc2`. The contract's exact-five-subject, live-pin, and closed-field rules
+do not match Workbench's vendor-neutral, additive public API. The generic
+`capture` and `canon` boundary is already core; the envelope, normalizers,
+pins, model profiles, and workload oracles remain experiment-local. See
+`docs/adapter-envelope-promotion-review.md` in the source repository.
+The strict Hermes steadiness result has also been reviewed: no current
+`steady` allowance is narrow enough, because each
+allowed stdout axis would suppress the entire adapter envelope and hide a real
+one-tool/two-tool routing difference. The no-allowance `UNSTABLE` verdict
+therefore stands as execution-evidence nondeterminism, alongside stable exact
+task outcomes. Before a public GitHub release, rerun the repository's existing
+release procedure and
 CI from the final commit, review the developer-preview DeepSeek version pin,
 and update the release conformance record; do not push or tag from this
 experiment alone.
@@ -361,4 +370,6 @@ failure: after `write_file` was denied, Hermes reached the same effect through
 `terminal`. The canonical no-allowance steadiness campaign was structurally
 valid and passed all nine exact-write outcomes, but is `UNSTABLE` because its
 retained stdout bytes moved across repeats. Do not add a broad stdout allowance
-or call the raw evidence stable from this result.
+or call the raw evidence stable from this result. A semantic stability view
+would need a separately versioned projection that retains the raw evidence;
+that is an API/schema question rather than a normalization of `steady v0.1`.

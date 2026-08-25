@@ -6,9 +6,11 @@ promote the `cross-harness-adapter-run` envelope, and it does not make any
 external harness a dependency of anything.
 
 The distinction matters because the two are routinely confused. The envelope
-is a *schema* describing what five named third-party harnesses emit; its
-promotion is still blocked, for the reasons its own gate lists
-([SHARED_ADAPTER_CONTRACT.md](../src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md)).
+is a *schema* describing what five named third-party harnesses emit. Its
+explicit API/schema review deferred promotion for `0.1.0rc2` because its
+closed-world, environment-coupled rules are appropriate for sealed experiment
+evidence but not for Workbench's vendor-neutral, additively evolving public API
+([adapter-envelope-promotion-review.md](adapter-envelope-promotion-review.md)).
 The primitive below is *running a hostile subprocess and coming back with
 evidence you can defend*, which is a Workbench concern whether or not a single
 adapter ever ships.

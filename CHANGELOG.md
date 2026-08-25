@@ -28,6 +28,14 @@ published as a release. The heading gains a date only at step 1 of
   shared contract passes with no errors while preserving measured negatives:
   Claude fails closed on a changed native tool-result shape, Codex outcome is
   2/3, Hermes is 3/4 with one recovered timeout, and DeepSeek and Pi are 3/3.
+- Retain Hermes's strict no-allowance steadiness verdict. All nine exact task
+  outcomes are stable, but capture/lifecycle values are all distinct and tool
+  routing varies between one and two calls; allowing whole `stdout.bin` axes
+  would hide the complete evidence envelope rather than normalize metadata.
+- Complete the adapter API/schema promotion review and defer the whole
+  `cross-harness-adapter-run/v0.1` envelope for `0.1.0rc2`. Its strict
+  exact-five-subject validator remains experiment-local; the supported public
+  boundary remains the vendor-neutral `capture` and `canon` primitives.
 - **New public module `harness_workbench.capture`.** Bounded subprocess
   execution with per-stream limits, a deadline, process-group termination and
   escalation, and a post-cleanup group-liveness observation; capture envelopes
