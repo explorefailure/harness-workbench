@@ -61,6 +61,13 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    def test_repair_prompt_and_task_require_standalone_test_commands(self) -> None:
+        prompt = adapters.WORKLOADS["repair"]["prompt"]
+        task = (adapters.HERE / "repair_task.md").read_text(encoding="utf-8")
+        for text in (prompt, task):
+            self.assertIn("standalone command", text)
+            self.assertIn("Do not append or chain any other command", text)
+
     def test_normalized_argv_binds_logical_subject_launcher(self) -> None:
         root = Path("/fixture/run")
         workspace = root / "workspace"
@@ -1308,6 +1315,64 @@ class ClaudeNormalizerTests(unittest.TestCase):
                 self.assertIsNone(
                     lifecycle["tool_executions"][0]["reported_error"]
                 )
+
+    def test_missing_is_error_uses_structured_native_success(self) -> None:
+        result = json.loads(json.dumps(self.result))
+        del result["message"]["content"][0]["is_error"]
+        result["tool_use_result"] = {
+            "filePath": "/workspace/shared.txt",
+            "userModified": False,
+        }
+        lifecycle, errors = adapters._normalize_claude(
+            jsonl(
+                {"type": "system", "subtype": "init"},
+                self.call,
+                result,
+                self.terminal,
+            ),
+            self.workspace,
+        )
+        self.assertEqual([], errors)
+        self.assertIs(
+            lifecycle["tool_executions"][0]["reported_error"], False
+        )
+
+    def test_missing_is_error_uses_native_error_string(self) -> None:
+        result = json.loads(json.dumps(self.result))
+        del result["message"]["content"][0]["is_error"]
+        result["tool_use_result"] = "Error: Exit code 1\nfailed"
+        lifecycle, errors = adapters._normalize_claude(
+            jsonl(
+                {"type": "system", "subtype": "init"},
+                self.call,
+                result,
+                self.terminal,
+            ),
+            self.workspace,
+        )
+        self.assertEqual([], errors)
+        self.assertIs(
+            lifecycle["tool_executions"][0]["reported_error"], True
+        )
+
+    def test_missing_is_error_and_native_status_is_rejected(self) -> None:
+        result = json.loads(json.dumps(self.result))
+        del result["message"]["content"][0]["is_error"]
+        lifecycle, errors = adapters._normalize_claude(
+            jsonl(
+                {"type": "system", "subtype": "init"},
+                self.call,
+                result,
+                self.terminal,
+            ),
+            self.workspace,
+        )
+        self.assertIn(
+            "Claude tool result has no native status: call-1", errors
+        )
+        self.assertIsNone(
+            lifecycle["tool_executions"][0]["reported_error"]
+        )
 
 
 class CodexNormalizerTests(unittest.TestCase):

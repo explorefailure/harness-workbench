@@ -22,7 +22,9 @@ REPAIR_PROMPT = (
     "requirement. Work only inside the current workspace. You must run the "
     "specified test command once before editing; its initial failure is expected, "
     "so proceed directly to editing slugger.py rather than retrying it unchanged. "
-    "Run the same command after the edit and finish with done."
+    "Run exactly `python3.11 -m unittest -v` as a standalone command both times. "
+    "Do not append or chain any other command to either test invocation. Finish "
+    "with done."
 )
 
 WRITE_INPUTS = (
