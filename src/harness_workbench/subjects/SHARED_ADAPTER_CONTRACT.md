@@ -87,7 +87,7 @@ can report `isError: false` while its first-party result text ends with
 | Harness | Acquisition | Strongest terminal evidence | Tool evidence | Observed limitation |
 | --- | --- | --- | --- | --- |
 | Pi `0.84.1` | Native JSON stream | Native `agent_settled` | Correlated `tool_execution_start` / `_end` | Pi-specific extension, provider, and summary events must remain local. Its failing-command evidence is `isError`, not an exit status, so red/green detection cannot assume an exit code. |
-| Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
+| Claude Code `2.1.245` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. Successful built-in tool results may omit the optional `is_error` field; the adapter binds that omission to the enclosing structured native result instead of treating an unqualified absence as success. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
 | DeepSeek Harness `0.1.0-rc.6` | Native persisted JSONL plus process | Native `turn/end` | Correlated `tool/call` / `tool/result`, plus projected bash exit marker | The supported headless stdout contains final text only; the developer-preview session format has no compatibility promise, and `tool/result.isError` is not a child-process exit verdict. |
 | Hermes Agent `0.20.5` (`v2026.8.19`) | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs, keyed on `(api_request_id, tool_call_id)` | The current CLI and hook canary preserve the reviewed surface: `tool_call_id` alone is NOT unique — it restarts per API request, so correlation needs both fields. Process exit is the only terminal evidence, and ordinary hook failures fail open. Fresh workload evidence is still required for this pin. |
@@ -487,6 +487,44 @@ monthly percentage points. Credential scans found no configured key bytes in
 the five stores. This matrix closes the current same-apparatus comparison gate;
 it does not resolve Hermes's strict no-allowance stdout instability or decide
 whether the experiment-local contract should become a Workbench core API.
+
+## Post-release adapter stabilization comparison — 2026-08-25 UTC
+
+A fresh comparison after `v0.1.0` closes the repair negatives above without
+weakening the shared contract. The canonical comparator output has SHA-256
+`57b2f806d71f80eb404f1f5cc32b206bcaf0e635aae96350a4f5dea1e7a44d6d`,
+`contract_passed: true`, and `errors: []`; a second invocation over the sealed
+stores reproduced the digest. All five records share one frozen 13-input map
+and apparatus, and each independently passes `hwb verify` as complete and
+conforming.
+
+| Subject | Run | Record SHA-256 | Draws | Adapter | Outcome | Timeouts | Tools per draw |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| Claude | `20260825T214541Z-2355e9-d21a` | `8eb27ae1fc4ab703325dfe5fe3c5840ad6e2deb6b0562898632e693ce7688ea8` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Codex | `20260825T214359Z-e523b9-734d` | `8357e7ab98e7a5b7fe19fceccc048d9540c352e3be49cdc6c6b6b6e07d1f6809` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| DeepSeek | `20260825T214908Z-afb1ef-1bdb` | `1a5bfef4956a66873d6227aed78c51e726588473b21983b0961ed10588760e14` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Hermes | `20260825T214704Z-400fd4-7fbb` | `2e0e4b88a092ae991e99094157516044dd7e583e60247f4803fe812e6370018d` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Pi | `20260825T215058Z-c6514d-e5c1` | `cc1078cb4d57f93f63443aef9e6815811d6d9610fc87d75b0254d09d9a221b91` | 3 | 3/3 | 3/3 | 0 | 5 each |
+
+Claude Code `2.1.245` omits the optional `is_error` member on successful
+built-in Read/Edit results while retaining a structured `tool_use_result` on
+the enclosing native event. The normalizer now treats that specific pairing
+as success and an `Error:` native result string as failure. If neither native
+qualification exists, it still fails closed rather than defaulting an absent
+boolean to success.
+
+The prior Codex 2/3 was not an adapter defect: one draw ran the green unittest
+inside a shell chain whose later `git` command failed because the disposable
+workspace is intentionally not a repository. The repair prompt and task now
+require the exact unittest invocation as a standalone command on both sides of
+the edit. The fresh Codex record retains six correlated native tool events and
+red-to-green test evidence in every draw.
+
+The three gateway-backed subjects moved the recorded provider windows by +7
+rolling, +3 weekly, and +2 monthly percentage points; Claude and Codex use
+their own authentication. This result does not promote the experiment-local
+adapter envelope, make a model label content-addressed, resolve Hermes's raw
+stdout steadiness result, or change the known tool-name guard bypass.
 
 ## Promotion gate
 

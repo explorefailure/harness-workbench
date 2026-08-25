@@ -1325,8 +1325,31 @@ def _normalize_claude(raw: bytes, workspace: Path) -> tuple[dict[str, Any], list
                 elif call_id in results:
                     errors.append(f"duplicate Claude tool result: {call_id}")
                 else:
-                    is_error = content.get("is_error")
-                    if type(is_error) is not bool:
+                    if "is_error" in content:
+                        is_error = content["is_error"]
+                    else:
+                        # Claude's documented ToolResultBlock makes is_error
+                        # optional. Current built-in Read/Edit successes omit
+                        # it while retaining their structured native result on
+                        # the enclosing user event. A failed Bash result keeps
+                        # an Error-prefixed native string. Use that second
+                        # native surface only when the boolean is absent; do
+                        # not turn a wholly status-free result into success.
+                        native_result = event.get("tool_use_result")
+                        if isinstance(native_result, dict):
+                            is_error = False
+                        elif (
+                            isinstance(native_result, str)
+                            and native_result.startswith("Error:")
+                        ):
+                            is_error = True
+                        else:
+                            is_error = None
+                            errors.append(
+                                "Claude tool result has no native status: "
+                                f"{call_id}"
+                            )
+                    if "is_error" in content and type(is_error) is not bool:
                         errors.append(
                             f"Claude tool result is_error is not boolean: {call_id}"
                         )

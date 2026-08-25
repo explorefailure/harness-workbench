@@ -3901,7 +3901,8 @@ class TestCompatibilityContract(unittest.TestCase):
         self.assertIn("Windows is unsupported", readme)
         self.assertIn("Immutable-tag CI", readme)
         self.assertIn("full Linux/macOS matrix", readme)
-        self.assertIn("release-final conformance record", readme)
+        self.assertIn("Final `0.1.0`, exact commit", readme)
+        self.assertIn("post-publication immutable-tag", readme)
 
 
 class TestBuiltinFeatures(Base):

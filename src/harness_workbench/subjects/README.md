@@ -333,19 +333,23 @@ confirmation runs.
 
 ## GitHub release readiness
 
-The DeepSeek adapter is ready to include as experiment-local discovery work.
-Its post-fix current-source repair recut passed adapter and exact repair outcome
-3/3 under the remote `opencode-go` profile, after exposing and fixing a logical
-launcher-name defect: the resolved npm entrypoint `bin.js` had been retained
-where the declared invocation requires `dsh`. Exact run IDs, hashes, and the
-rejected pre-fix record are in `SHARED_ADAPTER_CONTRACT.md`.
-The same-apparatus current-source five-subject repair comparison now passes the
-contract with no errors. It deliberately preserves negative subject evidence:
-Claude failed closed on a changed native tool-result shape, Codex passed repair
-outcome 2/3, Hermes passed 3/4 with one recovered timeout, and DeepSeek and Pi
-passed 3/3. Exact run IDs and hashes are in `SHARED_ADAPTER_CONTRACT.md`.
+The released `v0.1.0` tree deliberately preserved the measured negatives in
+its same-apparatus repair comparison: Claude failed closed on a changed native
+tool-result shape, Codex passed repair outcome 2/3, Hermes passed 3/4 with one
+recovered timeout, and DeepSeek and Pi passed 3/3. That matrix remains
+historical evidence rather than being rewritten after the release.
+
+Post-release stabilization on 2026-08-25 updates the experimental Claude Code
+pin to `2.1.245`, qualifies its now-optional `is_error` field against the
+enclosing native result, and requires the repair test command to run standalone
+so a later chained command cannot obscure a green test. A fresh five-subject
+comparison on one apparatus passes both adapter and exact repair outcome 3/3
+for Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent, and Pi, with no
+timeouts. Exact run IDs, record hashes, comparator hash, and the bounded
+interpretation are in `SHARED_ADAPTER_CONTRACT.md`.
+
 The explicit core API/schema review is complete and defers promotion for
-`0.1.0rc2`. The contract's exact-five-subject, live-pin, and closed-field rules
+`0.1.0`. The contract's exact-five-subject, live-pin, and closed-field rules
 do not match Workbench's vendor-neutral, additive public API. The generic
 `capture` and `canon` boundary is already core; the envelope, normalizers,
 pins, model profiles, and workload oracles remain experiment-local. See
@@ -355,11 +359,10 @@ The strict Hermes steadiness result has also been reviewed: no current
 allowed stdout axis would suppress the entire adapter envelope and hide a real
 one-tool/two-tool routing difference. The no-allowance `UNSTABLE` verdict
 therefore stands as execution-evidence nondeterminism, alongside stable exact
-task outcomes. Before a public GitHub release, rerun the repository's existing
-release procedure and
-CI from the final commit, review the developer-preview DeepSeek version pin,
-and update the release conformance record; do not push or tag from this
-experiment alone.
+task outcomes. Before the next public GitHub release, rerun the repository's
+existing release procedure and CI from the final commit, review the
+developer-preview DeepSeek version pin, and update the release conformance
+record; do not push or tag from this experiment alone.
 
 Hermes live evidence collected under the former `0.16.0` pin is historical.
 The current `0.20.5` recut is now complete for write, both guard arms, repair,

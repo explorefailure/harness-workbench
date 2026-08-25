@@ -58,14 +58,13 @@ It is built for two jobs:
   evidence surfaces into one envelope. See
   [Measuring another harness](#measuring-another-harness).
 
-Latest published release: **[`v0.1.0-rc.2`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.2)
-public GitHub prerelease** (package version `0.1.0rc2`), published 2026-08-25
-with wheel and source-distribution assets. It is not published to PyPI.
+Latest published release: **[`v0.1.0`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
+public GitHub release**, published 2026-08-25 with wheel and
+source-distribution assets. It is not published to PyPI.
 
-This tree is the **approved source candidate for final `0.1.0`**. It is not yet
-tagged or published, and has no final-release assets. It carries the verified
-rc2 contents forward without accepted candidate fixes. Zero runtime
-dependencies, Python 3.11+.
+This tree is post-release development for the next version. Changes after the
+`v0.1.0` tag, including current adapter stabilization work, are unreleased.
+Zero runtime dependencies, Python 3.11+.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -309,9 +308,14 @@ passed [CodeQL run
 32895018016](https://github.com/explorefailure/harness-workbench/actions/runs/32895018016),
 and passed Immutable-tag CI in [run
 32895591807](https://github.com/explorefailure/harness-workbench/actions/runs/32895591807).
-Its release-final conformance record is attached to the prerelease. Those
-results prove the rc2 commit and assets only; this final-version commit must
-rerun every gate before `v0.1.0` is created.
+Final `0.1.0`, exact commit
+`773d2b10fa4500ff24e8fdf9ae1a911185ad8f2a`, then passed its own [CI and
+package run](https://github.com/explorefailure/harness-workbench/actions/runs/32898121252),
+[CodeQL run](https://github.com/explorefailure/harness-workbench/actions/runs/32898121190),
+and [post-publication immutable-tag
+check](https://github.com/explorefailure/harness-workbench/actions/runs/32898769529).
+Those results prove the tagged release commit and assets only; unreleased main
+must pass its own gates.
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
@@ -494,7 +498,7 @@ option reference.
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
 | [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
-| [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the approved, **unreleased** final `0.1.0` source candidate; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
+| [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the source candidate that became final `0.1.0`; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,

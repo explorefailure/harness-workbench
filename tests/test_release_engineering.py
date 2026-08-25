@@ -873,19 +873,25 @@ class TestReleaseSurfaces(unittest.TestCase):
         self.assertNotIn("Codex", record)
         self.assertNotIn("release-preparation agent", record)
 
-    def test_final_candidate_publication_status_is_current(self):
+    def test_final_release_publication_status_is_current(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         record = (ROOT / "docs" / "release-conformance-0.1.0.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("public GitHub prerelease", readme)
+        self.assertIn("public GitHub release", readme)
         self.assertIn(
-            "releases/tag/v0.1.0-rc.2",
+            "releases/tag/v0.1.0)",
+            readme,
+        )
+        self.assertIn(
+            "773d2b10fa4500ff24e8fdf9ae1a911185ad8f2a",
             readme,
         )
         self.assertIn("not published to PyPI", readme)
         self.assertNotIn("has not been tagged, released, or made public", readme)
+        self.assertIn("0.1.0` — 2026-08-25", changelog)
+        self.assertIn("first final public GitHub release", changelog)
         self.assertIn("0.1.0rc2` — 2026-08-25", changelog)
         self.assertIn("second public GitHub prerelease", changelog)
         self.assertIn("not published to PyPI", changelog)

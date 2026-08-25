@@ -5,6 +5,20 @@ releases. Python package versions use PEP 440; release-candidate Git tags use
 the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 `v0.1.0-rc.1`).
 
+## Unreleased
+
+- Update the experimental Claude Code subject pin to `2.1.245` and accept an
+  omitted optional `is_error` only when the enclosing native result qualifies
+  it as a structured success or an error string. A wholly status-free result
+  still fails closed.
+- Require repair test commands to run standalone so a later chained command
+  cannot mask native green-test evidence. A fresh same-apparatus comparison
+  passes the adapter and exact repair outcome 3/3 for Claude Code, Codex CLI,
+  DeepSeek Harness, Hermes Agent, and Pi, with no timeouts.
+- Keep the cross-harness envelope, normalizers, pins, model profiles, and
+  workload oracles experiment-local; this stabilization does not promote a
+  new supported API.
+
 ## 0.1.0 — 2026-08-25
 
 This final promotion carries the verified `0.1.0rc2` contents forward without
@@ -148,6 +162,8 @@ release-final conformance record. It is not published to PyPI.
 
 ## Published releases
 
+- [`0.1.0` — 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
+  — first final public GitHub release; not published to PyPI.
 - [`0.1.0rc2` — 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.2)
   — second public GitHub prerelease; not published to PyPI.
 - [`0.1.0rc1` — 2026-08-12](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1)
