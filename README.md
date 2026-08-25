@@ -62,10 +62,10 @@ Latest published release: **[`v0.1.0-rc.1`](https://github.com/explorefailure/ha
 public GitHub prerelease** (package version `0.1.0rc1`), published 2026-08-12
 with wheel and source-distribution assets. It is not published to PyPI.
 
-This tree is **ahead of that prerelease**: it prepares candidate `0.1.0rc2`,
-which has no tag, no release, and no assets. The difference that matters to a
-reader is a new public module, `harness_workbench.capture`, which recipients of
-`v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+.
+This tree is the **approved source candidate for `0.1.0rc2`**. It is not yet
+tagged or published, and has no release assets. The difference that matters to
+a reader is a new public module, `harness_workbench.capture`, which recipients
+of `v0.1.0-rc.1` did not receive. Zero runtime dependencies, Python 3.11+.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
 documentation, and tests are welcome for best-effort review; larger changes
@@ -256,11 +256,12 @@ vendor-neutral, additively evolving public API. The generic boundary already
 promoted is `capture` plus `canon`; see the
 [review](docs/adapter-envelope-promotion-review.md).
 
-The next work is release evidence, not another adapter name:
+The next work is immutable release evidence, not another adapter name:
 
-- rerun the source, installed-artifact, and hosted Linux/macOS gates after the
-  audit remediations land; and
-- keep merge, tag, and release behind explicit owner review.
+- run the complete source and installed-artifact gate on the release-only
+  commit, then require its hosted Linux/macOS and CodeQL checks;
+- create and verify the signed immutable tag; and
+- verify clean installs from the GitHub-downloaded wheel and source archive.
 
 Until those gates close, the adapters are an experimental candidate surface,
 not a supported integration promise.
@@ -301,15 +302,16 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 `harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
-that test set. For candidate `0.1.0rc2`, exact public PR checkpoint
-`f86e41031a4d6a98fbf3d0249d3a7c1416a5adc3` passed the full Linux/macOS matrix
+that test set. For candidate `0.1.0rc2`, exact post-audit checkpoint
+`d1a339fe989b456580bc6b2d8216f2ab66b235e9` passed the full Linux/macOS matrix
 (all eight CPython cells) and the package job in [CI run
-32604245910](https://github.com/explorefailure/harness-workbench/actions/runs/32604245910),
+32815107448](https://github.com/explorefailure/harness-workbench/actions/runs/32815107448),
 and passed [CodeQL run
-32604245892](https://github.com/explorefailure/harness-workbench/actions/runs/32604245892).
-That is preparation evidence for that commit, not release-final evidence, and
-the post-audit candidate must rerun it. The published `v0.1.0-rc.1` separately
-has Immutable-tag CI and a release-final conformance record attached to its
+32815107568](https://github.com/explorefailure/harness-workbench/actions/runs/32815107568).
+That is preparation evidence for that exact pre-freeze commit, not
+release-final evidence; the release-only commit must rerun every gate. The
+published `v0.1.0-rc.1` separately has Immutable-tag CI and a
+release-final conformance record attached to its
 [GitHub prerelease](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0-rc.1).
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
@@ -493,7 +495,7 @@ option reference.
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
 | [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
-| [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md) | the source-bundled pre-release conformance record, covering the **unreleased** `0.1.0rc2` candidate this tree prepares; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) for the published `v0.1.0-rc.1` is attached to that GitHub prerelease |
+| [`docs/release-conformance-0.1.0rc2.md`](docs/release-conformance-0.1.0rc2.md) | the source-bundled pre-release conformance record for the approved, **unreleased** `0.1.0rc2` source candidate; the [release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.1/harness-workbench-v0.1.0-rc.1-release-conformance.md) for the published `v0.1.0-rc.1` is attached to that GitHub prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The
 test suite asserts that every spec field, every record key, the seam table,

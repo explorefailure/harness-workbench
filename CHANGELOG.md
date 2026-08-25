@@ -5,12 +5,7 @@ releases. Python package versions use PEP 440; release-candidate Git tags use
 the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 `v0.1.0-rc.1`).
 
-## 0.1.0rc2 — unreleased
-
-Preparation note: this candidate has no tag, no GitHub release, and no assets.
-Its source is visible in public pull request #9, but nothing below has been
-published as a release. The heading gains a date only at step 1 of
-[`RELEASING.md`](RELEASING.md).
+## 0.1.0rc2 — 2026-08-25
 
 - Update the experimental Hermes subject from `0.16.0` to official stable
   `0.20.5` / `v2026.8.19`. The pin now binds the annotated release tag object,
