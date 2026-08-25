@@ -627,16 +627,16 @@ class CommonTests(unittest.TestCase):
                     sys.executable,
                     "-c",
                     "import subprocess,sys; "
-                    "subprocess.Popen([sys.executable,'-c','import time;time.sleep(.4)'], "
+                    "subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)'], "
                     "start_new_session=True); print('parent',flush=True)",
                 ],
                 cwd=Path(directory),
                 env=os.environ.copy(),
-                timeout=0.05,
-                termination_grace=0.05,
+                timeout=2.0,
+                termination_grace=0.1,
             )
             elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 0.3)
+        self.assertLess(elapsed, 1.5)
         # The old tree escaped this only by burning the whole timeout, and then
         # recorded a timeout for a child that had already exited cleanly. The
         # primitive notices the child is gone and the pipe drained, so it
