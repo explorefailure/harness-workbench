@@ -144,7 +144,12 @@ def _declared_subject_identity(subject: str) -> dict[str, Any]:
     if subject == "deepseek":
         expected["provider"] = pin["provider"]
     if subject == "hermes":
-        expected["source_commit"] = pin["source_commit"]
+        expected.update({
+            "release_tag": pin["release_tag"],
+            "tag_object": pin["tag_object"],
+            "source_commit": pin["source_commit"],
+            "uv_lock_sha256": pin["uv_lock_sha256"],
+        })
     if subject in {"deepseek", "hermes", "pi"}:
         profile_name, profile = _active_model_profile()
         expected.update({

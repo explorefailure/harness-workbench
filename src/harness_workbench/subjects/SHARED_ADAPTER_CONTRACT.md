@@ -20,7 +20,7 @@ Every `cross-harness-adapter-run/v0.1` object contains:
 
 | Field | Required meaning |
 | --- | --- |
-| `subject` | Harness name and version, executable or install digest, declared model, and the strongest available model identity. Hosted model labels are declarations; a local model content digest is stronger. |
+| `subject` | Harness name and version, executable or install digest, declared model, and the strongest available model identity. The source-pinned Hermes subject also binds its annotated release tag object, peeled commit, and dependency-lock digest. Hosted model labels are declarations; a local model content digest is stronger. |
 | `request` | Digest of the exact prompt plus a digest map for every consumed experiment input. |
 | `capabilities` | Explicit booleans or typed values for native events, hook events, native terminal events, tool correlation, result status, and model-identity strength. Unsupported features are not synthesized. |
 | `invocation` | Credential-safe argv, working directory marker, timeout, and credential-source class. |
@@ -90,7 +90,7 @@ can report `isError: false` while its first-party result text ends with
 | Claude Code `2.1.233` | Native `stream-json` | Native `result` event | Correlated `tool_use` / `tool_result` | Hosted model identity is a label, not a content digest. |
 | Codex CLI `0.144.1` | Native `--json` JSONL | Native `turn.completed` | Started/completed item pairs | A valid lifecycle can still contain failed tool attempts or the wrong durable bytes. |
 | DeepSeek Harness `0.1.0-rc.6` | Native persisted JSONL plus process | Native `turn/end` | Correlated `tool/call` / `tool/result`, plus projected bash exit marker | The supported headless stdout contains final text only; the developer-preview session format has no compatibility promise, and `tool/result.isError` is not a child-process exit verdict. |
-| Hermes Agent `0.16.0` | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs, keyed on `(api_request_id, tool_call_id)` | `tool_call_id` alone is NOT unique — it restarts per API request, so correlation needs both fields. Process exit is the only terminal evidence, and ordinary hook failures fail open. |
+| Hermes Agent `0.20.5` (`v2026.8.19`) | Shell hooks plus stdout/stderr | Process exit only | Correlated pre/post hook pairs, keyed on `(api_request_id, tool_call_id)` | The current CLI and hook canary preserve the reviewed surface: `tool_call_id` alone is NOT unique — it restarts per API request, so correlation needs both fields. Process exit is the only terminal evidence, and ordinary hook failures fail open. Fresh workload evidence is still required for this pin. |
 
 Claude documents noninteractive `-p` operation and streamed JSON output, while
 its hooks expose lifecycle and tool boundaries:
@@ -360,8 +360,41 @@ them fail:
   security boundary.
 - No assumption that process exit zero proves the requested task succeeded.
 - No assumption that a durable effect proves the harness finished cleanly.
-- No extraction into Workbench core until Hermes completes the live workload
-  matrix and the remaining containment/redaction edge cases are tested.
+- No extraction into Workbench core until the current-source five-subject
+  comparison, DeepSeek repair repeat, API/schema review, and remaining
+  containment/redaction edge cases are complete.
+
+## Hermes `0.20.5` evidence recut — 2026-08-25 UTC
+
+The current pin has a complete local recut for write, guard, repair, and
+steadiness. These stores are retained experiment evidence, not committed
+release artefacts; the IDs and record digests below make substitution visible.
+Every listed run passes `hwb verify` as `complete` and `conforms: yes`.
+
+| Lane | Run or campaign | SHA-256 | Bounded result |
+| --- | --- | --- | --- |
+| write | `20260825T020350Z-75a556-21fa` | `807b51f2c974af40091770a69d4270177a680fce28c89880b021fd188386c837` | Four attempts: adapter 3/4, exact-write outcome 4/4. One attempt reached the subject timeout after landing the exact effect; its declared retry passed. |
+| guard allow | `20260825T021721Z-8416f2-0bd6` | `e5484853f6c731363ed15ab8dec90c04b77c131056e2e1d85fb9bfa5f41b50fb` | Three first-attempt passes; guard loaded and evaluable, zero denials, exact effect landed, no unexpected files. |
+| guard block | `20260825T022027Z-d0abee-b1c5` | `a37d2371152ad927b8e494f8234eed94bc680a65509b294b07b04a1d01152fc9` | Four attempts: adapter 3/4, outcome envelope 4/4. Every attempt denied `write_file` once, Hermes routed through `terminal`, the effect landed, and `contained` was false. |
+| repair | `20260825T022637Z-400fd4-d189` | `60604f962acb62c2059141c30dfee75bf9f54ead86e9919373d331d63e4b95fc` | Four attempts: adapter and repair outcome 3/4. Each success proved external tests 1 → 0 with red → edit → green tool ordering and changed only `slugger.py`; the failed first draw changed nothing and its retry passed. |
+| steadiness | campaign `20260825T035445Z-4b9434` | `1e786ef092f63b519e965e548d2f8823af607b25951a517405ab95b365f7fa1e` | `UNSTABLE`, no setup error and no allowance. All nine first attempts passed adapter and exact-write outcome, with identical durable bytes; only the three retained stdout axes moved in both baseline comparisons, while harness differences remained empty. |
+
+The steadiness campaign used the documented `hwb steady hermes.json` defaults:
+three unchanged outer repeats and no allowances, while `hermes.json` retained
+its own three samples and bounded retry. Its run records are
+`20260825T035445Z-75a556-f464` (`43121ed22ace1a01d527cd7133f69eaea5124e558e0158eaf874e45608f9b558`),
+`20260825T035619Z-75a556-2eb8` (`94a0cc8eeea8d86c7d76333ae381fd92077c173fe4d3ef93704b849df14943fb`),
+and `20260825T035718Z-75a556-57d4`
+(`e6ce000a6ee5e8146af8a22f5f319ceede8682516399123d02cd359a143d45c0`).
+Execution varied between one and two tool calls, so exact task behavior was
+stable but raw execution evidence was not byte-stable. No stdout allowance is
+declared from this result alone.
+
+Across the four recuts, the gateway reported percentage-point deltas of +16
+rolling, +6 weekly, and +3 monthly. Credential scans found no configured key
+bytes in the sealed stores. Partial contract comparisons parsed the Hermes
+records without a Hermes structural complaint; a current five-subject verdict
+still requires current-source peer records for Claude, Codex, DeepSeek, and Pi.
 
 ## Promotion gate
 
@@ -375,9 +408,12 @@ Promote this shape only after:
    terminal event; and
 5. credential redaction and bounded raw-capture limits are implemented.
 
-Current status: gates 1, 2, 4, and 5 have passing evidence. Final five-subject
-write and repair comparisons both return `contract_passed: true`. Gate 3 is
-complete for Claude and Codex. DeepSeek completed one earlier repair probe but
-did not repeat it in two final-source samples; Hermes produced valid adapter
-evidence on the repair workload but stopped after one read. Promotion remains
-blocked.
+Current status: gates 1, 2, 4, and 5 have passing evidence for the prior
+five-subject matrix. Final five-subject write and repair comparisons both
+returned `contract_passed: true`. Gate 3 is complete for Claude, Codex, Pi,
+and now Hermes at `0.20.5`; DeepSeek completed one earlier repair probe but did
+not repeat it in two final-source samples. The current Hermes recut is
+structurally valid and task-successful, while its no-allowance steadiness
+campaign is honestly `UNSTABLE` on retained stdout bytes. Promotion remains
+blocked on repeatable current-source DeepSeek repair evidence, a current
+five-subject comparison, and the explicit core API/schema review.

@@ -29,12 +29,14 @@ placeholder for a gateway credential. The gateway model is a label the
 service promises to honour rather than a digest, and `identity_strength` in
 the declaration records that weaker identity.
 
-Hermes is the pinned Nous client and therefore makes a remote API call through
-the active gateway profile in the configuration shipped here. It gets a
-temporary `HERMES_HOME`, and only its workload toolsets are enabled. The Hermes
-source checkout defaults
-to `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is installed
-elsewhere. `local-ollama` is a separate, optional local profile: selecting it
+Hermes is pinned to official stable `0.20.5` / `v2026.8.19`, including the
+annotated tag object, peeled source commit, dependency lock, and launcher. It
+therefore makes a remote API call through the active gateway profile in the
+configuration shipped here. It gets a temporary `HERMES_HOME`, and only its
+workload toolsets are enabled. The Hermes source checkout defaults to
+`~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is installed elsewhere
+and put that checkout's matching environment ahead of any older `hermes` on
+`PATH`. `local-ollama` is a separate, optional local profile: selecting it
 routes the content-pinned `gpt-oss:20b` model through Ollama's loopback
 OpenAI-compatible endpoint and uses a non-secret placeholder because that
 endpoint does not authenticate. (`qwen3.5:9b` was the earlier local pin and is
@@ -337,9 +339,21 @@ DeepSeek passes the exact-write workload. Its repair adapter conforms, but two
 final-source samples under the remote `opencode-go` profile did not complete
 the repair, so that active remote profile is not yet a stable repair subject.
 Promotion of the shared adapter contract into
-Workbench core is still blocked on successful repeatable DeepSeek and Hermes
-repair runs, steadiness evidence for the expanded matrix, and an explicit core
-API/schema review. Before a public GitHub release, rerun the repository's
-existing release procedure and CI from the final commit, review the
-developer-preview DeepSeek version pin, and update the release conformance
-record; do not push or tag from this experiment alone.
+Workbench core is still blocked on successful repeatable DeepSeek repair
+evidence, a current-source five-subject comparison, interpretation of the
+strict steadiness result, and an explicit core API/schema review. Before a
+public GitHub release, rerun the repository's existing release procedure and
+CI from the final commit, review the developer-preview DeepSeek version pin,
+and update the release conformance record; do not push or tag from this
+experiment alone.
+
+Hermes live evidence collected under the former `0.16.0` pin is historical.
+The current `0.20.5` recut is now complete for write, both guard arms, repair,
+and steadiness; exact run IDs, record hashes, and bounded verdicts are in
+`SHARED_ADAPTER_CONTRACT.md`. Write and repair produced successful exact
+outcomes, and the guard result reproduced the earlier tool-name containment
+failure: after `write_file` was denied, Hermes reached the same effect through
+`terminal`. The canonical no-allowance steadiness campaign was structurally
+valid and passed all nine exact-write outcomes, but is `UNSTABLE` because its
+retained stdout bytes moved across repeats. Do not add a broad stdout allowance
+or call the raw evidence stable from this result.

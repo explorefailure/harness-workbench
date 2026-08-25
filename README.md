@@ -250,7 +250,10 @@ pretending their native event and interception surfaces are the same.
 
 The next work is promotion evidence, not another adapter name:
 
-- complete a repeatable second workload for DeepSeek and Hermes;
+- complete repeatable current-source repair evidence for DeepSeek;
+- re-cut the current-source peer records needed for a five-subject comparison
+  with Hermes `0.20.5`, and resolve whether its strict stdout movement has a
+  narrow defensible normalization rather than adding a broad allowance;
 - rerun the source, installed-artifact, and hosted Linux/macOS gates after the
   audit remediations land; and
 - keep merge, tag, and release behind explicit owner review.

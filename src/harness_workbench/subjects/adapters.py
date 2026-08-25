@@ -224,6 +224,21 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         commit = _command_text(["git", "-C", str(source_root), "rev-parse", "HEAD"])
         if commit != expected["source_commit"]:
             raise AdapterError("Hermes source commit does not match pin.json")
+        tag_object = _command_text([
+            "git", "-C", str(source_root), "rev-parse",
+            f"{expected['release_tag']}^{{tag}}",
+        ])
+        if tag_object != expected["tag_object"]:
+            raise AdapterError("Hermes release tag object does not match pin.json")
+        tagged_commit = _command_text([
+            "git", "-C", str(source_root), "rev-parse",
+            f"{expected['release_tag']}^{{commit}}",
+        ])
+        if tagged_commit != expected["source_commit"]:
+            raise AdapterError("Hermes release tag does not point to source commit")
+        uv_lock_sha256 = digest_file(source_root / "uv.lock").removeprefix("sha256:")
+        if uv_lock_sha256 != expected["uv_lock_sha256"]:
+            raise AdapterError("Hermes uv.lock digest does not match pin.json")
     elif subject == "deepseek":
         executable = _executable("dsh")
         expected = pins["deepseek_harness"]
@@ -255,7 +270,12 @@ def _verify_identity(subject: str) -> dict[str, Any]:
             else {}
         ),
         **(
-            {"source_commit": expected["source_commit"]}
+            {
+                "release_tag": expected["release_tag"],
+                "tag_object": expected["tag_object"],
+                "source_commit": expected["source_commit"],
+                "uv_lock_sha256": expected["uv_lock_sha256"],
+            }
             if subject == "hermes"
             else {}
         ),

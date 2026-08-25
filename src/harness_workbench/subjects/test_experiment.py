@@ -61,6 +61,105 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    def test_hermes_identity_binds_annotated_tag_commit_lock_and_launcher(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "hermes-agent"
+            source.mkdir()
+            lock = source / "uv.lock"
+            lock.write_text("exact dependency lock\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "init", "-q", str(source)], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "config", "user.name", "HWB Test"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "config", "user.email",
+                    "hwb-test@example.invalid",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "add", "uv.lock"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "commit", "-q", "-m", "fixture"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "tag", "-a", "vfixture",
+                    "-m", "fixture release",
+                ],
+                check=True,
+            )
+            commit = subprocess.check_output(
+                ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+            ).strip()
+            tag_object = subprocess.check_output(
+                ["git", "-C", str(source), "rev-parse", "vfixture^{tag}"],
+                text=True,
+            ).strip()
+            launcher = root / "hermes"
+            launcher.write_text(
+                "#!/bin/sh\nprintf 'Hermes Agent v9.9.9 (fixture)\\n'\n",
+                encoding="utf-8",
+            )
+            launcher.chmod(0o755)
+            pin = {
+                "version": "9.9.9",
+                "release_tag": "vfixture",
+                "tag_object": tag_object,
+                "source_commit": commit,
+                "uv_lock_sha256": digest_file(lock),
+                "launcher_sha256": digest_file(launcher),
+            }
+            with (
+                mock.patch.dict(
+                    os.environ, {"HERMES_AGENT_ROOT": str(source)}, clear=False
+                ),
+                mock.patch.object(adapters, "_pins", return_value={
+                    "hermes_agent": pin
+                }),
+                mock.patch.object(adapters, "_executable", return_value=launcher),
+            ):
+                identity = adapters._verify_identity("hermes")
+
+        self.assertEqual("vfixture", identity["release_tag"])
+        self.assertEqual(tag_object, identity["tag_object"])
+        self.assertEqual(commit, identity["source_commit"])
+        self.assertEqual(pin["uv_lock_sha256"], identity["uv_lock_sha256"])
+
+    def test_hermes_identity_rejects_a_tag_object_substitution(self) -> None:
+        pin = dict(adapters._pins()["hermes_agent"])
+        pin["tag_object"] = "0" * 40
+        with (
+            mock.patch.object(adapters, "_pins", return_value={
+                "hermes_agent": pin
+            }),
+            mock.patch.object(
+                adapters, "_executable", return_value=Path("/fixture/hermes")
+            ),
+            mock.patch.object(
+                adapters,
+                "_command_text",
+                side_effect=[
+                    f"Hermes Agent v{pin['version']} (fixture)",
+                    pin["source_commit"],
+                    "1" * 40,
+                ],
+            ),
+        ):
+            with self.assertRaisesRegex(
+                adapters.AdapterError, "release tag object"
+            ):
+                adapters._verify_identity("hermes")
+
     def test_expected_effect_is_unambiguous(self) -> None:
         self.assertEqual(EXPECTED_CONTENT, b"cross-harness control\n")
         self.assertEqual(len(EXPECTED_CONTENT), 22)

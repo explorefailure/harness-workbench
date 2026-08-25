@@ -12,6 +12,13 @@ Its source is visible in public pull request #9, but nothing below has been
 published as a release. The heading gains a date only at step 1 of
 [`RELEASING.md`](RELEASING.md).
 
+- Update the experimental Hermes subject from `0.16.0` to official stable
+  `0.20.5` / `v2026.8.19`. The pin now binds the annotated release tag object,
+  peeled source commit, `uv.lock` digest, and launcher digest. Fresh write,
+  guard, repair, and steadiness records verify as complete and conforming;
+  exact outcomes succeed, the block guard is bypassed through `terminal`, and
+  strict no-allowance steadiness is `UNSTABLE` only on retained stdout bytes.
+  Live records from the old pin remain historical.
 - **New public module `harness_workbench.capture`.** Bounded subprocess
   execution with per-stream limits, a deadline, process-group termination and
   escalation, and a post-cleanup group-liveness observation; capture envelopes

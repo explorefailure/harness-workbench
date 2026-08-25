@@ -18,9 +18,12 @@
     "npm_integrity": "sha512-brpZfED7ieRa2PQ5tUxMhHrM1pb2CmKFVM/f6yMULBDMicahk+Z2OsHgTwTDnoiZm23Ftu9rQz0NN4pflaoJcg=="
   },
   "hermes_agent": {
-    "version": "0.16.0",
-    "source_commit": "33b1d144590a211100f42aa911fd7f91ba031507",
-    "launcher_sha256": "0057be9722fce11f8a9af62f2042ec543bad1f520c5426efdb4cecb2e9b125be"
+    "version": "0.20.5",
+    "release_tag": "v2026.8.19",
+    "tag_object": "b05e680e63d39d5a8e3ec0f5842a41d1c4209c03",
+    "source_commit": "fcbd1076a93841fa88855acce810e342a5b78101",
+    "uv_lock_sha256": "64a66f8a0ce1d23ea10c16ca89b7104f1828a8f21cf1dd95d7cb74e4bd3efa10",
+    "launcher_sha256": "4e656ecdef40ef0c4eb136f66cf27e935a1137bc36fd079db4e75f8d3a757d84"
   },
   "ollama": {
     "model": "gpt-oss:20b",
