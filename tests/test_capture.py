@@ -439,9 +439,10 @@ class ContainmentTests(unittest.TestCase):
 
 class SidecarTests(unittest.TestCase):
     def test_jsonl_projection_is_derived_only_from_redacted_stored_bytes(self):
-        secret = "auth/token-value"
+        # A fixed synthetic marker, not a credential or user-supplied value.
+        redaction_marker = "auth/token-value"
         variants = (
-            json.dumps({"value": secret}).encode("utf-8") + b"\n",
+            json.dumps({"value": redaction_marker}).encode("utf-8") + b"\n",
             b'{"value":"auth\\/token-value"}\n',
             b'{"value":"\\u0061uth\\u002ftoken-value"}\n',
         )
@@ -454,11 +455,11 @@ class SidecarTests(unittest.TestCase):
                         path,
                         required=True,
                         format_name="jsonl",
-                        redactions=(secret,),
+                        redactions=(redaction_marker,),
                     )
                     serialized = json.dumps(item)
                     stored = base64.b64decode(item["base64"])
-                    self.assertNotIn(secret, serialized)
+                    self.assertNotIn(redaction_marker, serialized)
                     self.assertNotIn(b"auth/token-value", stored)
                     self.assertNotIn(b"auth\\/token-value", stored)
                     retained_strings: list[str] = []
@@ -476,7 +477,7 @@ class SidecarTests(unittest.TestCase):
 
                     collect_strings(json.loads(serialized))
                     for spelling in (
-                        secret,
+                        redaction_marker,
                         r"auth\/token-value",
                         r"\u0061uth\u002ftoken-value",
                     ):
@@ -488,8 +489,12 @@ class SidecarTests(unittest.TestCase):
                     self.assertGreater(item["redaction_count"], 0)
 
     def test_lone_surrogate_credential_is_safe_in_full_jsonl_envelope(self):
-        secret = "credential-\udcff-value"
-        raw = json.dumps({"value": secret}, ensure_ascii=True).encode("ascii") + b"\n"
+        # A fixed synthetic marker, not a credential or user-supplied value.
+        redaction_marker = "credential-\udcff-value"
+        raw = (
+            json.dumps({"value": redaction_marker}, ensure_ascii=True).encode("ascii")
+            + b"\n"
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "evidence.jsonl"
             path.write_bytes(raw)
@@ -497,7 +502,7 @@ class SidecarTests(unittest.TestCase):
                 path,
                 required=True,
                 format_name="jsonl",
-                redactions=(secret,),
+                redactions=(redaction_marker,),
             )
         serialized = json.dumps(item)
         self.assertNotIn("\\udcff", serialized)
