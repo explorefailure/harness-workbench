@@ -429,6 +429,42 @@ Its provider delta was +2 rolling, +1 weekly, and +0 monthly percentage points;
 the diagnostic pre-fix run used +3, +1, and +1. Credential scans found no key
 bytes in either sealed store.
 
+## Current-source five-subject repair comparison — 2026-08-25 UTC
+
+The same-apparatus repair matrix now passes the shared evidence contract.
+Comparison `repair-five-comparison.json` has SHA-256
+`3e30012e17dbf147c3e401c9a549fdf70e30314f0e7624141a2b3bb620c059c6`,
+`contract_passed: true`, and `errors: []`. A fresh comparator invocation over
+the five stores reproduces those exact bytes. All records share one frozen
+13-input map and one capture/canon apparatus key; each record independently
+passes `hwb verify` as complete and conforming.
+
+| Subject | Run | Record SHA-256 | Draws | Adapter | Outcome | Timeouts | Tools per draw |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| Claude | `20260825T044118Z-2355e9-997e` | `4927964b92aa4fbb694b0460edd8ac1b1264b5ccb6220cc0f66a6b46eb9f0486` | 6 | 0/6 | 0/6 | 0 | 6 each |
+| Codex | `20260825T043849Z-e523b9-6eb3` | `79af583aa921dd1ed7a50ea197db58436c8ade8b6f65f4a0a62ce5f589e0f00d` | 3 | 3/3 | 2/3 | 0 | 5, 4, 4 |
+| DeepSeek | `20260825T042714Z-afb1ef-9ad2` | `1259488a3db6b7a51dee07df21856c80f018a58db014184c9198314a2686a5b8` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Hermes | `20260825T044358Z-400fd4-c056` | `8426dd1a145aaebbf6683f2dc1570414c687ba95fd02cb3db959a10a7dfdb25a` | 4 | 3/4 | 3/4 | 1 | 6, 6, 5, 6 |
+| Pi | `20260825T044801Z-c6514d-944b` | `bd8afab3b1e82d953d7a7acdf25d6db6ce3d5230b892896d8970c3b5de129cc6` | 3 | 3/3 | 3/3 | 0 | 5 each |
+
+`contract_passed` is not a claim that every subject repaired successfully. The
+exact isolated Claude `2.1.233` runtime matched the pinned npm integrity and
+executable digest, but every bounded attempt reported tool results without a
+boolean `is_error`. The external oracle observed a repaired file, while the
+normalizer could not establish a valid native lifecycle; the adapter and
+outcome therefore failed closed on all six attempts. The global Claude
+`2.1.241` install was not changed. Codex repaired externally on all three draws,
+but one lacked native passing-command evidence, so its outcome count is 2/3.
+Hermes reached one subject timeout after editing and external green without a
+passing-command event; its declared retry passed. DeepSeek and Pi were fully
+green.
+
+Gateway-backed contributing runs reported +7 rolling, +3 weekly, and +1
+monthly percentage points. Credential scans found no configured key bytes in
+the five stores. This matrix closes the current same-apparatus comparison gate;
+it does not resolve Hermes's strict no-allowance stdout instability or decide
+whether the experiment-local contract should become a Workbench core API.
+
 ## Promotion gate
 
 Promote this shape only after:
@@ -443,10 +479,11 @@ Promote this shape only after:
 
 Current status: gates 1, 2, 4, and 5 have passing evidence for the prior
 five-subject matrix. Final five-subject write and repair comparisons both
-returned `contract_passed: true`. Gate 3 is now complete for all five subjects:
-the post-fix current-source DeepSeek repair recut passed adapter and outcome
-3/3. The current Hermes recut is structurally valid and task-successful, while
-its no-allowance steadiness campaign is honestly `UNSTABLE` on retained stdout
-bytes. Promotion remains blocked on a same-apparatus current-source
-five-subject comparison, interpretation of the strict steadiness result, and
-the explicit core API/schema review.
+returned `contract_passed: true`, and the new same-apparatus current-source
+repair comparison also passes with no contract errors. Gate 3 is now complete
+for all five subjects: the post-fix current-source DeepSeek repair recut passed
+adapter and outcome 3/3. The current Hermes recut is structurally valid and
+task-successful, while its no-allowance steadiness campaign is honestly
+`UNSTABLE` on retained stdout bytes. Promotion remains blocked on
+interpretation of the strict steadiness result and the explicit core API/schema
+review.

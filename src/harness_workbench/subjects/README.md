@@ -339,9 +339,14 @@ Its post-fix current-source repair recut passed adapter and exact repair outcome
 launcher-name defect: the resolved npm entrypoint `bin.js` had been retained
 where the declared invocation requires `dsh`. Exact run IDs, hashes, and the
 rejected pre-fix record are in `SHARED_ADAPTER_CONTRACT.md`.
+The same-apparatus current-source five-subject repair comparison now passes the
+contract with no errors. It deliberately preserves negative subject evidence:
+Claude failed closed on a changed native tool-result shape, Codex passed repair
+outcome 2/3, Hermes passed 3/4 with one recovered timeout, and DeepSeek and Pi
+passed 3/3. Exact run IDs and hashes are in `SHARED_ADAPTER_CONTRACT.md`.
 Promotion of the shared adapter contract into Workbench core is still blocked
-on a same-apparatus current-source five-subject comparison, interpretation of
-the strict steadiness result, and an explicit core API/schema review. Before a
+on interpretation of the strict steadiness result and an explicit core
+API/schema review. Before a
 public GitHub release, rerun the repository's existing release procedure and
 CI from the final commit, review the developer-preview DeepSeek version pin,
 and update the release conformance record; do not push or tag from this

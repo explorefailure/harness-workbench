@@ -24,6 +24,10 @@ published as a release. The heading gains a date only at step 1 of
   `dsh` symlink exposing `bin.js` and keeps comparison strict: `bin.js` remains
   a rejected invocation. A post-fix DeepSeek repair recut passes adapter and
   exact repair outcome 3/3 with correlated native tool and terminal evidence.
+- Complete a same-apparatus current-source five-subject repair comparison. The
+  shared contract passes with no errors while preserving measured negatives:
+  Claude fails closed on a changed native tool-result shape, Codex outcome is
+  2/3, Hermes is 3/4 with one recovered timeout, and DeepSeek and Pi are 3/3.
 - **New public module `harness_workbench.capture`.** Bounded subprocess
   execution with per-stream limits, a deadline, process-group termination and
   escalation, and a post-cleanup group-liveness observation; capture envelopes

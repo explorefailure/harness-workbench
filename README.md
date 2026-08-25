@@ -250,9 +250,9 @@ pretending their native event and interception surfaces are the same.
 
 The next work is promotion evidence, not another adapter name:
 
-- re-cut the current-source peer records needed for a five-subject comparison
-  with Hermes `0.20.5`, and resolve whether its strict stdout movement has a
-  narrow defensible normalization rather than adding a broad allowance;
+- resolve whether Hermes's strict stdout movement has a narrow defensible
+  normalization rather than adding a broad allowance, then perform the
+  explicit adapter API/schema promotion review;
 - rerun the source, installed-artifact, and hosted Linux/macOS gates after the
   audit remediations land; and
 - keep merge, tag, and release behind explicit owner review.
