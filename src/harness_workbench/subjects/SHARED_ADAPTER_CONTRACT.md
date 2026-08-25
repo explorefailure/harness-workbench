@@ -396,6 +396,39 @@ bytes in the sealed stores. Partial contract comparisons parsed the Hermes
 records without a Hermes structural complaint; a current five-subject verdict
 still requires current-source peer records for Claude, Codex, DeepSeek, and Pi.
 
+## DeepSeek current-source repair recut — 2026-08-25 UTC
+
+The first current-source recut proved the repair behavior three times but also
+found an adapter/comparator disagreement. Run
+`20260825T041953Z-afb1ef-44f5`
+(`22be703d541a11f1b55ca7a9e16301ed8878d6c1ada20d7074eb3fdf3203970b`)
+was complete and conforming at the Workbench record layer: all three first
+attempts proved tests 1 → 0, red → edit → green ordering, six correlated native
+persisted tool executions, a completed native terminal, and a change only to
+`slugger.py`. The shared comparator nevertheless rejected every draw with
+`adapter has invalid invocation`. The adapter had resolved the npm `dsh`
+symlink for execution and identity hashing, then exposed its target basename
+`bin.js`; comparison correctly required the declared logical command `dsh`.
+
+The fix keeps executing and hashing the resolved pinned file but normalizes the
+retained workload invocation to its logical subject command. It does not relax
+comparison to accept `bin.js`; a rejection test preserves that boundary.
+Post-fix run `20260825T042714Z-afb1ef-9ad2`
+(`1259488a3db6b7a51dee07df21856c80f018a58db014184c9198314a2686a5b8`)
+passes `hwb verify` as complete and conforming. All three first attempts passed
+both adapter and repair outcome in 32.827, 27.034, and 29.188 seconds, with the
+same test sequence, six correlated tools, completed native terminal, and
+`slugger.py`-only effect. Invocation and capture argv both begin `dsh`; partial
+comparison reports adapter 3/3, outcome 3/3, timed out 0, and no DeepSeek
+structural complaint. The only comparison error is the expected absence of
+current-source Claude, Codex, Hermes, and Pi records.
+
+The accepted recut froze adapter digest
+`ac0d2b14c5cd703e3b805fd27cb84906c20bb212655a090a7374924ce21f38be`.
+Its provider delta was +2 rolling, +1 weekly, and +0 monthly percentage points;
+the diagnostic pre-fix run used +3, +1, and +1. Credential scans found no key
+bytes in either sealed store.
+
 ## Promotion gate
 
 Promote this shape only after:
@@ -410,10 +443,10 @@ Promote this shape only after:
 
 Current status: gates 1, 2, 4, and 5 have passing evidence for the prior
 five-subject matrix. Final five-subject write and repair comparisons both
-returned `contract_passed: true`. Gate 3 is complete for Claude, Codex, Pi,
-and now Hermes at `0.20.5`; DeepSeek completed one earlier repair probe but did
-not repeat it in two final-source samples. The current Hermes recut is
-structurally valid and task-successful, while its no-allowance steadiness
-campaign is honestly `UNSTABLE` on retained stdout bytes. Promotion remains
-blocked on repeatable current-source DeepSeek repair evidence, a current
-five-subject comparison, and the explicit core API/schema review.
+returned `contract_passed: true`. Gate 3 is now complete for all five subjects:
+the post-fix current-source DeepSeek repair recut passed adapter and outcome
+3/3. The current Hermes recut is structurally valid and task-successful, while
+its no-allowance steadiness campaign is honestly `UNSTABLE` on retained stdout
+bytes. Promotion remains blocked on a same-apparatus current-source
+five-subject comparison, interpretation of the strict steadiness result, and
+the explicit core API/schema review.

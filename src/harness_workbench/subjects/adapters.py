@@ -163,7 +163,22 @@ def _command_text(argv: list[str]) -> str:
     return text
 
 
-def _normalized_argv(argv: list[str], root: Path, workspace: Path) -> list[str]:
+def _normalized_argv(
+    argv: list[str],
+    root: Path,
+    workspace: Path,
+    *,
+    executable_name: str | None = None,
+) -> list[str]:
+    """Remove host paths and optionally bind argv[0] to its logical command.
+
+    Subject executables are resolved before launch so their bytes can be
+    identity-pinned. An npm command such as `dsh` may therefore execute a
+    symlink target named `bin.js`. That host-specific target name is not the
+    experiment interface; the logical command is. Workload invocations pass
+    the declared subject command here, while auxiliary test commands retain
+    their ordinary basename.
+    """
     replacements = (
         (str(workspace), "<workspace>"),
         (str(root), "<run-root>"),
@@ -173,7 +188,13 @@ def _normalized_argv(argv: list[str], root: Path, workspace: Path) -> list[str]:
         value = argument
         for raw, replacement in replacements:
             value = value.replace(raw, replacement)
-        normalized.append(Path(value).name if index == 0 else value)
+        normalized.append(
+            executable_name
+            if index == 0 and executable_name is not None
+            else Path(value).name
+            if index == 0
+            else value
+        )
     return normalized
 
 
@@ -2563,7 +2584,12 @@ def capture(
             stdout_limit=stdout_limit,
             stderr_limit=stderr_limit,
             redactions=redactions,
-            argv=_normalized_argv(argv, root, workspace),
+            argv=_normalized_argv(
+                argv,
+                root,
+                workspace,
+                executable_name="dsh" if subject == "deepseek" else subject,
+            ),
         )
         process_capture["limits"]["sidecar_bytes"] = evidence_limit
         process_capture["sidecar"] = sidecar
@@ -2724,7 +2750,14 @@ def capture(
             "apparatus": apparatus,
             "capabilities": _capabilities(subject),
             "invocation": {
-                "argv": _normalized_argv(argv, root, workspace),
+                "argv": _normalized_argv(
+                    argv,
+                    root,
+                    workspace,
+                    executable_name=(
+                        "dsh" if subject == "deepseek" else subject
+                    ),
+                ),
                 "cwd": "<workspace>",
                 "timeout_seconds": timeout,
                 "credential_source": (

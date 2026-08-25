@@ -61,6 +61,38 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    def test_normalized_argv_binds_logical_subject_launcher(self) -> None:
+        root = Path("/fixture/run")
+        workspace = root / "workspace"
+        actual = adapters._normalized_argv(
+            [
+                "/fixture/npm/@deepseek-ai/dsh/lib/bin.js",
+                "--patch",
+                str(root / "dsh_patch.yml"),
+                str(workspace / "repair_task.md"),
+            ],
+            root,
+            workspace,
+            executable_name="dsh",
+        )
+        self.assertEqual(
+            [
+                "dsh",
+                "--patch",
+                "<run-root>/dsh_patch.yml",
+                "<workspace>/repair_task.md",
+            ],
+            actual,
+        )
+
+    def test_normalized_argv_keeps_auxiliary_executable_basename(self) -> None:
+        actual = adapters._normalized_argv(
+            ["/usr/bin/python3.11", "-m", "unittest"],
+            Path("/fixture/run"),
+            Path("/fixture/run/workspace"),
+        )
+        self.assertEqual(["python3.11", "-m", "unittest"], actual)
+
     def test_hermes_identity_binds_annotated_tag_commit_lock_and_launcher(
         self,
     ) -> None:
@@ -4914,6 +4946,18 @@ class ContractComparisonTests(unittest.TestCase):
                     if subject == "pi" else None,
                     expected,
                 )
+
+    def test_deepseek_invocation_rejects_resolved_entrypoint_name(self) -> None:
+        def replace_launcher(subject: str, outer: dict) -> None:
+            if subject != "deepseek":
+                return
+            outer["adapter"]["invocation"]["argv"][0] = "bin.js"
+            outer["adapter"]["capture"]["argv"][0] = "bin.js"
+
+        self.assert_contract_rejected(
+            replace_launcher,
+            "adapter has invalid invocation",
+        )
 
     def test_passing_workspace_cannot_hide_undeclared_or_changed_files(self) -> None:
         extra = {

@@ -333,15 +333,15 @@ confirmation runs.
 
 ## GitHub release readiness
 
-The DeepSeek adapter is ready to include as experiment-local discovery work:
-both final five-subject comparisons pass, all eight records verify, and
-DeepSeek passes the exact-write workload. Its repair adapter conforms, but two
-final-source samples under the remote `opencode-go` profile did not complete
-the repair, so that active remote profile is not yet a stable repair subject.
-Promotion of the shared adapter contract into
-Workbench core is still blocked on successful repeatable DeepSeek repair
-evidence, a current-source five-subject comparison, interpretation of the
-strict steadiness result, and an explicit core API/schema review. Before a
+The DeepSeek adapter is ready to include as experiment-local discovery work.
+Its post-fix current-source repair recut passed adapter and exact repair outcome
+3/3 under the remote `opencode-go` profile, after exposing and fixing a logical
+launcher-name defect: the resolved npm entrypoint `bin.js` had been retained
+where the declared invocation requires `dsh`. Exact run IDs, hashes, and the
+rejected pre-fix record are in `SHARED_ADAPTER_CONTRACT.md`.
+Promotion of the shared adapter contract into Workbench core is still blocked
+on a same-apparatus current-source five-subject comparison, interpretation of
+the strict steadiness result, and an explicit core API/schema review. Before a
 public GitHub release, rerun the repository's existing release procedure and
 CI from the final commit, review the developer-preview DeepSeek version pin,
 and update the release conformance record; do not push or tag from this

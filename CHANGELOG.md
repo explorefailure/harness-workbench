@@ -19,6 +19,11 @@ published as a release. The heading gains a date only at step 1 of
   exact outcomes succeed, the block guard is bypassed through `terminal`, and
   strict no-allowance steadiness is `UNSTABLE` only on retained stdout bytes.
   Live records from the old pin remain historical.
+- Normalize retained subject workload argv to the logical launcher while still
+  executing and digest-verifying the resolved pinned file. This fixes npm's
+  `dsh` symlink exposing `bin.js` and keeps comparison strict: `bin.js` remains
+  a rejected invocation. A post-fix DeepSeek repair recut passes adapter and
+  exact repair outcome 3/3 with correlated native tool and terminal evidence.
 - **New public module `harness_workbench.capture`.** Bounded subprocess
   execution with per-stream limits, a deadline, process-group termination and
   escalation, and a post-cleanup group-liveness observation; capture envelopes
