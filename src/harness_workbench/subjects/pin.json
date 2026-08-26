@@ -1,9 +1,9 @@
 {
   "schema": "cross-harness-pins/v0.1",
   "claude_code": {
-    "version": "2.1.245",
+    "version": "2.1.246",
     "model": "claude-haiku-4-5-20251001",
-    "executable_sha256": "9f7c2260251765a18d0b35198669dacc1912f6e8129a3b01f6b58d93365ff1f1"
+    "executable_sha256": "7b09f01cb76a38e0e3a7c47c5d698d382162a5ff26538fc778683770caf9218b"
   },
   "codex_cli": {
     "version": "0.144.1",

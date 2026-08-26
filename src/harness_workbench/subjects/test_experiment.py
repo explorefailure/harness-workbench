@@ -123,6 +123,25 @@ class CommonTests(unittest.TestCase):
         self.assertFalse(passed)
         self.assertIn("every repair input", detail)
 
+    def test_live_recertification_bridge_binds_current_pin_and_baseline(self) -> None:
+        certification = json.loads(
+            doctor.CERTIFICATION.read_text(encoding="utf-8")
+        )
+        bridge = certification["recertifications"]["claude"]
+        self.assertEqual(
+            certification["subjects"]["claude"]["run_id"],
+            bridge["baseline_run_id"],
+        )
+        self.assertEqual(certification["inputs"]["pin.json"], bridge["pin_sha256"])
+        bridge["normalized_evidence_changed"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "certification.json"
+            path.write_text(json.dumps(certification), encoding="utf-8")
+            with mock.patch.object(doctor, "CERTIFICATION", path):
+                passed, detail = doctor._certification_check("claude")
+        self.assertFalse(passed)
+        self.assertIn("unchanged one-draw bridge", detail)
+
     def test_frozen_replay_digest_detects_normalizer_output_drift(self) -> None:
         fixture = json.loads(
             (doctor.FIXTURE_ROOT / "pi.json").read_text(encoding="utf-8")

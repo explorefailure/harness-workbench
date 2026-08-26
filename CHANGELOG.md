@@ -17,6 +17,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 - Ship five minimized native replay fixtures plus a certification manifest
   binding the current repair inputs and capture/canon apparatus to the reviewed
   five-subject 3/3 comparison.
+- Repin Claude Code to `2.1.246` after a retained one-draw repair
+  recertification matched the prior 3/3 baseline's normalized evidence and
+  exact outcome. Keep that smoke result as a separately bound bridge rather
+  than presenting it as a replacement three-draw matrix.
 - Update the experimental Claude Code subject pin to `2.1.245` and accept an
   omitted optional `is_error` only when the enclosing native result qualifies
   it as a structured success or an error string. A wholly status-free result

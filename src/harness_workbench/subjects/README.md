@@ -149,7 +149,12 @@ Use a one-draw recertification for the subject whose pin or native surface
 changed. If that draw changes normalized evidence or task outcome, recut the
 five frozen repair specs at three draws and compare their sealed stores before
 updating `adapter_certification.json`. A passing one-draw smoke result is not a
-replacement for that cross-subject matrix.
+replacement for that cross-subject matrix. When its normalized evidence and
+task outcome are unchanged, retain it as a recertification bridge: the manifest
+keeps the original 3/3 subject row and separately binds the new version,
+executable and pin digests, one-draw record/report digests, and the unchanged
+semantic comparison digest. The doctor validates both parts before returning
+`ready`.
 
 Pi was excluded while this contract was *derived*, so the shared envelope
 could not simply inherit the shape of the reference integration. That exclusion
