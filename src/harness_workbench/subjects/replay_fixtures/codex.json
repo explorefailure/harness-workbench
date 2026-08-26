@@ -1,0 +1,29 @@
+{
+  "schema": "cross-harness-normalizer-replay/v0.1",
+  "subject": "codex",
+  "workspace": "/workspace",
+  "stdout_events": [
+    {"type": "thread.started", "thread_id": "thread-1"},
+    {"type": "turn.started"},
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item-1",
+        "type": "file_change",
+        "changes": [{"path": "/workspace/shared.txt", "kind": "add"}],
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item-1",
+        "type": "file_change",
+        "changes": [{"path": "/workspace/shared.txt", "kind": "add"}],
+        "status": "completed"
+      }
+    },
+    {"type": "turn.completed"}
+  ],
+  "lifecycle_sha256": "sha256:ef0dca0f3b65870689fbecc97ae2a80929efb242bc49274382936798166dc38d"
+}

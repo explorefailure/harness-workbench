@@ -1,0 +1,28 @@
+{
+  "schema": "cross-harness-normalizer-replay/v0.1",
+  "subject": "claude",
+  "workspace": "/workspace",
+  "stdout_events": [
+    {"type": "system", "subtype": "init"},
+    {
+      "type": "assistant",
+      "message": {"content": [{
+        "type": "tool_use",
+        "id": "call-1",
+        "name": "Write",
+        "input": {"file_path": "/workspace/shared.txt", "content": "cross-harness control\n"}
+      }]}
+    },
+    {
+      "type": "user",
+      "message": {"content": [{
+        "type": "tool_result",
+        "tool_use_id": "call-1",
+        "content": "ok"
+      }]},
+      "tool_use_result": {"filePath": "/workspace/shared.txt", "userModified": false}
+    },
+    {"type": "result", "subtype": "success", "is_error": false}
+  ],
+  "lifecycle_sha256": "sha256:e378371e75b9b4d580de480aec2632dee7e5f3c57b8bff7ef97ab3d1f32d9d5e"
+}

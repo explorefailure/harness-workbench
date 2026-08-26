@@ -1,0 +1,34 @@
+{
+  "schema": "cross-harness-normalizer-replay/v0.1",
+  "subject": "hermes",
+  "workspace": "/workspace",
+  "returncode": 0,
+  "stdout_text": "done\n",
+  "evidence_events": [
+    {
+      "hook_event_name": "pre_tool_call",
+      "tool_name": "write_file",
+      "tool_input": {"path": "/workspace/shared.txt", "content": "cross-harness control\n"},
+      "extra": {"tool_call_id": "call-1", "api_request_id": "s:t:u:api:1", "telemetry_schema_version": "hermes.observer.v1"}
+    },
+    {
+      "hook_event_name": "post_tool_call",
+      "tool_name": "write_file",
+      "tool_input": {"path": "/workspace/shared.txt", "content": "cross-harness control\n"},
+      "extra": {"tool_call_id": "call-1", "api_request_id": "s:t:u:api:1", "telemetry_schema_version": "hermes.observer.v1", "status": "ok"}
+    },
+    {
+      "hook_event_name": "pre_tool_call",
+      "tool_name": "write_file",
+      "tool_input": {"path": "/workspace/shared.txt", "content": "cross-harness control\n"},
+      "extra": {"tool_call_id": "call-1", "api_request_id": "s:t:u:api:2", "telemetry_schema_version": "hermes.observer.v1"}
+    },
+    {
+      "hook_event_name": "post_tool_call",
+      "tool_name": "write_file",
+      "tool_input": {"path": "/workspace/shared.txt", "content": "cross-harness control\n"},
+      "extra": {"tool_call_id": "call-1", "api_request_id": "s:t:u:api:2", "telemetry_schema_version": "hermes.observer.v1", "status": "ok"}
+    }
+  ],
+  "lifecycle_sha256": "sha256:2989253fdb0b363ac70a6eb76dee74153ee667da5e9e5e43aef41b65e20defba"
+}

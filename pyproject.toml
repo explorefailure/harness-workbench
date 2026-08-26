@@ -96,6 +96,7 @@ harness_workbench = [
     # per-run roots (including copied Codex auth) unstageable there too.
     "subjects/.gitignore",
     "subjects/repair_fixture/*.py",
+    "subjects/replay_fixtures/*.json",
 ]
 
 [tool.setuptools.dynamic]

@@ -16,7 +16,9 @@ from unittest import mock
 
 import adapters
 import compare as comparator
+import doctor
 import guard_hook
+import recertify
 import runner as subject_runner
 import usage_probe
 from harness_workbench import capture as capture_module
@@ -91,6 +93,247 @@ class CommonTests(unittest.TestCase):
             ],
             actual,
         )
+    def test_every_frozen_native_fixture_replays_exactly(self) -> None:
+        for subject in doctor.SUBJECTS:
+            with self.subTest(subject=subject):
+                passed, detail = doctor._replay_fixture(subject)
+                self.assertTrue(passed, detail)
+
+    def test_live_certification_binds_every_repair_input_and_apparatus(self) -> None:
+        certification = json.loads(
+            doctor.CERTIFICATION.read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            set(adapters.REPAIR_INPUTS), set(certification["inputs"])
+        )
+        for subject in doctor.SUBJECTS:
+            passed, detail = doctor._certification_check(subject)
+            self.assertTrue(passed, detail)
+
+    def test_live_certification_cannot_pass_with_an_omitted_input(self) -> None:
+        certification = json.loads(
+            doctor.CERTIFICATION.read_text(encoding="utf-8")
+        )
+        certification["inputs"].pop("adapters.py")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "certification.json"
+            path.write_text(json.dumps(certification), encoding="utf-8")
+            with mock.patch.object(doctor, "CERTIFICATION", path):
+                passed, detail = doctor._certification_check("claude")
+        self.assertFalse(passed)
+        self.assertIn("every repair input", detail)
+
+    def test_frozen_replay_digest_detects_normalizer_output_drift(self) -> None:
+        fixture = json.loads(
+            (doctor.FIXTURE_ROOT / "pi.json").read_text(encoding="utf-8")
+        )
+        fixture["lifecycle_sha256"] = "sha256:" + "0" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pi.json").write_text(json.dumps(fixture), encoding="utf-8")
+            with mock.patch.object(doctor, "FIXTURE_ROOT", root):
+                passed, detail = doctor._replay_fixture("pi")
+        self.assertFalse(passed)
+        self.assertIn("digest changed", detail)
+
+    def test_health_status_priority_is_fail_closed(self) -> None:
+        cases = (
+            (False, True, True, True, "pin_drift"),
+            (True, False, True, True, "schema_drift"),
+            (True, True, False, True, "auth_missing"),
+            (True, True, True, False, "live_verification_required"),
+            (True, True, True, True, "ready"),
+        )
+        for identity, schema, auth, certification, expected in cases:
+            with self.subTest(expected=expected), mock.patch.object(
+                doctor, "_identity_check", return_value=(identity, "identity")
+            ), mock.patch.object(
+                doctor, "_replay_fixture", return_value=(schema, "schema")
+            ), mock.patch.object(
+                doctor, "_auth_check", return_value=(auth, "auth")
+            ), mock.patch.object(
+                doctor,
+                "_certification_check",
+                return_value=(certification, "certification"),
+            ):
+                self.assertEqual(
+                    expected, doctor.diagnose_subject("claude")["status"]
+                )
+
+    def test_auth_probe_never_repeats_client_output(self) -> None:
+        observed = Bounded(
+            argv=["client", "auth", "status"],
+            returncode=1,
+            termination_reason=None,
+            stdout=b"account@example.invalid secret-looking-value",
+            stderr=b"private diagnostic",
+            stdout_source_bytes=44,
+            stderr_source_bytes=18,
+            stdout_overflow=False,
+            stderr_overflow=False,
+            group_alive_before_cleanup=False,
+            group_alive_after_cleanup=False,
+        )
+        with mock.patch.object(doctor, "run_bounded", return_value=observed):
+            passed, detail = doctor._bounded_auth_command(["client"])
+        self.assertFalse(passed)
+        self.assertNotIn("account@example.invalid", detail)
+        self.assertNotIn("private diagnostic", detail)
+
+    def test_auth_probe_requires_the_declared_json_boolean(self) -> None:
+        def observed(stdout: bytes) -> Bounded:
+            return Bounded(
+                argv=["client", "auth", "status"],
+                returncode=0,
+                termination_reason=None,
+                stdout=stdout,
+                stderr=b"",
+                stdout_source_bytes=len(stdout),
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        for raw, expected in (
+            (b'{"loggedIn":true}', True),
+            (b'{"loggedIn":false}', False),
+            (b'{"loggedIn":"true"}', False),
+            (b'not-json', False),
+        ):
+            with self.subTest(raw=raw), mock.patch.object(
+                doctor, "run_bounded", return_value=observed(raw)
+            ):
+                passed, _ = doctor._bounded_auth_command(
+                    ["client"], required_json_true="loggedIn"
+                )
+                self.assertIs(expected, passed)
+
+    def test_recertification_plan_is_non_live_and_bounded(self) -> None:
+        plan = recertify.build_plan(("claude", "pi"), "repair", 1)
+        self.assertFalse(plan["live"])
+        self.assertEqual(2, plan["live_subject_runs_planned"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertEqual(2, len(plan["commands"]))
+        with self.assertRaisesRegex(ValueError, "between 1 and 3"):
+            recertify.build_plan(("claude",), "repair", 4)
+
+    def test_live_recertification_retains_each_record_and_report(self) -> None:
+        plan = recertify.build_plan(("claude",), "repair", 1)
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [{"subject": "claude", "status": "ready"}],
+        }
+
+        def fake_run(argv: list[str], **_: object) -> Bounded:
+            destination = Path(argv[argv.index("--record") + 1])
+            destination.write_text(
+                json.dumps({
+                    "schema": "cross-harness-experiment-run/v0.1",
+                    "subject": "claude",
+                    "workload": "repair",
+                    "variant": None,
+                    "verdict": {
+                        "adapter_passed": True,
+                        "outcome_passed": True,
+                    }
+                }),
+                encoding="utf-8",
+            )
+            return Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            doctor, "report", return_value=ready
+        ), mock.patch.object(recertify, "run_bounded", side_effect=fake_run):
+            report, status = recertify.execute(plan, Path(directory))
+            self.assertEqual(0, status)
+            self.assertTrue(report["passed"])
+            self.assertTrue(
+                (Path(directory) / "recertification-report.json").is_file()
+            )
+            self.assertTrue((Path(directory) / "claude-repair-1.json").is_file())
+
+    def test_live_recertification_refuses_a_failed_preflight(self) -> None:
+        plan = recertify.build_plan(("claude",), "repair", 1)
+        failed = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "attention_required",
+            "subjects": [{"subject": "claude", "status": "pin_drift"}],
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            doctor, "report", return_value=failed
+        ), mock.patch.object(recertify, "run_bounded") as run:
+            with self.assertRaisesRegex(ValueError, "blocked by doctor"):
+                recertify.execute(plan, Path(directory))
+        run.assert_not_called()
+
+    def test_live_recertification_stops_after_the_first_failed_draw(self) -> None:
+        plan = recertify.build_plan(("claude", "pi"), "repair", 1)
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in ("claude", "pi")
+            ],
+        }
+
+        def failed_run(argv: list[str], **_: object) -> Bounded:
+            destination = Path(argv[argv.index("--record") + 1])
+            destination.write_text(
+                json.dumps({
+                    "schema": "cross-harness-experiment-run/v0.1",
+                    "subject": "claude",
+                    "workload": "repair",
+                    "variant": None,
+                    "verdict": {
+                        "adapter_passed": True,
+                        "outcome_passed": False,
+                    },
+                }),
+                encoding="utf-8",
+            )
+            return Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            doctor, "report", return_value=ready
+        ), mock.patch.object(
+            recertify, "run_bounded", side_effect=failed_run
+        ) as run:
+            report, status = recertify.execute(plan, Path(directory))
+        self.assertEqual(1, status)
+        self.assertFalse(report["passed"])
+        self.assertEqual(1, run.call_count)
+        self.assertEqual(1, report["live_subject_runs_started"])
 
     def test_normalized_argv_keeps_auxiliary_executable_basename(self) -> None:
         actual = adapters._normalized_argv(
