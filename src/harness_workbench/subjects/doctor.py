@@ -32,6 +32,13 @@ FIXTURE_SCHEMA = "cross-harness-normalizer-replay/v0.1"
 CERTIFICATION_SCHEMA = "cross-harness-live-certification/v0.1"
 CERTIFICATION = adapters.HERE / "adapter_certification.json"
 FIXTURE_ROOT = adapters.HERE / "replay_fixtures"
+PIN_ENTRIES = {
+    "claude": ("claude_code", "executable_sha256"),
+    "codex": ("codex_cli", "executable_sha256"),
+    "deepseek": ("deepseek_harness", "executable_sha256"),
+    "hermes": ("hermes_agent", "launcher_sha256"),
+    "pi": ("pi_coding_agent", "executable_sha256"),
+}
 
 
 def _jsonl(events: list[dict[str, Any]]) -> bytes:
@@ -231,6 +238,42 @@ def _certification_check(subject: str) -> tuple[bool, str]:
             module = getattr(adapters, f"{name}_module")
             if digest_file(module.__file__) != expected:
                 return False, f"certified apparatus changed ({name})"
+        recertifications = certification.get("recertifications", {})
+        if not isinstance(recertifications, dict):
+            return False, "live recertifications are malformed"
+        if not set(recertifications).issubset(subjects):
+            return False, "live recertification names an unknown subject"
+        pins = adapters._pins()
+        for recertified_subject, recertification in recertifications.items():
+            if not isinstance(recertification, dict):
+                return False, "live recertification row is malformed"
+            baseline = subjects[recertified_subject]
+            pin_name, digest_name = PIN_ENTRIES[recertified_subject]
+            pin = pins[pin_name]
+            if (
+                not isinstance(recertification.get("certified_date"), str)
+                or not recertification["certified_date"]
+                or recertification.get("baseline_run_id") != baseline["run_id"]
+                or recertification.get("version") != pin["version"]
+                or recertification.get("executable_sha256")
+                != f"sha256:{pin[digest_name]}"
+                or recertification.get("pin_sha256") != inputs["pin.json"]
+                or not _is_sha256(recertification.get("report_sha256"))
+                or not _is_sha256(recertification.get("record_sha256"))
+                or not _is_sha256(
+                    recertification.get("semantic_evidence_sha256")
+                )
+                or recertification.get("draws") != 1
+                or recertification.get("adapter") != "1/1"
+                or recertification.get("outcome") != "1/1"
+                or recertification.get("timeouts") != 0
+                or recertification.get("normalized_evidence_changed") is not False
+                or recertification.get("task_outcome_changed") is not False
+            ):
+                return False, (
+                    "live recertification does not bind an unchanged one-draw "
+                    f"bridge ({recertified_subject})"
+                )
     except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
         return False, f"live certification cannot be verified: {error}"
     return True, "current repair apparatus matches reviewed live evidence"
