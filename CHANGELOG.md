@@ -7,6 +7,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add a plan-only-by-default `smoke.py` command that composes owner-only local
+  prerequisite loading, hard gateway-usage gates, bounded retained execution,
+  post-run usage deltas, independent receipt validation, exact credential-value
+  absence checks, and offline postflight into one routine live acceptance path.
 - Add a routine offline adapter preflight that reads a bounded owner-only
   gateway credential without following symlinks, activates the configured
   pinned Hermes environment, and runs the all-five doctor without submitting
