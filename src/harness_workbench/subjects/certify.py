@@ -43,13 +43,17 @@ SUBJECTS = ("claude", "codex", "deepseek", "hermes", "pi")
 WORKLOAD = "repair"
 DRAWS = 3
 RETRY_MAX = 2
-NOMINAL_CALLS = len(SUBJECTS) * DRAWS
-MAXIMUM_CALLS = NOMINAL_CALLS * RETRY_MAX
+ROUTE_CANARY_CALLS = 3
+MATRIX_NOMINAL_CALLS = len(SUBJECTS) * DRAWS
+MATRIX_MAXIMUM_CALLS = MATRIX_NOMINAL_CALLS * RETRY_MAX
+NOMINAL_CALLS = ROUTE_CANARY_CALLS + MATRIX_NOMINAL_CALLS
+MAXIMUM_CALLS = ROUTE_CANARY_CALLS + MATRIX_MAXIMUM_CALLS
 DEFAULT_LIMITS = {"rolling": 80, "weekly": 90}
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 MAX_SCAN_FILE_BYTES = 32 * 1024 * 1024
 SOURCE_ROOT = Path(harness_workbench.__file__).resolve().parents[1]
 COMPARATOR = (HERE / "compare.py").resolve()
+ROUTE_CANARY = (HERE / "route_canary.py").resolve()
 CERTIFICATION = (HERE / "adapter_certification.json").resolve()
 GITLEAKS_CONFIG = (HERE / ".gitleaks.toml").resolve()
 SPEC_PATHS = {
@@ -109,8 +113,10 @@ def _validate_spec_document(subject: str, document: object) -> dict[str, Any]:
 def _offline_apparatus(*, require_live_prerequisites: bool) -> dict[str, Any]:
     if tuple(doctor.SUBJECTS) != SUBJECTS:
         raise ValueError("doctor subject set is not the exact five-subject set")
-    if not COMPARATOR.is_file() or not CERTIFICATION.is_file():
-        raise ValueError("certification comparator or promotion target is missing")
+    if not COMPARATOR.is_file() or not ROUTE_CANARY.is_file() or not CERTIFICATION.is_file():
+        raise ValueError(
+            "certification comparator, route canary, or promotion target is missing"
+        )
     gitleaks = shutil.which("gitleaks")
     if not gitleaks and require_live_prerequisites:
         raise ValueError("gitleaks is required before a live certification recut")
@@ -164,6 +170,7 @@ def _offline_apparatus(*, require_live_prerequisites: bool) -> dict[str, Any]:
             Path(path).name: digest_file(path)
             for path in (
                 __file__,
+                ROUTE_CANARY,
                 doctor.__file__,
                 preflight.__file__,
                 usage_probe.__file__,
@@ -191,11 +198,31 @@ def build_plan(
         "workload": WORKLOAD,
         "draws_per_subject": DRAWS,
         "retry_max_attempts_per_draw": RETRY_MAX,
+        "call_breakdown": {
+            "provider_route_canary": {
+                "subjects": ["deepseek", "hermes", "pi"],
+                "nominal": ROUTE_CANARY_CALLS,
+                "maximum": ROUTE_CANARY_CALLS,
+            },
+            "repair_matrix": {
+                "subjects": list(SUBJECTS),
+                "draws_per_subject": DRAWS,
+                "nominal": MATRIX_NOMINAL_CALLS,
+                "maximum": MATRIX_MAXIMUM_CALLS,
+            },
+        },
         "usage_limits": dict(sorted(limits.items())),
         "record_dir_required_for_live": True,
         "apparatus": apparatus,
         "specs": [str(SPEC_PATHS[subject]) for subject in SUBJECTS],
         "commands": {
+            "provider_route_canary": [
+                apparatus["python"],
+                str(ROUTE_CANARY),
+                "--live",
+                "--record-dir",
+                "<fresh-record-dir>/route-canary",
+            ],
             "runs": {
                 subject: [
                     apparatus["python"],
@@ -229,6 +256,7 @@ def build_plan(
         "stages": [
             "offline_prerequisites",
             "usage_gate",
+            "provider_route_canary",
             "five_sealed_workbench_runs",
             "verify_every_sealed_store",
             "exact_five_comparison",
@@ -499,6 +527,8 @@ def execute(
         "model_calls_authorized": MAXIMUM_CALLS,
         "record_dir": str(destination),
         "model_calls_started": 0,
+        "route_canary_calls_started": 0,
+        "matrix_model_calls_started": 0,
         "runs": {},
         "processes": [],
     }
@@ -570,7 +600,88 @@ def execute(
     process_index = 0
     operational_errors: list[str] = []
     run_paths: dict[str, Path] = {}
-    for subject in SUBJECTS:
+    canary_root = destination / "route-canary"
+    canary_argv = [
+        plan["apparatus"]["python"],
+        str(ROUTE_CANARY),
+        "--live",
+        "--record-dir",
+        str(canary_root),
+        "--config",
+        str(config_path.expanduser().resolve()),
+    ]
+    for window, limit in sorted(plan["usage_limits"].items()):
+        canary_argv.extend(["--max", f"{window}={limit}"])
+    if credential_file is not None:
+        canary_argv.extend([
+            "--credential-file",
+            str(credential_file.expanduser().resolve()),
+        ])
+    if hermes_root is not None:
+        canary_argv.extend(["--hermes-root", str(hermes_root.expanduser().resolve())])
+    canary_result, canary_receipt = _run_command(
+        process_root,
+        process_index,
+        "provider-route-canary",
+        canary_argv,
+        cwd=HERE,
+        env=environment,
+        # Three render bounds, three workload-specific network bounds, security
+        # scan, postflight, and cleanup all fit inside this outer ceiling. The
+        # nested command must have time to retain its failure evidence.
+        timeout=1200,
+    )
+    process_index += 1
+    report["processes"].append(canary_receipt)
+    canary_report_path = canary_root / "route-canary-report.json"
+    canary_report: dict[str, Any] | None = None
+    if canary_report_path.is_file():
+        try:
+            loaded_canary = json.loads(canary_report_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_canary, dict):
+                canary_report = loaded_canary
+        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            pass
+    retained_canary_requests = len(list((canary_root / "requests").glob("*.json")))
+    reported_canary_calls = (
+        canary_report.get("model_calls_started")
+        if isinstance(canary_report, dict)
+        else None
+    )
+    if type(reported_canary_calls) is int and 0 <= reported_canary_calls <= ROUTE_CANARY_CALLS:
+        canary_calls_started = max(reported_canary_calls, retained_canary_requests)
+    else:
+        canary_calls_started = retained_canary_requests
+    report["route_canary_calls_started"] = canary_calls_started
+    report["model_calls_started"] = canary_calls_started
+    canary_passed = bool(
+        _process_clean(canary_result)
+        and canary_result.returncode == 0
+        and isinstance(canary_report, dict)
+        and canary_report.get("passed") is True
+        and canary_report.get("model_calls_started") == ROUTE_CANARY_CALLS
+        and set(canary_report.get("routes", {})) == {"deepseek", "hermes", "pi"}
+    )
+    report["route_canary"] = {
+        "store": str(canary_root.relative_to(destination)),
+        "report": (
+            str(canary_report_path.relative_to(destination))
+            if canary_report_path.is_file()
+            else None
+        ),
+        "report_sha256": (
+            digest_file(canary_report_path) if canary_report_path.is_file() else None
+        ),
+        "calls_started": canary_calls_started,
+        "passed": canary_passed,
+        "status": canary_report.get("status") if canary_report else "report_missing",
+    }
+    if not canary_passed:
+        operational_errors.append(
+            "provider-route canary did not prove all three shared gateway routes"
+        )
+
+    for subject in SUBJECTS if not operational_errors else ():
         before = {
             entry.name for entry in runs_root.iterdir() if entry.is_dir()
         }
@@ -605,6 +716,7 @@ def execute(
             except ValueError as error:
                 operational_errors.append(str(error))
                 break
+            report["matrix_model_calls_started"] += attempts
             report["model_calls_started"] += attempts
             report["runs"][subject] = {
                 "run_id": created[0],
@@ -621,6 +733,7 @@ def execute(
                 except ValueError:
                     retained = None
                 if retained is not None:
+                    report["matrix_model_calls_started"] += retained
                     report["model_calls_started"] += retained
                 report.setdefault("unexpected_or_incomplete_stores", []).append({
                     "subject_command": subject,
@@ -794,6 +907,16 @@ def execute(
             "nominal": NOMINAL_CALLS,
             "maximum": MAXIMUM_CALLS,
             "started": report["model_calls_started"],
+            "provider_route_canary": {
+                "nominal": ROUTE_CANARY_CALLS,
+                "maximum": ROUTE_CANARY_CALLS,
+                "started": report["route_canary_calls_started"],
+            },
+            "repair_matrix": {
+                "nominal": MATRIX_NOMINAL_CALLS,
+                "maximum": MATRIX_MAXIMUM_CALLS,
+                "started": report["matrix_model_calls_started"],
+            },
         },
         "inputs": plan["apparatus"]["inputs"],
         "specs": plan["apparatus"]["specs"],
@@ -821,6 +944,7 @@ def execute(
             "result_sha256": comparison_digest,
         },
         "runs": report["runs"],
+        "provider_route_canary": report["route_canary"],
         "records": _record_digests(destination),
         "usage": {
             "before": "usage-before.json",

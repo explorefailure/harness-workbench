@@ -426,15 +426,18 @@ cd subjects
 python3 -m unittest test_experiment.py            # offline; no subject installed
 python3 preflight.py                              # offline; all five must be ready
 python3 smoke.py --workload repair                # offline plan; zero calls authorized
+python3 route_canary.py                           # offline gateway-route plan; zero calls
 python3 certify.py                                # offline 3-draw recut plan; zero calls
 python3 runner.py --subject claude --workload repair
 ```
 
 `certify.py --live --record-dir <new-directory>` is the guarded full repair
-recut. It retains and verifies one sealed three-draw Workbench store for each
-subject, runs the exact-five comparator, records usage and bounded cleanup,
-scans all retained files for credentials, and emits a review candidate. It
-never promotes that candidate into `adapter_certification.json`.
+recut. It first retains three exact-request provider-route canaries for the
+shared DeepSeek/Hermes/Pi gateway and stops before the matrix on any refusal.
+After they pass, it retains and verifies one sealed three-draw Workbench store
+for each subject, runs the exact-five comparator, records usage and bounded
+cleanup, scans all retained files for credentials, and emits a review
+candidate. It never promotes that candidate into `adapter_certification.json`.
 
 The tree is copied out rather than run in place, and that is the point: each
 spec declares its adapter sources in `inputs`, so `freeze` and `receipt`

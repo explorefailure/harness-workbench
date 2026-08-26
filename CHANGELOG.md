@@ -7,9 +7,17 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add a retained, plan-only-by-default `route_canary.py` for the three adapters
+  sharing the configured gateway. It renders each real repair request against
+  loopback with a fake key, replays the exact tool-bearing JSON body only after
+  a fresh usage gate, stops after the first valid stream event, and fails closed
+  on route refusals before the repair matrix can begin. The full certification
+  workflow runs this three-call canary first and retains its usage, bounded
+  cleanup, gitleaks, and exact credential-absence evidence.
 - Add a plan-only-by-default `certify.py` workflow for the exact five-subject,
   three-draw repair recut. One explicit `--live` and a fresh record directory
-  authorize at most 30 subject attempts (15 nominal); the workflow runs
+  authorize at most 33 calls (18 nominal): three non-retrying provider-route
+  canaries plus at most 30 subject attempts (15 nominal). The workflow runs
   offline readiness and usage gates first, produces five sealed Workbench
   stores without changing retry/sample semantics, verifies every store, runs
   the exact-five comparator, retains bounded process and usage evidence, scans
