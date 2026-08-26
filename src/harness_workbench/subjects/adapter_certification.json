@@ -3,7 +3,7 @@
   "certified_date": "2026-08-26",
   "workload": "repair",
   "draws_per_subject": 3,
-  "comparator_sha256": "sha256:7f0e0986362cf8f605e0caa0c20699e50c88d0c6d76f4db2a9cf558a87293e2d",
+  "comparator_sha256": "sha256:457fd56c95d737de1b324fcd88151241becd305628e5e3292a05f345ee2feff6",
   "contract_passed": true,
   "inputs": {
     "adapters.py": "sha256:88ec78e0115c4e1514c913fc2411782c47c932dcb956e677240343160aa396fd",
@@ -26,36 +26,36 @@
   },
   "subjects": {
     "claude": {
-      "run_id": "20260826T041512Z-2355e9-f826",
-      "record_sha256": "sha256:066ae8d291bb441a63c3e4bab51d7485bc681af64c47e511e0edc2bbf5d70f20",
+      "run_id": "20260826T071408Z-2355e9-cbe7",
+      "record_sha256": "sha256:66662c99f097e816e784b0dfafd62311b0317d34e18aa0868e9a9e860cfe09fb",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "codex": {
-      "run_id": "20260826T041607Z-e523b9-7f31",
-      "record_sha256": "sha256:2273619ea1381ebb3677f6fb511e2b6c06c6e1d46fd3eb73c7664b7ef73db349",
+      "run_id": "20260826T071503Z-e523b9-5aa9",
+      "record_sha256": "sha256:18518dd06beec3c72049d121a0b7d3686f9d1761a4b3f88b27b408f1675d3e94",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "deepseek": {
-      "run_id": "20260826T042933Z-afb1ef-1354",
-      "record_sha256": "sha256:1816aa952ed780ffdd709896c392e82e810779b98ac2653c41fa2313d0765daf",
+      "run_id": "20260826T071636Z-afb1ef-939a",
+      "record_sha256": "sha256:d5a4605c5af2deca732bf2bb2c97b1423450d1f768fd30722c37814a2f2f88fe",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "hermes": {
-      "run_id": "20260826T042416Z-400fd4-a629",
-      "record_sha256": "sha256:c108cf7d86065036b891856921ca279fabd2b9d534ce15ca5367ca054a1b90f7",
+      "run_id": "20260826T071836Z-400fd4-bb0d",
+      "record_sha256": "sha256:1aff424e5090942ef7ccc43d03f0b9ec54eeb0dc3c0f7f2243b2692da5638757",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "pi": {
-      "run_id": "20260826T042733Z-c6514d-e53b",
-      "record_sha256": "sha256:bdf6531ab559648111563981ce97ce4e8fe171d88b74257a15c30ea2fb3d3418",
+      "run_id": "20260826T072105Z-c6514d-e262",
+      "record_sha256": "sha256:1b9df4c119f64ba6b0cf4fee1eb950a9ad7ebda0b8840b8623dcf47a0a7d38cb",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
