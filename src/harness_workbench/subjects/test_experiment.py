@@ -18,6 +18,7 @@ import adapters
 import compare as comparator
 import doctor
 import guard_hook
+import preflight
 import recertify
 import runner as subject_runner
 import usage_probe
@@ -63,6 +64,90 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    def test_preflight_loads_owner_only_gateway_key_without_disclosing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credential = root / "gateway.key"
+            credential.write_text("private-test-value\n", encoding="utf-8")
+            credential.chmod(0o600)
+            config = root / "preflight.json"
+            config.write_text(json.dumps({
+                "schema": preflight.SCHEMA,
+                "credential_file": str(credential),
+            }), encoding="utf-8")
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                adapters,
+                "_active_profile",
+                return_value=("opencode-go", {
+                    "api_key_env": "HWB_OPENCODE_KEY",
+                    "api_key_placeholder": None,
+                }),
+            ):
+                summary = preflight.prepare_environment(
+                    ("deepseek",), config_path=config
+                )
+                self.assertEqual(
+                    "private-test-value", os.environ["HWB_OPENCODE_KEY"]
+                )
+        self.assertEqual("owner_only_file", summary["credential_source"])
+        self.assertNotIn("private-test-value", json.dumps(summary))
+
+    def test_preflight_refuses_group_readable_or_multiline_credentials(self) -> None:
+        for mode, value in ((0o640, "value\n"), (0o600, "one\ntwo\n")):
+            with self.subTest(
+                mode=oct(mode), value=value
+            ), tempfile.TemporaryDirectory() as directory:
+                credential = Path(directory) / "gateway.key"
+                credential.write_text(value, encoding="utf-8")
+                credential.chmod(mode)
+                with self.assertRaises(preflight.PreflightError):
+                    preflight._read_private_credential(credential)
+
+    def test_preflight_activates_the_configured_hermes_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = root / ".venv" / "bin" / "hermes"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+            launcher.chmod(0o700)
+            config = root / "preflight.json"
+            config.write_text(json.dumps({
+                "schema": preflight.SCHEMA,
+                "hermes_root": str(root),
+            }), encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ, {"PATH": "/usr/bin"}, clear=True
+                ),
+                mock.patch.object(
+                    adapters,
+                    "_active_profile",
+                    return_value=("local", {"api_key_placeholder": "local"}),
+                ),
+            ):
+                summary = preflight.prepare_environment(
+                    ("hermes",), config_path=config
+                )
+                self.assertEqual(
+                    str(root.resolve()), os.environ["HERMES_AGENT_ROOT"]
+                )
+                self.assertEqual(
+                    str(launcher.parent.resolve()),
+                    os.environ["PATH"].split(os.pathsep)[0],
+                )
+        self.assertEqual(str(root.resolve()), summary["hermes_root"])
+
+    def test_preflight_refuses_a_symlinked_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.key"
+            target.write_text("value\n", encoding="utf-8")
+            target.chmod(0o600)
+            link = root / "gateway.key"
+            link.symlink_to(target)
+            with self.assertRaises(preflight.PreflightError):
+                preflight._read_private_credential(link)
+
     def test_repair_prompt_and_task_require_standalone_test_commands(self) -> None:
         prompt = adapters.WORKLOADS["repair"]["prompt"]
         task = (adapters.HERE / "repair_task.md").read_text(encoding="utf-8")

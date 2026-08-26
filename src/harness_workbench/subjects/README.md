@@ -100,7 +100,34 @@ python3.11 fault_runner.py
 
 ## Adapter operations
 
-Run the doctor before spending a subject call:
+Run the preflight before spending a subject call. It loads the active gateway
+credential from an owner-only file, activates the configured Hermes checkout's
+environment, and then runs the all-five doctor. It submits no prompts:
+
+```sh
+python3.11 preflight.py
+python3.11 preflight.py --json
+python3.11 preflight.py --subject claude
+```
+
+The optional local config defaults to
+`~/.config/hwb/adapter-preflight.json`. It contains paths, never credentials:
+
+```json
+{
+  "schema": "cross-harness-adapter-preflight-config/v0.1",
+  "credential_file": "~/.config/hwb/opencode.key",
+  "hermes_root": "~/.hermes/hermes-agent"
+}
+```
+
+The credential must be a regular UTF-8 file owned by the current user, with no
+group or world permissions, at most 16 KiB, and exactly one non-empty line.
+`HWB_PREFLIGHT_CONFIG`, `--config`, `--credential-file`, and `--hermes-root`
+provide explicit overrides. Existing `HWB_OPENCODE_KEY` and
+`HERMES_AGENT_ROOT` values take precedence over config values.
+
+Run the lower-level doctor directly when the environment is already prepared:
 
 ```sh
 python3.11 doctor.py
@@ -248,7 +275,9 @@ and present only on the `/go/` path. `usage_probe.py` reads it, gates on it, and
 reports the delta across a run:
 
 ```sh
-export HWB_OPENCODE_KEY=$(cat ~/.config/hwb/opencode.key)
+IFS= read -r HWB_OPENCODE_KEY < ~/.config/hwb/opencode.key
+test -n "$HWB_OPENCODE_KEY"
+export HWB_OPENCODE_KEY
 python3.11 usage_probe.py --save before.json --max rolling=80 --max weekly=90
 python3.11 runner.py --subject pi
 python3.11 usage_probe.py --baseline before.json

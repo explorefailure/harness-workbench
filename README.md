@@ -424,6 +424,7 @@ default:
 ```sh
 cd subjects
 python3 -m unittest test_experiment.py            # offline; no subject installed
+python3 preflight.py                              # offline; all five must be ready
 python3 runner.py --subject claude --workload repair
 ```
 

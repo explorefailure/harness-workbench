@@ -7,6 +7,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add a routine offline adapter preflight that reads a bounded owner-only
+  gateway credential without following symlinks, activates the configured
+  pinned Hermes environment, and runs the all-five doctor without submitting
+  prompts or exposing credential contents.
 - Add an experiment-local adapter doctor that submits no prompts and reports
   `ready`, `pin_drift`, `schema_drift`, `auth_missing`, or
   `live_verification_required` from installed identity, local authentication,

@@ -328,6 +328,18 @@ def report(subjects: tuple[str, ...] = SUBJECTS) -> dict[str, Any]:
     }
 
 
+def emit(result: dict[str, Any], *, json_only: bool) -> None:
+    if json_only:
+        print(json.dumps(result, sort_keys=True))
+        return
+    for row in result["subjects"]:
+        print(f"{row['subject']:<9} {row['status']}")
+        for name, check in row["checks"].items():
+            mark = "ok" if check["passed"] else "NO"
+            print(f"  {name:<16} {mark:<2}  {check['detail']}")
+    print("\nNo model calls were made.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -339,15 +351,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     args = parser.parse_args()
     result = report(tuple(args.subject or SUBJECTS))
-    if args.json:
-        print(json.dumps(result, sort_keys=True))
-    else:
-        for row in result["subjects"]:
-            print(f"{row['subject']:<9} {row['status']}")
-            for name, check in row["checks"].items():
-                mark = "ok" if check["passed"] else "NO"
-                print(f"  {name:<16} {mark:<2}  {check['detail']}")
-        print("\nNo model calls were made.")
+    emit(result, json_only=args.json)
     return 0 if result["overall_status"] == "ready" else 1
 
 
