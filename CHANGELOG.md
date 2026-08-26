@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add a retained, plan-only-by-default `review_candidate.py` workflow that
+  independently rehashes a certification candidate and its exact bound source,
+  reruns five sealed-store verifications, the exact-five comparator, complete
+  credential-scan coverage, and gitleaks, then emits a proposed certification
+  document and patch without editing or applying the promotion target.
 - Add a retained, plan-only-by-default `route_canary.py` for the three adapters
   sharing the configured gateway. It renders each real repair request against
   loopback with a fake key, replays the exact tool-bearing JSON body only after
