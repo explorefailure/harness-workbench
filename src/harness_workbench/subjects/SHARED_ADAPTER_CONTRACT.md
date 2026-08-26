@@ -558,6 +558,37 @@ gateway counters moved +18 rolling, +7 weekly, and +4 monthly percentage
 points, including the superseded DeepSeek attempts. Claude and Codex use their
 own authentication.
 
+## Guarded one-command certification recut — 2026-08-26 UTC
+
+The first acceptance execution of the guarded workflow retained ordinary
+negative evidence when the shared gateway returned 403 for every DeepSeek and
+Hermes attempt and one Pi draw missed the repair outcome. Direct bounded probes
+later reproduced each harness request shape successfully without changing the
+adapters or weakening validation, identifying the 403s as a transient route
+failure rather than an apparatus defect.
+
+A fresh `certify.py --live` execution then completed at the nominal 15-call
+path with no retries or timeouts. The canonical comparator output has SHA-256
+`457fd56c95d737de1b324fcd88151241becd305628e5e3292a05f345ee2feff6`,
+`contract_passed: true`, and `errors: []`. All five sealed stores independently
+pass `hwb verify` as complete and conforming.
+
+| Subject | Run | Record SHA-256 | Draws | Adapter | Outcome | Timeouts | Tools per draw |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| Claude | `20260826T071408Z-2355e9-cbe7` | `66662c99f097e816e784b0dfafd62311b0317d34e18aa0868e9a9e860cfe09fb` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Codex | `20260826T071503Z-e523b9-5aa9` | `18518dd06beec3c72049d121a0b7d3686f9d1761a4b3f88b27b408f1675d3e94` | 3 | 3/3 | 3/3 | 0 | 6, 7, 6 |
+| DeepSeek | `20260826T071636Z-afb1ef-939a` | `d5a4605c5af2deca732bf2bb2c97b1423450d1f768fd30722c37814a2f2f88fe` | 3 | 3/3 | 3/3 | 0 | 7, 6, 6 |
+| Hermes | `20260826T071836Z-400fd4-bb0d` | `1aff424e5090942ef7ccc43d03f0b9ec54eeb0dc3c0f7f2243b2692da5638757` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Pi | `20260826T072105Z-c6514d-e262` | `1b9df4c119f64ba6b0cf4fee1eb950a9ad7ebda0b8840b8623dcf47a0a7d38cb` | 3 | 3/3 | 3/3 | 0 | 5 each |
+
+The retained candidate manifest has SHA-256
+`689cd83918ef71506092b2e81a5da410a8aa8361fa2f1df6d7c361813a3a51e7`.
+The exact-value credential scan checked both configured credential values
+against 175 retained files, gitleaks passed, and all 12 bounded process groups
+were clean after execution. Provider counters moved +12 rolling, +5 weekly,
+and +3 monthly percentage points. The workflow did not edit the certification
+manifest; the reviewed comparator and run rows above were promoted separately.
+
 ## Promotion gate
 
 Promote this shape only after:
