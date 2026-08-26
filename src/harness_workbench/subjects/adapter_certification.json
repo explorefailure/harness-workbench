@@ -1,9 +1,9 @@
 {
   "schema": "cross-harness-live-certification/v0.1",
-  "certified_date": "2026-08-25",
+  "certified_date": "2026-08-26",
   "workload": "repair",
   "draws_per_subject": 3,
-  "comparator_sha256": "sha256:57b2f806d71f80eb404f1f5cc32b206bcaf0e635aae96350a4f5dea1e7a44d6d",
+  "comparator_sha256": "sha256:7f0e0986362cf8f605e0caa0c20699e50c88d0c6d76f4db2a9cf558a87293e2d",
   "contract_passed": true,
   "inputs": {
     "adapters.py": "sha256:88ec78e0115c4e1514c913fc2411782c47c932dcb956e677240343160aa396fd",
@@ -17,63 +17,45 @@
     "repair_fixture/test_slugger.py": "sha256:838c4e2f81586723a61f687ec01b0121bace32d0eacce44f85f54ef0f89b8da1",
     "repair_task.md": "sha256:cfb9c794b9cc4935661f39cdaf0a78e8c49991085825bfd0c6417e8be7f7fad3",
     "run_subject.sh": "sha256:fd73e6b1ad2f0d2585c0282d2cb2fca0047a0ea0f0cfdb01fb19e93e836c1568",
-    "runner.py": "sha256:62fb2a95cbdcf08b9e1d5ab288bfc67fc0fa11929c292bc341ce2aea99d3a48f",
+    "runner.py": "sha256:c685361fcb2b4c5a933af247f99a3c8b9645ed0669469239971ade4a2b8b315b",
     "workloads.py": "sha256:d2a46d05eadca1c49c1812c18e2786277c6279663be6cbaad19a306a225462a6"
   },
   "apparatus_modules": {
     "canon": "sha256:ad65d72e676b8b569316b2edc8a46f7df50cbceef39c31f6d9444ad26160de9b",
     "capture": "sha256:9a6e2286b610ea4f268860615c73e2e37ee154c5f509e36281019ee5676a1ddc"
   },
-  "recertifications": {
-    "claude": {
-      "certified_date": "2026-08-25",
-      "baseline_run_id": "20260825T214541Z-2355e9-d21a",
-      "version": "2.1.246",
-      "executable_sha256": "sha256:7b09f01cb76a38e0e3a7c47c5d698d382162a5ff26538fc778683770caf9218b",
-      "pin_sha256": "sha256:6f9e4c4875cfd732e2537893664689039a10248e4ee1110f88b0fdf489204088",
-      "report_sha256": "sha256:ad3e4fb9db578e26b4f964e60d0aa2569410eda0c16b89a470d3812e1ce7b313",
-      "record_sha256": "sha256:58ecebca61622cbadf7b0297553f40b1b102a9a43b0656f76cc40b9a3f306685",
-      "semantic_evidence_sha256": "sha256:2af4f652778ffe8695f99c203362e80dfba265fc78f466821bc914c1f952f65c",
-      "draws": 1,
-      "adapter": "1/1",
-      "outcome": "1/1",
-      "timeouts": 0,
-      "normalized_evidence_changed": false,
-      "task_outcome_changed": false
-    }
-  },
   "subjects": {
     "claude": {
-      "run_id": "20260825T214541Z-2355e9-d21a",
-      "record_sha256": "sha256:8eb27ae1fc4ab703325dfe5fe3c5840ad6e2deb6b0562898632e693ce7688ea8",
+      "run_id": "20260826T041512Z-2355e9-f826",
+      "record_sha256": "sha256:066ae8d291bb441a63c3e4bab51d7485bc681af64c47e511e0edc2bbf5d70f20",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "codex": {
-      "run_id": "20260825T214359Z-e523b9-734d",
-      "record_sha256": "sha256:8357e7ab98e7a5b7fe19fceccc048d9540c352e3be49cdc6c6b6b6e07d1f6809",
+      "run_id": "20260826T041607Z-e523b9-7f31",
+      "record_sha256": "sha256:2273619ea1381ebb3677f6fb511e2b6c06c6e1d46fd3eb73c7664b7ef73db349",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "deepseek": {
-      "run_id": "20260825T214908Z-afb1ef-1bdb",
-      "record_sha256": "sha256:1a5bfef4956a66873d6227aed78c51e726588473b21983b0961ed10588760e14",
+      "run_id": "20260826T042933Z-afb1ef-1354",
+      "record_sha256": "sha256:1816aa952ed780ffdd709896c392e82e810779b98ac2653c41fa2313d0765daf",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "hermes": {
-      "run_id": "20260825T214704Z-400fd4-7fbb",
-      "record_sha256": "sha256:2e0e4b88a092ae991e99094157516044dd7e583e60247f4803fe812e6370018d",
+      "run_id": "20260826T042416Z-400fd4-a629",
+      "record_sha256": "sha256:c108cf7d86065036b891856921ca279fabd2b9d534ce15ca5367ca054a1b90f7",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "pi": {
-      "run_id": "20260825T215058Z-c6514d-e5c1",
-      "record_sha256": "sha256:cc1078cb4d57f93f63443aef9e6815811d6d9610fc87d75b0254d09d9a221b91",
+      "run_id": "20260826T042733Z-c6514d-e53b",
+      "record_sha256": "sha256:bdf6531ab559648111563981ce97ce4e8fe171d88b74257a15c30ea2fb3d3418",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0

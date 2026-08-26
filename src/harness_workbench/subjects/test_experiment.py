@@ -438,7 +438,24 @@ class CommonTests(unittest.TestCase):
         certification = json.loads(
             doctor.CERTIFICATION.read_text(encoding="utf-8")
         )
-        bridge = certification["recertifications"]["claude"]
+        pin = adapters._pins()["claude_code"]
+        bridge = {
+            "certified_date": certification["certified_date"],
+            "baseline_run_id": certification["subjects"]["claude"]["run_id"],
+            "version": pin["version"],
+            "executable_sha256": f"sha256:{pin['executable_sha256']}",
+            "pin_sha256": certification["inputs"]["pin.json"],
+            "report_sha256": "sha256:" + "1" * 64,
+            "record_sha256": "sha256:" + "2" * 64,
+            "semantic_evidence_sha256": "sha256:" + "3" * 64,
+            "draws": 1,
+            "adapter": "1/1",
+            "outcome": "1/1",
+            "timeouts": 0,
+            "normalized_evidence_changed": False,
+            "task_outcome_changed": False,
+        }
+        certification["recertifications"] = {"claude": bridge}
         self.assertEqual(
             certification["subjects"]["claude"]["run_id"],
             bridge["baseline_run_id"],
@@ -548,6 +565,11 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(2, len(plan["commands"]))
         with self.assertRaisesRegex(ValueError, "between 1 and 3"):
             recertify.build_plan(("claude",), "repair", 4)
+
+    def test_hermes_repair_gets_latency_headroom_without_widening_write(self) -> None:
+        self.assertEqual(120, subject_runner.timeout_seconds("hermes", "write"))
+        self.assertEqual(180, subject_runner.timeout_seconds("hermes", "repair"))
+        self.assertEqual(120, subject_runner.timeout_seconds("claude", "repair"))
 
     def test_live_recertification_retains_each_record_and_report(self) -> None:
         plan = recertify.build_plan(("claude",), "repair", 1)
