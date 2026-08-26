@@ -168,7 +168,8 @@ bounded workload now.
 For the full matrix, `certify.py` is also plan-only by default. The plan fixes
 the subject set to exactly Claude, Codex, DeepSeek, Hermes, and Pi; fixes the
 workload to repair; revalidates `sample.n = 3` inside `retry.max = 2`; reports
-15 nominal and 30 maximum subject calls; resolves the interpreter, source
+18 nominal and 33 maximum calls (three provider-route canaries followed by the
+15-call matrix, whose retry ceiling remains 30); resolves the interpreter, source
 root, specs, run store, comparator, and child `PYTHONPATH` to absolute paths;
 and authorizes zero calls:
 
@@ -181,6 +182,26 @@ external executable a requirement for zero-call planning. `--live` fails
 before creating a record directory unless the executable is present, usable,
 and digest-bound into the plan.
 
+The gateway canary is also a standalone plan-only command:
+
+```sh
+python3.11 route_canary.py
+python3.11 route_canary.py --live \
+  --record-dir ../../../measure/canary/provider-routes-YYYY-MM-DD
+```
+
+It is fixed to DeepSeek, Hermes, and Pi because those are the adapters sharing
+the configured OpenAI-compatible gateway route. For each subject, the real
+repair adapter renders its tool-bearing request against a loopback server using
+a fake credential. The exact JSON body is retained and replayed directly to the
+declared gateway with the real credential only in the authorization header. The
+connection closes after the first valid streaming JSON event, before any
+harness receives a response or can execute a tool. Redirects, elapsed time,
+request/response bytes, stream lines, output capture, and cleanup are bounded.
+The network waits reuse the existing repair latency envelopes: 120 seconds for
+DeepSeek and Pi, and Hermes's workload-specific 180 seconds.
+This is operational route evidence, not an adapter or outcome verdict.
+
 After reviewing that plan, the current usage readings, and the default hard
 stops at rolling 80% and weekly 90%, one explicit flag and a directory that
 does not yet exist authorize the retained recut:
@@ -191,7 +212,12 @@ python3.11 certify.py --live \
 ```
 
 Offline environment preparation and the all-five doctor run before the usage
-gate, and no Workbench spec starts unless all of them pass. Each spec runs
+gate, and no provider or Workbench request starts unless all of them pass. The
+retained three-route canary then takes its own fresh usage reading and stops on
+the first HTTP refusal, malformed stream, network failure, or execution-bound
+failure. Its post-canary usage reading is gated again, so reaching a stop line
+during those three calls prevents the matrix too. No Workbench spec starts
+unless all three routes return a valid first stream event. Each spec runs
 unchanged, so `sample(retry(step))` retains every failed or retried attempt in
 its sealed store. The supervisor bounds each whole spec by its subject repair
 timeout times the six-attempt ceiling plus cleanup headroom. Every store that
@@ -199,8 +225,9 @@ appears, including one left by an operational failure, is checked with
 `hwb verify`; a comparator invocation is allowed only after exactly five clean
 stores exist and receives those five paths in the fixed subject order.
 
-The fresh record directory retains `runs/`, bounded command captures under
-`process/`, `usage-before.json`, `usage-after.json`, `comparison.json`, a
+The fresh record directory retains the complete nested `route-canary/` store,
+`runs/`, bounded command captures under `process/`, `usage-before.json`,
+`usage-after.json`, `comparison.json`, a
 redacted `gitleaks-report.json`, `credential-scan.json`, and
 `certification-report.json`. Operational failures stop later model-bearing
 specs but still trigger post-run usage, offline postflight, cleanup accounting,
@@ -218,15 +245,18 @@ tree plus `record.json` and `integrity.json`, and the other retained record
 digests. It is eligible for review only when the comparator passes, every
 subject is adapter/outcome 3/3 with zero timeouts, every sealed store verifies,
 usage and postflight remain readable, both security scans pass, and the
-attempt count stays under 30. The command records the before/after digest of
+total call count stays under 33, with canary and matrix calls reported
+separately. The command records the before/after digest of
 `adapter_certification.json` and never edits it; promotion is a separate human
 review action.
 
 The offline doctor proves local authentication metadata, not that every
-provider route has quota at the instant of a prompt. A native 4xx, independent
-Claude limit, or gateway route refusal remains an ordinary retained negative:
-retry stays bounded, the other specs and exact-five comparison remain
-reviewable, and the candidate is ineligible rather than being made green by a
+provider route has quota at the instant of a prompt. The canary adds a narrow
+live check for the three shared gateway routes and prevents a gateway 4xx from
+spending the 15-call matrix. It cannot prove the independent Claude or Codex
+service will accept its later request, and it cannot predict a route changing
+after the check. Any such failure remains a retained negative: retry stays
+bounded and the candidate becomes ineligible rather than being made green by a
 weaker validator.
 
 Run the lower-level doctor directly when the environment is already prepared:

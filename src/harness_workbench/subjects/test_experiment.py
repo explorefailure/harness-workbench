@@ -13,6 +13,8 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+import urllib.error
+import urllib.request
 
 import adapters
 import certify
@@ -21,6 +23,7 @@ import doctor
 import guard_hook
 import preflight
 import recertify
+import route_canary
 import runner as subject_runner
 import smoke
 import usage_probe
@@ -74,6 +77,27 @@ class CommonTests(unittest.TestCase):
             return certify.build_plan(
                 limits, require_live_prerequisites=True
             )
+
+    @staticmethod
+    def _write_route_canary_fixture(root: Path, *, passed: bool = True) -> None:
+        root.mkdir()
+        (root / "requests").mkdir()
+        for subject in route_canary.SUBJECTS:
+            (root / "requests" / f"{subject}.json").write_text(
+                json.dumps({"model": "fixture", "tools": [{}], "stream": True}),
+                encoding="utf-8",
+            )
+        (root / "route-canary-report.json").write_text(
+            json.dumps({
+                "schema": route_canary.SCHEMA,
+                "passed": passed,
+                "status": "passed" if passed else "operational_failure",
+                "model_calls_started": 3,
+                "routes": {subject: {"passed": passed}
+                           for subject in route_canary.SUBJECTS},
+            }),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _smoke_repair_record(subject: str = "claude") -> dict:
@@ -151,8 +175,10 @@ class CommonTests(unittest.TestCase):
         plan = certify.build_plan(certify.DEFAULT_LIMITS)
         self.assertFalse(plan["live"])
         self.assertEqual(0, plan["model_calls_authorized"])
-        self.assertEqual(15, plan["nominal_model_calls"])
-        self.assertEqual(30, plan["maximum_model_calls"])
+        self.assertEqual(18, plan["nominal_model_calls"])
+        self.assertEqual(33, plan["maximum_model_calls"])
+        self.assertEqual(3, plan["call_breakdown"]["provider_route_canary"]["maximum"])
+        self.assertEqual(30, plan["call_breakdown"]["repair_matrix"]["maximum"])
         self.assertEqual(list(certify.SUBJECTS), plan["subjects"])
         self.assertEqual("repair", plan["workload"])
         self.assertEqual(3, plan["draws_per_subject"])
@@ -170,6 +196,110 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(
             set(adapters.REPAIR_INPUTS), set(plan["apparatus"]["inputs"])
         )
+        self.assertTrue(Path(plan["commands"]["provider_route_canary"][1]).is_absolute())
+
+    def test_route_canary_plan_is_zero_call_exact_three_and_absolute(self) -> None:
+        with mock.patch.object(route_canary.shutil, "which", return_value=None):
+            plan = route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+        self.assertFalse(plan["live"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertEqual(3, plan["nominal_model_calls"])
+        self.assertEqual(3, plan["maximum_model_calls"])
+        self.assertEqual(list(route_canary.SUBJECTS), plan["subjects"])
+        self.assertEqual("gateway", plan["profile"]["kind"])
+        self.assertEqual(
+            {"deepseek": 120, "hermes": 180, "pi": 120},
+            plan["request_bounds"]["network_timeout_seconds"],
+        )
+        self.assertTrue(Path(plan["apparatus"]["python"]).is_absolute())
+        self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
+        self.assertFalse(plan["apparatus"]["gitleaks_available"])
+
+    def test_route_canary_plan_bootstraps_from_an_unrelated_working_directory(
+        self,
+    ) -> None:
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(Path(route_canary.__file__).resolve())],
+                cwd=directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
+
+    def test_route_canary_live_refuses_an_existing_record_directory(self) -> None:
+        with mock.patch.object(
+            route_canary.shutil, "which", return_value=sys.executable
+        ):
+            plan = route_canary.build_plan(
+                route_canary.DEFAULT_LIMITS, require_live_prerequisites=True
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(FileExistsError):
+                route_canary.execute(
+                    plan, Path(directory), config_path=Path("unused.json")
+                )
+
+    def test_route_canary_renderer_selects_exact_tool_request_with_fake_key(self) -> None:
+        _, profile = adapters._active_profile()
+        tool_payload = {
+            "model": profile["models"]["deepseek"],
+            "stream": True,
+            "messages": [{"role": "user", "content": "exact fixture"}],
+            "tools": [{"type": "function", "function": {"name": "read"}}],
+        }
+
+        def fake_capture(*_args: object, **_kwargs: object) -> dict:
+            _, active = adapters._active_profile()
+            headers = {
+                "Authorization": f"Bearer {route_canary.FAKE_KEY}",
+                "Content-Type": "application/json",
+                "User-Agent": "fixture-renderer/1",
+            }
+            auxiliary = urllib.request.Request(
+                active["base_url"] + "/chat/completions",
+                data=json.dumps({"model": tool_payload["model"]}).encode(),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(auxiliary, timeout=2) as response:
+                self.assertEqual(200, response.status)
+            request = urllib.request.Request(
+                active["base_url"] + "/chat/completions",
+                data=json.dumps(tool_payload, separators=(",", ":")).encode(),
+                headers=headers,
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(403, raised.exception.code)
+            return {"capture": {"process_group": {"alive_after_cleanup": False}}}
+
+        with mock.patch.object(adapters, "capture", side_effect=fake_capture):
+            rendered = route_canary._render_request("deepseek", profile)
+        self.assertEqual(tool_payload, rendered["body_json"])
+        self.assertNotIn("authorization", rendered["headers"])
+        self.assertNotIn(route_canary.FAKE_KEY.encode(), rendered["body"])
+        self.assertTrue(rendered["cleanup"]["server_thread_stopped"])
+        self.assertTrue(rendered["cleanup"]["adapter_process_group_clean"])
+
+    def test_route_canary_response_reader_stops_at_first_json_event(self) -> None:
+        source = __import__("io").BytesIO(
+            b": keepalive\n\n"
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+            b"data: {\"must_not_be_read\":true}\n"
+        )
+        raw, event, error = route_canary._response_bytes(source)
+        self.assertIsNone(error)
+        self.assertEqual({"choices": [{"delta": {"content": ""}}]}, event)
+        self.assertNotIn(b"must_not_be_read", raw)
 
     def test_certification_refuses_weakened_retry_or_sample_semantics(self) -> None:
         document = json.loads(
@@ -308,6 +438,200 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(0, report["model_calls_started"])
         run.assert_not_called()
 
+    def test_certification_failed_route_canary_starts_no_matrix_run(self) -> None:
+        plan = self._certification_live_plan({"rolling": 80})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in certify.SUBJECTS
+            ],
+        }
+        reading = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {
+                name: {"percent": value, "resets_at": "T"}
+                for name, value in (("rolling", 2), ("weekly", 3), ("monthly", 4))
+            },
+        }
+        labels: list[str] = []
+
+        def fake_command(
+            _process_root: Path,
+            _index: int,
+            label: str,
+            argv: list[str],
+            **_: object,
+        ) -> tuple[Bounded, dict]:
+            labels.append(label)
+            if label == "provider-route-canary":
+                root = Path(argv[argv.index("--record-dir") + 1])
+                self._write_route_canary_fixture(root, passed=False)
+                returncode = 2
+            else:
+                report_path = Path(argv[argv.index("--report-path") + 1])
+                report_path.write_text("[]\n", encoding="utf-8")
+                returncode = 0
+            result = Bounded(
+                argv=argv,
+                returncode=returncode,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+            return result, {"label": label, "cleanup_passed": True}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {usage_probe.KEY_ENV: "private-certification-value"},
+            clear=False,
+        ), mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", side_effect=(ready, ready)
+        ), mock.patch.object(
+            usage_probe, "snapshot", side_effect=(reading, reading)
+        ), mock.patch.object(
+            certify, "_run_command", side_effect=fake_command
+        ):
+            report, status = certify.execute(
+                plan,
+                Path(directory) / "certification",
+                config_path=Path("unused.json"),
+            )
+        self.assertEqual(2, status)
+        self.assertFalse(report["route_canary"]["passed"])
+        self.assertEqual(0, report["matrix_model_calls_started"])
+        self.assertFalse(any(label.startswith("run-") for label in labels))
+
+    def test_route_canary_stops_after_first_failed_route_and_keeps_post_evidence(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            route_canary.shutil, "which", return_value=sys.executable
+        ):
+            plan = route_canary.build_plan(
+                {"rolling": 80}, require_live_prerequisites=True
+            )
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in route_canary.SUBJECTS
+            ],
+        }
+        reading = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {
+                name: {"percent": value, "resets_at": "T"}
+                for name, value in (("rolling", 2), ("weekly", 3), ("monthly", 4))
+            },
+        }
+        after = json.loads(json.dumps(reading))
+        after["windows"]["rolling"]["percent"] = 80
+        rendered_subjects: list[str] = []
+
+        def render(subject: str, _profile: dict) -> dict:
+            rendered_subjects.append(subject)
+            body = json.dumps({
+                "model": "kimi-k3",
+                "stream": True,
+                "tools": [{"type": "function"}],
+            }).encode()
+            return {
+                "body": body,
+                "body_json": json.loads(body),
+                "headers": {"content-type": "application/json"},
+                "capture_record": {
+                    "capture": {"process_group": {"alive_after_cleanup": False}}
+                },
+                "capture_error": None,
+                "cleanup": {
+                    "server_thread_stopped": True,
+                    "adapter_process_group_clean": True,
+                },
+            }
+
+        receipts = iter((
+            ({"status": 200, "passed": True, "error": None}, b"data: {}\n"),
+            ({"status": 403, "passed": False, "error": "HTTP 403"}, b"denied"),
+        ))
+
+        def fake_process(
+            _root: Path,
+            _index: int,
+            label: str,
+            argv: list[str],
+            **_: object,
+        ) -> tuple[Bounded, dict]:
+            report_path = Path(argv[argv.index("--report-path") + 1])
+            report_path.write_text("[]\n", encoding="utf-8")
+            result = Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+            return result, {"label": label, "cleanup_passed": True}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {usage_probe.KEY_ENV: "private-route-canary-value"},
+            clear=False,
+        ), mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", side_effect=(ready, ready)
+        ), mock.patch.object(
+            usage_probe, "snapshot", side_effect=(reading, after)
+        ), mock.patch.object(
+            route_canary, "_render_request", side_effect=render
+        ), mock.patch.object(
+            route_canary,
+            "_replay_request",
+            side_effect=lambda *_, **__: next(receipts),
+        ), mock.patch.object(
+            certify, "_run_command", side_effect=fake_process
+        ):
+            destination = Path(directory) / "canary"
+            report, status = route_canary.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+            scan = json.loads(
+                (destination / "credential-scan.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(2, status)
+        self.assertEqual(["deepseek", "hermes"], rendered_subjects)
+        self.assertEqual(2, report["model_calls_started"])
+        self.assertIn("after", report["usage"])
+        self.assertFalse(report["usage"]["post_gate"]["passed"])
+        self.assertIn(
+            "post-canary usage reached a stop threshold; the matrix must not start",
+            report["errors"],
+        )
+        self.assertTrue(scan["passed"])
+
     def test_certification_operational_failure_keeps_post_run_evidence(self) -> None:
         plan = self._certification_live_plan({"rolling": 80})
         ready = {
@@ -346,10 +670,23 @@ class CommonTests(unittest.TestCase):
                 group_alive_after_cleanup=False,
             )
 
-        receipts = iter((
-            (bounded(2), {"label": "run-claude", "cleanup_passed": True}),
-            (bounded(0), {"label": "gitleaks", "cleanup_passed": True}),
-        ))
+        labels: list[str] = []
+
+        def fake_command(
+            _process_root: Path,
+            _index: int,
+            label: str,
+            argv: list[str],
+            **_: object,
+        ) -> tuple[Bounded, dict]:
+            labels.append(label)
+            returncode = 0
+            if label == "provider-route-canary":
+                canary_root = Path(argv[argv.index("--record-dir") + 1])
+                self._write_route_canary_fixture(canary_root)
+            elif label == "run-claude":
+                returncode = 2
+            return bounded(returncode), {"label": label, "cleanup_passed": True}
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
             {usage_probe.KEY_ENV: "private-certification-value"},
@@ -361,7 +698,7 @@ class CommonTests(unittest.TestCase):
         ), mock.patch.object(
             usage_probe, "snapshot", side_effect=(before, after)
         ), mock.patch.object(
-            certify, "_run_command", side_effect=lambda *args, **kwargs: next(receipts)
+            certify, "_run_command", side_effect=fake_command
         ):
             destination = Path(directory) / "certification"
             report, status = certify.execute(
@@ -374,6 +711,10 @@ class CommonTests(unittest.TestCase):
             self.assertTrue((destination / "usage-after.json").is_file())
             self.assertTrue((destination / "certification-candidate.json").is_file())
             self.assertTrue((destination / "credential-scan.json").is_file())
+            self.assertEqual(
+                ["provider-route-canary", "run-claude", "gitleaks-retained-evidence"],
+                labels,
+            )
 
     def test_certification_success_emits_a_digest_bound_unpromoted_candidate(
         self,
@@ -437,7 +778,10 @@ class CommonTests(unittest.TestCase):
             **_: object,
         ) -> tuple[Bounded, dict]:
             stdout = b""
-            if label.startswith("run-"):
+            if label == "provider-route-canary":
+                canary_root = Path(argv[argv.index("--record-dir") + 1])
+                self._write_route_canary_fixture(canary_root)
+            elif label.startswith("run-"):
                 subject = label.removeprefix("run-")
                 run_root = Path(argv[argv.index("--root") + 1])
                 run_dir = run_root / f"run-{subject}"
@@ -499,7 +843,9 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertEqual("candidate_ready", report["status"])
         self.assertTrue(candidate["eligible_for_review"])
-        self.assertEqual(15, candidate["calls"]["started"])
+        self.assertEqual(18, candidate["calls"]["started"])
+        self.assertEqual(3, candidate["calls"]["provider_route_canary"]["started"])
+        self.assertEqual(15, candidate["calls"]["repair_matrix"]["started"])
         self.assertEqual(set(certify.SUBJECTS), set(candidate["runs"]))
         self.assertTrue(all(row["verify_passed"] for row in candidate["runs"].values()))
         self.assertIsNotNone(candidate["comparator"]["result_sha256"])
