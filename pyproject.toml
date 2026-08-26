@@ -95,6 +95,9 @@ harness_workbench = [
     # Materialized trees are independent Git workspaces. Keep interrupted
     # per-run roots (including copied Codex auth) unstageable there too.
     "subjects/.gitignore",
+    # The certification workflow must keep its retained-evidence scan usable
+    # after `hwb subjects --into`, outside a source checkout.
+    "subjects/.gitleaks.toml",
     "subjects/repair_fixture/*.py",
     "subjects/replay_fixtures/*.json",
 ]
