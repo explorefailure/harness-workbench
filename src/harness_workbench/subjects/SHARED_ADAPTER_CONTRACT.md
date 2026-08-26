@@ -526,6 +526,38 @@ their own authentication. This result does not promote the experiment-local
 adapter envelope, make a model label content-addressed, resolve Hermes's raw
 stdout steadiness result, or change the known tool-name guard bypass.
 
+## Hermes repair timeout recertification — 2026-08-26 UTC
+
+A retained all-five one-command repair smoke completed Claude, Codex, and
+DeepSeek, then Hermes reached the required red test but exhausted its
+120-second process bound while awaiting the next gateway turn. Process-group
+cleanup passed and Pi was not started, as required by stop-on-first-failure.
+The repair path now gives Hermes 180 seconds while its write workload remains
+bounded at 120 seconds; the recertification supervisor retains its separate
+30-second cleanup margin.
+
+Because `runner.py` is one of the frozen repair inputs, the timeout change was
+recertified with a fresh three-draw, five-subject matrix rather than bridged by
+a one-draw smoke. The canonical comparator output has SHA-256
+`7f0e0986362cf8f605e0caa0c20699e50c88d0c6d76f4db2a9cf558a87293e2d`,
+`contract_passed: true`, and `errors: []`. Each sealed store independently
+passes `hwb verify` as complete and conforming.
+
+| Subject | Run | Record SHA-256 | Draws | Adapter | Outcome | Timeouts | Tools per draw |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| Claude | `20260826T041512Z-2355e9-f826` | `066ae8d291bb441a63c3e4bab51d7485bc681af64c47e511e0edc2bbf5d70f20` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Codex | `20260826T041607Z-e523b9-7f31` | `2273619ea1381ebb3677f6fb511e2b6c06c6e1d46fd3eb73c7664b7ef73db349` | 3 | 3/3 | 3/3 | 0 | 6, 6, 7 |
+| DeepSeek | `20260826T042933Z-afb1ef-1354` | `1816aa952ed780ffdd709896c392e82e810779b98ac2653c41fa2313d0765daf` | 3 | 3/3 | 3/3 | 0 | 6, 7, 6 |
+| Hermes | `20260826T042416Z-400fd4-a629` | `c108cf7d86065036b891856921ca279fabd2b9d534ce15ca5367ca054a1b90f7` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Pi | `20260826T042733Z-c6514d-e53b` | `bdf6531ab559648111563981ce97ce4e8fe171d88b74257a15c30ea2fb3d3418` | 3 | 3/3 | 3/3 | 0 | 5 each |
+
+The first full recut retained one DeepSeek timeout followed by a successful
+retry, so a clean three-attempt DeepSeek store replaced that row in the final
+matrix. Across the evidence-producing full pass and the DeepSeek recut, the
+gateway counters moved +18 rolling, +7 weekly, and +4 monthly percentage
+points, including the superseded DeepSeek attempts. Claude and Codex use their
+own authentication.
+
 ## Promotion gate
 
 Promote this shape only after:

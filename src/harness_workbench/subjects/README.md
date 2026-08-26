@@ -204,8 +204,10 @@ python3.11 recertify.py --subject claude --live \
 ```
 
 The default is one repair draw and the hard maximum is three. Each subprocess
-has the adapter's subject timeout plus a 30-second supervisor margin; stdout,
-stderr, and descendant cleanup remain bounded by the shared capture primitive.
+has the adapter's subject/workload timeout plus a 30-second supervisor margin.
+Hermes repair allows 180 seconds for its multi-turn gateway path while its
+write workload remains at 120 seconds. Stdout, stderr, and descendant cleanup
+remain bounded by the shared capture primitive.
 The record directory must not already contain a report, so a recut cannot
 silently overwrite evidence. A failed draw stops the remaining plan, limiting
 spend after the first non-green result.

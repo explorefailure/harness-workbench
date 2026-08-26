@@ -78,7 +78,7 @@ def execute(plan: dict[str, Any], record_dir: Path) -> tuple[dict[str, Any], int
                 argv,
                 cwd=doctor.adapters.HERE,
                 env=dict(os.environ),
-                timeout=runner.SUBJECT_TIMEOUT_SECONDS[subject] + 30,
+                timeout=runner.timeout_seconds(subject, plan["workload"]) + 30,
                 stdout_limit=4 * 1024 * 1024,
                 stderr_limit=1024 * 1024,
                 termination_grace=3.0,

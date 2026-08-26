@@ -40,6 +40,19 @@ SUBJECT_TIMEOUT_SECONDS = {
     "hermes": 120,
     "pi": 240,
 }
+WORKLOAD_TIMEOUT_OVERRIDES = {
+    # A retained all-five repair smoke reached the required red test and then
+    # spent the rest of the 120-second bound waiting for Hermes's next gateway
+    # turn. Keep the fast write bound unchanged while allowing the multi-turn
+    # repair enough latency headroom to reach its edit and green test.
+    ("hermes", "repair"): 180,
+}
+
+
+def timeout_seconds(subject: str, workload: str) -> int:
+    return WORKLOAD_TIMEOUT_OVERRIDES.get(
+        (subject, workload), SUBJECT_TIMEOUT_SECONDS[subject]
+    )
 
 
 def exit_status(
@@ -155,7 +168,7 @@ def main() -> int:
             args.subject,
             args.workload,
             variant=args.variant,
-            timeout=SUBJECT_TIMEOUT_SECONDS[args.subject],
+            timeout=timeout_seconds(args.subject, args.workload),
         )
     except (adapters.AdapterError, OSError, TypeError, ValueError) as error:
         failure = {

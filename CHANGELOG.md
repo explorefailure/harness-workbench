@@ -11,6 +11,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   prerequisite loading, hard gateway-usage gates, bounded retained execution,
   post-run usage deltas, independent receipt validation, exact credential-value
   absence checks, and offline postflight into one routine live acceptance path.
+- Give Hermes repair runs a workload-specific 180-second bound after a retained
+  all-five smoke reached the required red test but exhausted the former
+  120-second bound while awaiting the next gateway turn. Hermes write remains
+  bounded at 120 seconds. Re-certify the changed 13-input repair apparatus with
+  a passing three-draw matrix across all five adapters.
 - Add a routine offline adapter preflight that reads a bounded owner-only
   gateway credential without following symlinks, activates the configured
   pinned Hermes environment, and runs the all-five doctor without submitting
