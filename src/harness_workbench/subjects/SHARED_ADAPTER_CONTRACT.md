@@ -589,6 +589,38 @@ were clean after execution. Provider counters moved +12 rolling, +5 weekly,
 and +3 monthly percentage points. The workflow did not edit the certification
 manifest; the reviewed comparator and run rows above were promoted separately.
 
+## Route-guarded certification recut — 2026-08-26 UTC
+
+The first end-to-end execution after adding the mandatory shared-provider
+route canary completed at the nominal 18-call path: three bounded canary calls
+followed by the unchanged 15-call repair matrix. DeepSeek, Hermes, and Pi each
+returned an HTTP 200 valid first stream event before any Workbench store was
+started. The canary report has SHA-256
+`ad20ea80c69265def13fa68cb5179e6912eb3d2db2c10a612b6e6a234d4fb7f9`.
+
+The exact-five comparator output has SHA-256
+`57b2f806d71f80eb404f1f5cc32b206bcaf0e635aae96350a4f5dea1e7a44d6d`,
+`contract_passed: true`, and `errors: []`. All five sealed stores independently
+pass `hwb verify` as complete and conforming.
+
+| Subject | Run | Record SHA-256 | Draws | Adapter | Outcome | Timeouts | Tools per draw |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| Claude | `20260826T083727Z-2355e9-a8ce` | `658241bccfa29d445e34b03c88760535a2c9a93a2f501e67e0fbe6ed0142ce5a` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Codex | `20260826T083825Z-e523b9-7d45` | `ad8b9b4ed0c23314b4363231361e2641f46fe57ee8a48baa50c26a412564a2a5` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| DeepSeek | `20260826T084019Z-afb1ef-f931` | `e1760ce65b741610e6a4853ca2ac1f9a1d563e9671871395eb33239789d59d3c` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Hermes | `20260826T084212Z-400fd4-5b81` | `efe5d5a7c092284e82743a8b6d2db51f5f13b346e19a003eb863b79727fc9d99` | 3 | 3/3 | 3/3 | 0 | 6 each |
+| Pi | `20260826T084438Z-c6514d-b8e7` | `573cb58a2bc78ba145d0832497a1c50625cdfd5a4b7fee1ef67bacdeb4957329` | 3 | 3/3 | 3/3 | 0 | 5 each |
+
+The retained candidate manifest has SHA-256
+`b29482070295417aafb8ee05943d7003f64e806c705f2a0e17720a4c5805d221`.
+Independent review reproduced the comparator, reverified every sealed store,
+and matched all 60 candidate-listed record digests. The exact credential scan
+checked both configured values against 183 retained files, gitleaks passed, and
+all 13 bounded process groups were clean after execution. Provider counters
+moved +16 rolling, +7 weekly, and +3 monthly percentage points. The workflow
+left `adapter_certification.json` unchanged; the reviewed rows above were
+promoted only after those checks completed.
+
 ## Promotion gate
 
 Promote this shape only after:
