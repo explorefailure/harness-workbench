@@ -428,6 +428,7 @@ python3 preflight.py                              # offline; all five must be re
 python3 smoke.py --workload repair                # offline plan; zero calls authorized
 python3 route_canary.py                           # offline gateway-route plan; zero calls
 python3 certify.py                                # offline 3-draw recut plan; zero calls
+python3 review_candidate.py --candidate <path>    # offline promotion-review plan; zero calls
 python3 runner.py --subject claude --workload repair
 ```
 
@@ -438,6 +439,13 @@ After they pass, it retains and verifies one sealed three-draw Workbench store
 for each subject, runs the exact-five comparator, records usage and bounded
 cleanup, scans all retained files for credentials, and emits a review
 candidate. It never promotes that candidate into `adapter_certification.json`.
+
+`review_candidate.py` independently rehashes a retained candidate and its
+bound source, checks every retained run and record digest, reruns all five
+`hwb verify` commands and the exact-five comparator, reproduces credential-scan
+coverage, and reruns gitleaks. Its default is a zero-write plan; explicit
+`--review --review-dir <new-directory>` emits a review report, proposed
+certification JSON, and unified patch without editing or applying the target.
 
 The tree is copied out rather than run in place, and that is the point: each
 spec declares its adapter sources in `inputs`, so `freeze` and `receipt`

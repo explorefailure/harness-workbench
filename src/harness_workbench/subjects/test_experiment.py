@@ -23,6 +23,7 @@ import doctor
 import guard_hook
 import preflight
 import recertify
+import review_candidate
 import route_canary
 import runner as subject_runner
 import smoke
@@ -852,6 +853,419 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(scan["passed"])
         self.assertFalse(candidate["promotion"]["performed"])
         self.assertEqual(certification_before, certify.digest_file(certify.CERTIFICATION))
+
+    def test_candidate_review_plan_is_zero_call_absolute_and_unpromoted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            candidate_path = root / "certification-candidate.json"
+            candidate_path.write_text(
+                json.dumps({
+                    "apparatus": {
+                        "source_root": str(certify.SOURCE_ROOT),
+                        "python": {"path": str(Path(sys.executable).resolve())},
+                        "gitleaks": {"path": str(Path(sys.executable).resolve())},
+                    }
+                }),
+                encoding="utf-8",
+            )
+            plan = review_candidate.build_plan(candidate_path)
+            with self.assertRaisesRegex(
+                review_candidate.ReviewError, "outside the retained candidate record"
+            ):
+                review_candidate.execute(plan, root / "review")
+        self.assertFalse(plan["review"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertEqual(0, plan["network_calls_authorized"])
+        self.assertFalse(plan["promotion_authorized"])
+        self.assertEqual(list(certify.SUBJECTS), plan["subjects"])
+        for name in ("candidate", "record_root", "source_root", "target", "python"):
+            self.assertTrue(Path(plan[name]).is_absolute())
+
+    def test_candidate_review_plan_bootstraps_from_unrelated_directory(self) -> None:
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            candidate_path = root / "certification-candidate.json"
+            candidate_path.write_text(
+                json.dumps({
+                    "apparatus": {
+                        "source_root": str(certify.SOURCE_ROOT),
+                        "python": {"path": str(Path(sys.executable).resolve())},
+                        "gitleaks": {"path": str(Path(sys.executable).resolve())},
+                    }
+                }),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(review_candidate.__file__).resolve()),
+                    "--candidate",
+                    str(candidate_path),
+                ],
+                cwd=directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertTrue(Path(plan["source_root"]).is_absolute())
+
+    def test_candidate_review_rejects_weakened_candidate_and_target_shapes(
+        self,
+    ) -> None:
+        candidate = {
+            "schema": certify.CANDIDATE_SCHEMA,
+            "review_status": "candidate",
+            "eligible_for_review": True,
+            "eligibility_errors": [],
+            "workload": "repair",
+            "subjects": list(certify.SUBJECTS),
+            "draws_per_subject": 3,
+            "calls": {
+                "nominal": 18,
+                "maximum": 33,
+                "started": 18,
+                "provider_route_canary": {
+                    "nominal": 3,
+                    "maximum": 3,
+                    "started": 3,
+                },
+                "repair_matrix": {
+                    "nominal": 15,
+                    "maximum": 30,
+                    "started": 15,
+                },
+            },
+            "promotion": {
+                "performed": False,
+                "review_required": True,
+                "target": str(certify.CERTIFICATION),
+                "target_sha256_before": "sha256:before",
+                "target_sha256_after": "sha256:before",
+            },
+        }
+        self.assertEqual([], review_candidate._candidate_shape_errors(candidate))
+        candidate["calls"]["repair_matrix"]["maximum"] = 31
+        self.assertIn(
+            "candidate matrix call accounting is missing",
+            review_candidate._candidate_shape_errors(candidate),
+        )
+        target = json.loads(certify.CERTIFICATION.read_text(encoding="utf-8"))
+        self.assertEqual([], review_candidate._target_errors(target))
+        target["subjects"].pop("pi")
+        self.assertIn(
+            "promotion target subject map is not the exact five",
+            review_candidate._target_errors(target),
+        )
+
+    def test_candidate_review_reproduces_current_certification_bytes(self) -> None:
+        current = json.loads(certify.CERTIFICATION.read_text(encoding="utf-8"))
+        candidate = {
+            "workload": current["workload"],
+            "draws_per_subject": current["draws_per_subject"],
+            "inputs": current["inputs"],
+            "apparatus": {"modules": current["apparatus_modules"]},
+            "comparator": {"result_sha256": current["comparator_sha256"]},
+            "runs": {
+                subject: {
+                    "run_id": row["run_id"],
+                    "record_sha256": row["record_sha256"],
+                }
+                for subject, row in current["subjects"].items()
+            },
+        }
+        comparison = {
+            "contract_passed": True,
+            "subjects": {
+                subject: {
+                    "draws": 3,
+                    "adapter_passed": 3,
+                    "outcome_passed": 3,
+                    "timed_out": 0,
+                }
+                for subject in certify.SUBJECTS
+            },
+        }
+        proposed = review_candidate._proposed_certification(
+            candidate,
+            comparison,
+            {"read_at": current["certified_date"] + "T12:00:00Z"},
+        )
+        self.assertEqual(current, proposed)
+        self.assertEqual(
+            certify.CERTIFICATION.read_bytes(),
+            review_candidate._json_bytes(proposed),
+        )
+
+    def test_candidate_review_requires_full_credential_scan_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "evidence.json").write_text("{}\n", encoding="utf-8")
+            scan_path = root / "credential-scan.json"
+            scan_path.write_text(
+                json.dumps({
+                    "schema": "cross-harness-credential-scan/v0.1",
+                    "credential_values_checked": 2,
+                    "files": ["credential-scan.json", "evidence.json"],
+                    "passed": True,
+                    "errors": [],
+                }),
+                encoding="utf-8",
+            )
+            candidate = {
+                "security": {
+                    "credential_scan": "credential-scan.json",
+                    "gitleaks_passed": True,
+                }
+            }
+            self.assertEqual(
+                [], review_candidate._security_receipt_errors(candidate, root)
+            )
+            (root / "unscanned.json").write_text("{}\n", encoding="utf-8")
+            self.assertIn(
+                "credential scan file coverage does not match retained evidence",
+                review_candidate._security_receipt_errors(candidate, root),
+            )
+
+    def test_candidate_review_reproduces_usage_gate_and_route_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canary_root = root / "route-canary"
+            canary_root.mkdir()
+            routes = {
+                subject: {
+                    "subject": subject,
+                    "receipt": {
+                        "passed": True,
+                        "status": 200,
+                        "error": None,
+                        "connection_closed_after_first_event": True,
+                        "redirects_followed": False,
+                    },
+                    "render_cleanup": {
+                        "adapter_process_group_clean": True,
+                        "server_thread_stopped": True,
+                    },
+                }
+                for subject in ("deepseek", "hermes", "pi")
+            }
+            report_path = canary_root / "route-canary-report.json"
+            report_path.write_text(
+                json.dumps({
+                    "schema": review_candidate.ROUTE_SCHEMA,
+                    "passed": True,
+                    "status": "passed",
+                    "model_calls_started": 3,
+                    "routes": routes,
+                }),
+                encoding="utf-8",
+            )
+            before = {
+                "schema": usage_probe.SCHEMA,
+                "metered": True,
+                "read_at": "2026-08-26T01:00:00Z",
+                "windows": {
+                    "rolling": {"percent": 10},
+                    "weekly": {"percent": 20},
+                    "monthly": {"percent": 30},
+                },
+            }
+            after = json.loads(json.dumps(before))
+            after["read_at"] = "2026-08-26T02:00:00Z"
+            after["windows"]["rolling"]["percent"] = 11
+            (root / "usage-before.json").write_text(
+                json.dumps(before), encoding="utf-8"
+            )
+            (root / "usage-after.json").write_text(
+                json.dumps(after), encoding="utf-8"
+            )
+            candidate = {
+                "provider_route_canary": {
+                    "calls_started": 3,
+                    "passed": True,
+                    "status": "passed",
+                    "store": "route-canary",
+                    "report": "route-canary/route-canary-report.json",
+                    "report_sha256": certify.digest_file(report_path),
+                },
+                "usage": {
+                    "before": "usage-before.json",
+                    "after": "usage-after.json",
+                    "delta": usage_probe.delta(before, after),
+                    "limits": certify.DEFAULT_LIMITS,
+                },
+            }
+            errors, retained_after = review_candidate._canary_usage_errors(
+                candidate, root
+            )
+            self.assertEqual([], errors)
+            self.assertEqual(after, retained_after)
+            candidate["usage"]["limits"] = {"rolling": 100, "weekly": 100}
+            errors, _ = review_candidate._canary_usage_errors(candidate, root)
+            self.assertIn(
+                "candidate usage limits are not the certified stop thresholds",
+                errors,
+            )
+
+    def test_candidate_review_executes_exact_offline_checks_without_mutation(
+        self,
+    ) -> None:
+        current = json.loads(certify.CERTIFICATION.read_text(encoding="utf-8"))
+        comparison = {
+            "schema": review_candidate.COMPARISON_SCHEMA,
+            "contract_passed": True,
+            "errors": [],
+            "subjects": {
+                subject: {
+                    "draws": 3,
+                    "adapter_passed": 3,
+                    "outcome_passed": 3,
+                    "timed_out": 0,
+                }
+                for subject in certify.SUBJECTS
+            },
+        }
+        comparison_bytes = (
+            json.dumps(comparison, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_root = root / "record"
+            runs_root = record_root / "runs"
+            runs_root.mkdir(parents=True)
+            run_paths = {}
+            for subject in certify.SUBJECTS:
+                run_paths[subject] = runs_root / f"run-{subject}"
+                run_paths[subject].mkdir()
+            (record_root / "credential-scan.json").write_text(
+                json.dumps({"files": []}), encoding="utf-8"
+            )
+            target = root / "adapter_certification.json"
+            candidate = {
+                "workload": current["workload"],
+                "draws_per_subject": current["draws_per_subject"],
+                "inputs": current["inputs"],
+                "apparatus": {
+                    "modules": current["apparatus_modules"],
+                    "gitleaks": {"sha256": "sha256:gitleaks"},
+                },
+                "comparator": {
+                    "result_sha256": "sha256:"
+                    + hashlib.sha256(comparison_bytes).hexdigest()
+                },
+                "promotion": {"target_sha256_before": "sha256:prior"},
+                "security": {"credential_scan": "credential-scan.json"},
+                "runs": {
+                    subject: {
+                        "run_id": current["subjects"][subject]["run_id"],
+                        "record_sha256": current["subjects"][subject][
+                            "record_sha256"
+                        ],
+                    }
+                    for subject in certify.SUBJECTS
+                },
+            }
+            target_document = json.loads(json.dumps(current))
+            target_document["comparator_sha256"] = candidate["comparator"][
+                "result_sha256"
+            ]
+            target.write_bytes(review_candidate._json_bytes(target_document))
+            candidate_path = record_root / "certification-candidate.json"
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            plan = {
+                "schema": review_candidate.SCHEMA,
+                "review": False,
+                "model_calls_authorized": 0,
+                "network_calls_authorized": 0,
+                "promotion_authorized": False,
+                "candidate": str(candidate_path),
+                "candidate_sha256": certify.digest_file(candidate_path),
+                "record_root": str(record_root),
+                "source_root": str(certify.SOURCE_ROOT),
+                "target": str(target),
+                "python": sys.executable,
+                "gitleaks": sys.executable,
+                "subjects": list(certify.SUBJECTS),
+            }
+            labels = []
+
+            def bounded(argv: list[str], stdout: bytes = b"") -> Bounded:
+                return Bounded(
+                    argv=argv,
+                    returncode=0,
+                    termination_reason=None,
+                    stdout=stdout,
+                    stderr=b"",
+                    stdout_source_bytes=len(stdout),
+                    stderr_source_bytes=0,
+                    stdout_overflow=False,
+                    stderr_overflow=False,
+                    group_alive_before_cleanup=False,
+                    group_alive_after_cleanup=False,
+                )
+
+            def fake_command(
+                _process_root: Path,
+                _index: int,
+                label: str,
+                argv: list[str],
+                **_: object,
+            ) -> tuple[Bounded, dict]:
+                labels.append(label)
+                stdout = comparison_bytes if label == "compare-exact-five" else b""
+                if label == "gitleaks-replay":
+                    report_path = Path(argv[argv.index("--report-path") + 1])
+                    report_path.write_text("[]\n", encoding="utf-8")
+                return bounded(argv, stdout), {
+                    "label": label,
+                    "cleanup_passed": True,
+                }
+
+            target_before = target.read_bytes()
+            with mock.patch.object(
+                review_candidate, "_candidate_shape_errors", return_value=[]
+            ), mock.patch.object(
+                review_candidate, "_target_errors", return_value=[]
+            ), mock.patch.object(
+                review_candidate, "_digest_errors", return_value=[]
+            ), mock.patch.object(
+                review_candidate, "_run_errors", return_value=([], run_paths)
+            ), mock.patch.object(
+                review_candidate, "_security_receipt_errors", return_value=[]
+            ), mock.patch.object(
+                review_candidate,
+                "_canary_usage_errors",
+                return_value=([], {"read_at": current["certified_date"]}),
+            ), mock.patch.object(
+                certify, "_run_command", side_effect=fake_command
+            ):
+                report, status = review_candidate.execute(
+                    plan, root / "review"
+                )
+            self.assertEqual(target_before, target.read_bytes())
+            self.assertEqual(0, status, report["errors"])
+            self.assertTrue(report["passed"])
+            self.assertEqual(
+                [
+                    *(f"verify-{subject}" for subject in certify.SUBJECTS),
+                    "compare-exact-five",
+                    "gitleaks-replay",
+                ],
+                labels,
+            )
+            self.assertEqual(7, report["cleanup"]["processes_observed"])
+            self.assertTrue((root / "review" / "promotion-review.json").is_file())
+            self.assertTrue(
+                (root / "review" / "adapter-certification.proposed.json").is_file()
+            )
+            self.assertTrue((root / "review" / "adapter-certification.patch").is_file())
 
     def test_live_smoke_receipt_checks_order_effect_digest_and_credential(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

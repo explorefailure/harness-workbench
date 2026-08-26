@@ -250,6 +250,47 @@ separately. The command records the before/after digest of
 `adapter_certification.json` and never edits it; promotion is a separate human
 review action.
 
+Review a retained candidate with `review_candidate.py`. Like the live workflow,
+it is plan-only by default, but the plan authorizes zero model calls, zero
+network calls, and no promotion:
+
+```sh
+python3.11 review_candidate.py \
+  --candidate ../../../measure/certification/five-repair-YYYY-MM-DD/certification-candidate.json
+```
+
+One explicit flag and a directory that does not yet exist authorize the
+offline checks and retained review evidence:
+
+```sh
+python3.11 review_candidate.py \
+  --candidate ../../../measure/certification/five-repair-YYYY-MM-DD/certification-candidate.json \
+  --review \
+  --review-dir ../../../measure/review/five-repair-YYYY-MM-DD
+```
+
+The reviewer independently reproduces the candidate schema and call bounds,
+the exact input, spec, apparatus, workflow, comparator, run-store, and retained
+record digests, the three-route canary and usage evidence, and complete
+credential-scan coverage. It then runs five bounded `hwb verify` processes in
+the fixed subject order, the exact-five comparator, and gitleaks. Every process
+capture and cleanup receipt is retained. A changed, missing, oversized,
+non-regular, or unbound file fails closed.
+
+The fresh review directory receives `promotion-review.json`,
+`comparison-replayed.json`, `gitleaks-replayed.json`, bounded captures under
+`process/`, `adapter-certification.proposed.json`, and
+`adapter-certification.patch`. The proposed document and patch are emitted only
+after every check passes. They are review artifacts: the command never edits or
+applies `adapter_certification.json`, and promotion still requires a separate
+human review and pull request.
+
+For a cold review after the checkout has advanced, materialize the exact source
+tree and pre-promotion certification manifest bound by the candidate, then pass
+their resolved locations with `--source-root` and `--target`. These options do
+not relax digest validation; they let the reviewer inspect historical bytes
+without depending on its current working directory.
+
 The offline doctor proves local authentication metadata, not that every
 provider route has quota at the instant of a prompt. The canary adds a narrow
 live check for the three shared gateway routes and prevents a gateway 4xx from

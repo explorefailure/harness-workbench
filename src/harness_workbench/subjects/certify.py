@@ -54,6 +54,7 @@ MAX_SCAN_FILE_BYTES = 32 * 1024 * 1024
 SOURCE_ROOT = Path(harness_workbench.__file__).resolve().parents[1]
 COMPARATOR = (HERE / "compare.py").resolve()
 ROUTE_CANARY = (HERE / "route_canary.py").resolve()
+REVIEW_CANDIDATE = (HERE / "review_candidate.py").resolve()
 CERTIFICATION = (HERE / "adapter_certification.json").resolve()
 GITLEAKS_CONFIG = (HERE / ".gitleaks.toml").resolve()
 SPEC_PATHS = {
@@ -171,6 +172,7 @@ def _offline_apparatus(*, require_live_prerequisites: bool) -> dict[str, Any]:
             for path in (
                 __file__,
                 ROUTE_CANARY,
+                REVIEW_CANDIDATE,
                 doctor.__file__,
                 preflight.__file__,
                 usage_probe.__file__,
