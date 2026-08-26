@@ -127,6 +127,44 @@ group or world permissions, at most 16 KiB, and exactly one non-empty line.
 provide explicit overrides. Existing `HWB_OPENCODE_KEY` and
 `HERMES_AGENT_ROOT` values take precedence over config values.
 
+For a routine live acceptance run, `smoke.py` composes that preparation with
+the usage gate, retained one-draw execution, post-run usage reading, independent
+receipt validation, exact credential-value absence scan, and offline
+postflight. It is plan-only by default and reads neither the credential nor the
+gateway usage endpoint:
+
+```sh
+python3.11 smoke.py --workload repair
+```
+
+After reviewing the five-call plan, one explicit flag and a brand-new record
+directory authorize the campaign:
+
+```sh
+python3.11 smoke.py --workload repair --live \
+  --record-dir ../../../measure/smoke/all-five-repair-YYYY-MM-DD
+```
+
+The default hard gates refuse when the gateway's rolling window reaches 80%
+or its weekly window reaches 90%. `--max rolling=PCT` and
+`--max weekly=PCT` may lower or explicitly change those lines; omitted defaults
+remain in force. `--subject` is repeatable, `--draws` is bounded by the same
+hard maximum of three as `recertify.py`, and repeated subjects are refused so a
+mistyped plan cannot silently duplicate spend.
+
+The directory must not already exist. `smoke-report.json`, `usage-before.json`,
+and `usage-after.json` are created owner-only; subject records and the lower
+level `recertification-report.json` are retained beside them. The smoke passes
+only when every planned result is retained and digest-bound, each workspace
+manifest proves the one allowed effect, process cleanup is clean, repair runs
+prove red → edit → green, the prepared credential value is absent from every
+retained JSON file, and the postflight remains `ready`. An unreadable usage
+counter is a refusal, never permission to spend.
+
+This is an operational smoke, not a replacement for a three-draw certification
+matrix. Use it to prove that the currently prepared adapters can execute a
+bounded workload now.
+
 Run the lower-level doctor directly when the environment is already prepared:
 
 ```sh

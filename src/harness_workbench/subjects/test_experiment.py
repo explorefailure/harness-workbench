@@ -21,6 +21,7 @@ import guard_hook
 import preflight
 import recertify
 import runner as subject_runner
+import smoke
 import usage_probe
 from harness_workbench import capture as capture_module
 from harness_workbench.capture import (
@@ -64,6 +65,231 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    @staticmethod
+    def _smoke_repair_record(subject: str = "claude") -> dict:
+        before = [
+            {"path": "slugger.py", "sha256": "before", "size": 10, "mode": 420},
+            {"path": "test_slugger.py", "sha256": "tests", "size": 20, "mode": 420},
+        ]
+        after = [
+            {"path": "slugger.py", "sha256": "after", "size": 12, "mode": 420},
+            {"path": "test_slugger.py", "sha256": "tests", "size": 20, "mode": 420},
+        ]
+
+        def process(returncode: int) -> dict:
+            return {
+                "returncode": returncode,
+                "timed_out": False,
+                "termination_reason": None,
+                "process_group": {"alive_after_cleanup": False},
+            }
+
+        return {
+            "schema": "cross-harness-experiment-run/v0.1",
+            "subject": subject,
+            "workload": "repair",
+            "variant": None,
+            "verdict": {
+                "adapter_passed": True,
+                "outcome_passed": True,
+                "interrupted": False,
+                "status": 0,
+            },
+            "adapter": {
+                "verdict": {"passed": True, "errors": []},
+                "capture": process(0),
+                "outcome": {
+                    "passed": True,
+                    "errors": [],
+                    "external_tests": {
+                        "initial_returncode": 1,
+                        "final_returncode": 0,
+                    },
+                    "subject_sequence": {
+                        "failed_command_index": 2,
+                        "mutation_index": 3,
+                        "passing_command_index": 4,
+                    },
+                },
+                "workspace": {"before": before, "after": after},
+                "oracle_evidence": {
+                    "initial_test": process(1),
+                    "final_test": process(0),
+                },
+            },
+        }
+
+    def test_live_smoke_plan_is_offline_bounded_and_rejects_ambiguity(self) -> None:
+        plan = smoke.build_plan(
+            ("claude", "pi"), "repair", 1, smoke.DEFAULT_LIMITS
+        )
+        self.assertFalse(plan["live"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertEqual(2, plan["live_subject_runs_planned"])
+        self.assertEqual({"rolling": 80, "weekly": 90}, plan["usage_limits"])
+        self.assertEqual(
+            {"rolling": 70, "weekly": 90}, smoke._limits(["rolling=70"])
+        )
+        with self.assertRaisesRegex(ValueError, "must not be repeated"):
+            smoke.build_plan(
+                ("claude", "claude"), "repair", 1, smoke.DEFAULT_LIMITS
+            )
+        with self.assertRaisesRegex(ValueError, "between 1 and 100"):
+            smoke.build_plan(("claude",), "repair", 1, {"rolling": 101})
+
+    def test_live_smoke_receipt_checks_order_effect_digest_and_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "claude-repair-1.json"
+            credential = "private-smoke-value"
+            document = self._smoke_repair_record()
+            path.write_text(json.dumps(document), encoding="utf-8")
+            expected = smoke.digest_file(path)
+            result = smoke.validate_receipt(
+                path,
+                subject="claude",
+                workload="repair",
+                expected_sha256=expected,
+                credential=credential,
+            )
+            self.assertTrue(result["passed"])
+            self.assertEqual(["slugger.py"], result["changed_paths"])
+
+            document["adapter"]["outcome"]["subject_sequence"][
+                "mutation_index"
+            ] = 5
+            document["adapter"]["workspace"]["after"].append({
+                "path": "extra.txt",
+                "sha256": "outside",
+                "size": 7,
+                "mode": 420,
+            })
+            document["adapter"]["capture"]["note"] = credential
+            path.write_text(json.dumps(document), encoding="utf-8")
+            result = smoke.validate_receipt(
+                path,
+                subject="claude",
+                workload="repair",
+                expected_sha256=expected,
+                credential=credential,
+            )
+            self.assertFalse(result["passed"])
+            self.assertFalse(result["credential_value_absent"])
+            self.assertIn("extra.txt", result["changed_paths"])
+            self.assertGreaterEqual(len(result["errors"]), 4)
+
+    def test_live_smoke_budget_gate_starts_zero_subject_calls(self) -> None:
+        plan = smoke.build_plan(("claude",), "repair", 1, {"rolling": 80})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [{"subject": "claude", "status": "ready"}],
+        }
+        reading = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {"rolling": {"percent": 80}},
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", return_value=ready
+        ), mock.patch.object(
+            usage_probe, "snapshot", return_value=reading
+        ), mock.patch.object(recertify, "execute") as run:
+            destination = Path(directory) / "smoke"
+            report, status = smoke.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("usage_gate_blocked", report["status"])
+            self.assertEqual(0, report["live_subject_runs_started"])
+            self.assertEqual(0o600, (destination / "smoke-report.json").stat().st_mode & 0o777)
+        run.assert_not_called()
+
+    def test_live_smoke_success_retains_and_validates_the_whole_campaign(self) -> None:
+        plan = smoke.build_plan(("claude",), "repair", 1, {"rolling": 80})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [{"subject": "claude", "status": "ready"}],
+        }
+        before = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {"rolling": {"percent": 2}},
+        }
+        after = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {"rolling": {"percent": 3}},
+        }
+
+        def fake_execute(_: dict, destination: Path) -> tuple[dict, int]:
+            record = destination / "claude-repair-1.json"
+            record.write_text(
+                json.dumps(self._smoke_repair_record()), encoding="utf-8"
+            )
+            report = {
+                "passed": True,
+                "live_subject_runs_started": 1,
+                "results": [{
+                    "subject": "claude",
+                    "draw": 1,
+                    "record": record.name,
+                    "record_sha256": smoke.digest_file(record),
+                    "passed": True,
+                }],
+            }
+            (destination / "recertification-report.json").write_text(
+                json.dumps(report), encoding="utf-8"
+            )
+            return report, 0
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {usage_probe.KEY_ENV: "private-smoke-value"}, clear=False
+        ), mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", side_effect=(ready, ready)
+        ), mock.patch.object(
+            usage_probe, "snapshot", side_effect=(before, after)
+        ), mock.patch.object(
+            recertify, "execute", side_effect=fake_execute
+        ):
+            destination = Path(directory) / "smoke"
+            report, status = smoke.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+            self.assertEqual(0, status)
+            self.assertTrue(report["passed"])
+            self.assertEqual("passed", report["status"])
+            self.assertEqual(1, report["live_subject_runs_started"])
+            self.assertTrue(report["credential_value_absent"])
+            self.assertIn(
+                "smoke-report.json", report["credential_scan"]["files"]
+            )
+            self.assertTrue(report["receipts"][0]["passed"])
+            self.assertEqual(
+                1, report["usage"]["delta"]["rolling"]["points"]
+            )
+            for name in ("usage-before.json", "usage-after.json", "smoke-report.json"):
+                self.assertEqual(
+                    0o600, (destination / name).stat().st_mode & 0o777
+                )
+
+    def test_live_smoke_refuses_an_existing_record_directory(self) -> None:
+        plan = smoke.build_plan(("claude",), "repair", 1, {"rolling": 80})
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(FileExistsError):
+                smoke.execute(
+                    plan, Path(directory), config_path=Path("unused.json")
+                )
+
     def test_preflight_loads_owner_only_gateway_key_without_disclosing_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
