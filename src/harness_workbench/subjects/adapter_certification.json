@@ -1,0 +1,64 @@
+{
+  "schema": "cross-harness-live-certification/v0.1",
+  "certified_date": "2026-08-25",
+  "workload": "repair",
+  "draws_per_subject": 3,
+  "comparator_sha256": "sha256:57b2f806d71f80eb404f1f5cc32b206bcaf0e635aae96350a4f5dea1e7a44d6d",
+  "contract_passed": true,
+  "inputs": {
+    "adapters.py": "sha256:88ec78e0115c4e1514c913fc2411782c47c932dcb956e677240343160aa396fd",
+    "dsh_patch.yml": "sha256:c3520bb94f5872fc4d6e054ac612441f12ec843786139935837fe863b83edf95",
+    "hermes_config.yaml": "sha256:fd1781c0f224a47d2d72c1c04f624be5aeda5e45db2c29f2fb0a4bce93408bee",
+    "hook.py": "sha256:3a250e3d0f5c65c1ac6569b73fef50cc49c805e7f01f50cc08c216a0e5e5ca04",
+    "model_selection.json": "sha256:c66f82cf9109cee193a202149a36801d2f2dbd6e46a41d066d55a0d01a368cd8",
+    "oracles.py": "sha256:303fc9f67b2f44e238a041e32d60a84f0ff377ca8223fbcd481a21bedbe7436c",
+    "pin.json": "sha256:12ad2f3b2150a9151fe3221f7708fe87922a4093237bb1651804bfca654411a4",
+    "repair_fixture/slugger.py": "sha256:779c1838d6a838697ea20b464f895e8f1a01e64f1bab3d722dd424be9c1ff67c",
+    "repair_fixture/test_slugger.py": "sha256:838c4e2f81586723a61f687ec01b0121bace32d0eacce44f85f54ef0f89b8da1",
+    "repair_task.md": "sha256:cfb9c794b9cc4935661f39cdaf0a78e8c49991085825bfd0c6417e8be7f7fad3",
+    "run_subject.sh": "sha256:fd73e6b1ad2f0d2585c0282d2cb2fca0047a0ea0f0cfdb01fb19e93e836c1568",
+    "runner.py": "sha256:62fb2a95cbdcf08b9e1d5ab288bfc67fc0fa11929c292bc341ce2aea99d3a48f",
+    "workloads.py": "sha256:d2a46d05eadca1c49c1812c18e2786277c6279663be6cbaad19a306a225462a6"
+  },
+  "apparatus_modules": {
+    "canon": "sha256:ad65d72e676b8b569316b2edc8a46f7df50cbceef39c31f6d9444ad26160de9b",
+    "capture": "sha256:9a6e2286b610ea4f268860615c73e2e37ee154c5f509e36281019ee5676a1ddc"
+  },
+  "subjects": {
+    "claude": {
+      "run_id": "20260825T214541Z-2355e9-d21a",
+      "record_sha256": "sha256:8eb27ae1fc4ab703325dfe5fe3c5840ad6e2deb6b0562898632e693ce7688ea8",
+      "adapter": "3/3",
+      "outcome": "3/3",
+      "timeouts": 0
+    },
+    "codex": {
+      "run_id": "20260825T214359Z-e523b9-734d",
+      "record_sha256": "sha256:8357e7ab98e7a5b7fe19fceccc048d9540c352e3be49cdc6c6b6b6e07d1f6809",
+      "adapter": "3/3",
+      "outcome": "3/3",
+      "timeouts": 0
+    },
+    "deepseek": {
+      "run_id": "20260825T214908Z-afb1ef-1bdb",
+      "record_sha256": "sha256:1a5bfef4956a66873d6227aed78c51e726588473b21983b0961ed10588760e14",
+      "adapter": "3/3",
+      "outcome": "3/3",
+      "timeouts": 0
+    },
+    "hermes": {
+      "run_id": "20260825T214704Z-400fd4-7fbb",
+      "record_sha256": "sha256:2e0e4b88a092ae991e99094157516044dd7e583e60247f4803fe812e6370018d",
+      "adapter": "3/3",
+      "outcome": "3/3",
+      "timeouts": 0
+    },
+    "pi": {
+      "run_id": "20260825T215058Z-c6514d-e5c1",
+      "record_sha256": "sha256:cc1078cb4d57f93f63443aef9e6815811d6d9610fc87d75b0254d09d9a221b91",
+      "adapter": "3/3",
+      "outcome": "3/3",
+      "timeouts": 0
+    }
+  }
+}

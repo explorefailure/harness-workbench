@@ -1,0 +1,42 @@
+{
+  "schema": "cross-harness-normalizer-replay/v0.1",
+  "subject": "deepseek",
+  "workspace": "/workspace",
+  "provider": "workbench-ollama",
+  "model": "qwen3.5:9b",
+  "returncode": 0,
+  "evidence_events": [
+    {"type": "session", "version": 0, "id": "session-1", "createdAt": 0, "cwd": "/workspace", "delegationDepth": 0},
+    {"type": "turn/start", "seq": 0, "time": 0, "data": {"turn": 1}},
+    {"type": "request/context", "seq": 1, "time": 0, "data": {"provider": "workbench-ollama", "model": "qwen3.5:9b"}},
+    {
+      "type": "tool/call",
+      "seq": 2,
+      "time": 0,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "callId": "call-1",
+        "name": "write",
+        "arguments": "{\"file_path\": \"/workspace/shared.txt\", \"content\": \"cross-harness control\\n\"}"
+      }
+    },
+    {
+      "type": "tool/result",
+      "seq": 3,
+      "time": 0,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {"content": [{
+          "type": "tool-result",
+          "toolCallId": "call-1",
+          "content": [{"type": "text", "text": "ok"}],
+          "isError": false
+        }]}
+      }
+    },
+    {"type": "turn/end", "seq": 4, "time": 0, "data": {"turn": 1, "reason": {"kind": "completed"}}}
+  ],
+  "lifecycle_sha256": "sha256:f285a42585c52e61987821b3f37cd8895f2693fd40ac15ea27a4a3fb11cc4627"
+}

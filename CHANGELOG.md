@@ -7,6 +7,16 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add an experiment-local adapter doctor that submits no prompts and reports
+  `ready`, `pin_drift`, `schema_drift`, `auth_missing`, or
+  `live_verification_required` from installed identity, local authentication,
+  frozen native-lifecycle replay, and reviewed live-certification checks.
+- Add a plan-only-by-default recertification runner. `--live` is required to
+  authorize bounded subject runs; the default is one draw, the maximum is
+  three, and every result is retained with a digest and summary report.
+- Ship five minimized native replay fixtures plus a certification manifest
+  binding the current repair inputs and capture/canon apparatus to the reviewed
+  five-subject 3/3 comparison.
 - Update the experimental Claude Code subject pin to `2.1.245` and accept an
   omitted optional `is_error` only when the enclosing native result qualifies
   it as a structured success or an error string. A wholly status-free result

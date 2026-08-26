@@ -1,0 +1,22 @@
+{
+  "schema": "cross-harness-normalizer-replay/v0.1",
+  "subject": "pi",
+  "workspace": "/workspace",
+  "stdout_events": [
+    {"type": "session"},
+    {
+      "type": "tool_execution_start",
+      "toolCallId": "call-1",
+      "toolName": "write",
+      "args": {"file_path": "/workspace/shared.txt", "content": "cross-harness control\n"}
+    },
+    {
+      "type": "tool_execution_end",
+      "toolCallId": "call-1",
+      "toolName": "write",
+      "isError": false
+    },
+    {"type": "agent_settled"}
+  ],
+  "lifecycle_sha256": "sha256:68749386dfc68cd6950f5507168e1f3299e966224748df11a3e4104798bf0299"
+}

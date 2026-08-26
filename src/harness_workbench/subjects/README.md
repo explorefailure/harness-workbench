@@ -98,6 +98,59 @@ python3.11 runner.py --subject pi --workload repair
 python3.11 fault_runner.py
 ```
 
+## Adapter operations
+
+Run the doctor before spending a subject call:
+
+```sh
+python3.11 doctor.py
+python3.11 doctor.py --json
+python3.11 doctor.py --subject claude
+```
+
+The doctor submits no prompts. It checks the installed version and executable
+digest, the local authentication source the adapter will use, one frozen native
+lifecycle replay per normalizer, and `adapter_certification.json`. That
+manifest binds the exact repair inputs plus the imported `capture` and `canon`
+bytes to the reviewed live matrix. Its statuses are deliberately operational:
+
+- `ready`: every offline check passes and these exact bytes have reviewed live
+  evidence;
+- `pin_drift`: an installed client, launcher, dependency lock, or Node runtime
+  differs from `pin.json`;
+- `schema_drift`: a frozen native lifecycle no longer normalizes to its
+  certified digest;
+- `auth_missing`: the adapter's local credential source is unavailable; and
+- `live_verification_required`: offline checks pass, but an apparatus input has
+  changed since the reviewed live evidence.
+
+`recertify.py` is plan-only by default. This prints the exact bounded work and
+authorizes zero model calls:
+
+```sh
+python3.11 recertify.py --subject claude
+```
+
+After reviewing the plan, one explicit flag authorizes one retained draw:
+
+```sh
+python3.11 recertify.py --subject claude --live \
+  --record-dir ../../../measure/recertification/claude-2.1.246
+```
+
+The default is one repair draw and the hard maximum is three. Each subprocess
+has the adapter's subject timeout plus a 30-second supervisor margin; stdout,
+stderr, and descendant cleanup remain bounded by the shared capture primitive.
+The record directory must not already contain a report, so a recut cannot
+silently overwrite evidence. A failed draw stops the remaining plan, limiting
+spend after the first non-green result.
+
+Use a one-draw recertification for the subject whose pin or native surface
+changed. If that draw changes normalized evidence or task outcome, recut the
+five frozen repair specs at three draws and compare their sealed stores before
+updating `adapter_certification.json`. A passing one-draw smoke result is not a
+replacement for that cross-subject matrix.
+
 Pi was excluded while this contract was *derived*, so the shared envelope
 could not simply inherit the shape of the reference integration. That exclusion
 has done its job and is over: Pi is a subject on the same terms as the other
