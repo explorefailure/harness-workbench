@@ -7,6 +7,15 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add a plan-only-by-default `certify.py` workflow for the exact five-subject,
+  three-draw repair recut. One explicit `--live` and a fresh record directory
+  authorize at most 30 subject attempts (15 nominal); the workflow runs
+  offline readiness and usage gates first, produces five sealed Workbench
+  stores without changing retry/sample semantics, verifies every store, runs
+  the exact-five comparator, retains bounded process and usage evidence, scans
+  every retained file for configured credential values and gitleaks findings,
+  and emits a digest-bound review candidate without editing
+  `adapter_certification.json`.
 - Add a plan-only-by-default `smoke.py` command that composes owner-only local
   prerequisite loading, hard gateway-usage gates, bounded retained execution,
   post-run usage deltas, independent receipt validation, exact credential-value

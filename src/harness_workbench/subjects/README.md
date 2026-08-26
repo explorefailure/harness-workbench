@@ -165,6 +165,70 @@ This is an operational smoke, not a replacement for a three-draw certification
 matrix. Use it to prove that the currently prepared adapters can execute a
 bounded workload now.
 
+For the full matrix, `certify.py` is also plan-only by default. The plan fixes
+the subject set to exactly Claude, Codex, DeepSeek, Hermes, and Pi; fixes the
+workload to repair; revalidates `sample.n = 3` inside `retry.max = 2`; reports
+15 nominal and 30 maximum subject calls; resolves the interpreter, source
+root, specs, run store, comparator, and child `PYTHONPATH` to absolute paths;
+and authorizes zero calls:
+
+```sh
+python3.11 certify.py
+```
+
+The plan reports whether `gitleaks` is currently available without making that
+external executable a requirement for zero-call planning. `--live` fails
+before creating a record directory unless the executable is present, usable,
+and digest-bound into the plan.
+
+After reviewing that plan, the current usage readings, and the default hard
+stops at rolling 80% and weekly 90%, one explicit flag and a directory that
+does not yet exist authorize the retained recut:
+
+```sh
+python3.11 certify.py --live \
+  --record-dir ../../../measure/certification/five-repair-YYYY-MM-DD
+```
+
+Offline environment preparation and the all-five doctor run before the usage
+gate, and no Workbench spec starts unless all of them pass. Each spec runs
+unchanged, so `sample(retry(step))` retains every failed or retried attempt in
+its sealed store. The supervisor bounds each whole spec by its subject repair
+timeout times the six-attempt ceiling plus cleanup headroom. Every store that
+appears, including one left by an operational failure, is checked with
+`hwb verify`; a comparator invocation is allowed only after exactly five clean
+stores exist and receives those five paths in the fixed subject order.
+
+The fresh record directory retains `runs/`, bounded command captures under
+`process/`, `usage-before.json`, `usage-after.json`, `comparison.json`, a
+redacted `gitleaks-report.json`, `credential-scan.json`, and
+`certification-report.json`. Operational failures stop later model-bearing
+specs but still trigger post-run usage, offline postflight, cleanup accounting,
+and security scans. Credential checking is recursive over every retained
+regular file and covers configured credential values plus their JSON
+spellings; oversized or non-regular evidence fails closed.
+
+The retained-evidence scan uses the pinned `.gitleaks.toml` shipped beside the
+workflow, so the same plan and scan remain available in a materialized subject
+tree rather than depending on a repository-relative configuration file.
+
+`certification-candidate.json` binds the exact 13-input map, all five spec
+digests, the capture/canon apparatus, comparator program and output, each run
+tree plus `record.json` and `integrity.json`, and the other retained record
+digests. It is eligible for review only when the comparator passes, every
+subject is adapter/outcome 3/3 with zero timeouts, every sealed store verifies,
+usage and postflight remain readable, both security scans pass, and the
+attempt count stays under 30. The command records the before/after digest of
+`adapter_certification.json` and never edits it; promotion is a separate human
+review action.
+
+The offline doctor proves local authentication metadata, not that every
+provider route has quota at the instant of a prompt. A native 4xx, independent
+Claude limit, or gateway route refusal remains an ordinary retained negative:
+retry stays bounded, the other specs and exact-five comparison remain
+reviewable, and the candidate is ineligible rather than being made green by a
+weaker validator.
+
 Run the lower-level doctor directly when the environment is already prepared:
 
 ```sh

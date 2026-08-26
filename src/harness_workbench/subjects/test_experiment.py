@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 import adapters
+import certify
 import compare as comparator
 import doctor
 import guard_hook
@@ -65,6 +66,15 @@ def _fixture_manifest() -> list[dict]:
 
 
 class CommonTests(unittest.TestCase):
+    @staticmethod
+    def _certification_live_plan(limits: dict[str, int]) -> dict:
+        with mock.patch.object(
+            certify.shutil, "which", return_value=sys.executable
+        ):
+            return certify.build_plan(
+                limits, require_live_prerequisites=True
+            )
+
     @staticmethod
     def _smoke_repair_record(subject: str = "claude") -> dict:
         before = [
@@ -136,6 +146,366 @@ class CommonTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "between 1 and 100"):
             smoke.build_plan(("claude",), "repair", 1, {"rolling": 101})
+
+    def test_certification_plan_is_exact_five_plan_only_and_absolute(self) -> None:
+        plan = certify.build_plan(certify.DEFAULT_LIMITS)
+        self.assertFalse(plan["live"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertEqual(15, plan["nominal_model_calls"])
+        self.assertEqual(30, plan["maximum_model_calls"])
+        self.assertEqual(list(certify.SUBJECTS), plan["subjects"])
+        self.assertEqual("repair", plan["workload"])
+        self.assertEqual(3, plan["draws_per_subject"])
+        self.assertEqual(2, plan["retry_max_attempts_per_draw"])
+        self.assertFalse(plan["promotion"]["automatic"])
+        for path in plan["specs"]:
+            self.assertTrue(Path(path).is_absolute())
+        self.assertTrue(Path(plan["apparatus"]["python"]).is_absolute())
+        self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
+        self.assertEqual(
+            certify.HERE / ".gitleaks.toml",
+            Path(plan["apparatus"]["gitleaks_config"]),
+        )
+        self.assertTrue(Path(plan["apparatus"]["gitleaks_config"]).is_file())
+        self.assertEqual(
+            set(adapters.REPAIR_INPUTS), set(plan["apparatus"]["inputs"])
+        )
+
+    def test_certification_refuses_weakened_retry_or_sample_semantics(self) -> None:
+        document = json.loads(
+            certify.SPEC_PATHS["claude"].read_text(encoding="utf-8")
+        )
+        document["features"][2]["config"]["max"] = 3
+        with self.assertRaisesRegex(ValueError, "retry/sample bounds"):
+            certify._validate_spec_document("claude", document)
+        document = json.loads(
+            certify.SPEC_PATHS["claude"].read_text(encoding="utf-8")
+        )
+        document["features"][2], document["features"][3] = (
+            document["features"][3], document["features"][2]
+        )
+        with self.assertRaisesRegex(ValueError, "feature order"):
+            certify._validate_spec_document("claude", document)
+
+    def test_certification_live_plan_requires_gitleaks_but_plan_only_does_not(
+        self,
+    ) -> None:
+        with mock.patch.object(certify.shutil, "which", return_value=None):
+            plan = certify.build_plan(certify.DEFAULT_LIMITS)
+            self.assertFalse(plan["apparatus"]["gitleaks_available"])
+            self.assertIsNone(plan["apparatus"]["gitleaks"])
+            with self.assertRaisesRegex(ValueError, "required before a live"):
+                certify.build_plan(
+                    certify.DEFAULT_LIMITS,
+                    require_live_prerequisites=True,
+                )
+
+    def test_certification_replaces_a_relative_pythonpath(self) -> None:
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "../../src"}, clear=False):
+            environment = certify._child_environment()
+        self.assertEqual(str(certify.SOURCE_ROOT), environment["PYTHONPATH"])
+        self.assertTrue(Path(environment["PYTHONPATH"]).is_absolute())
+
+    def test_certification_plan_bootstraps_from_an_unrelated_working_directory(
+        self,
+    ) -> None:
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(Path(certify.__file__).resolve())],
+                cwd=directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertEqual(0, plan["model_calls_authorized"])
+        self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
+
+    def test_certification_candidate_requires_three_clean_draws_each(self) -> None:
+        comparison = {
+            "contract_passed": True,
+            "errors": [],
+            "subjects": {
+                subject: {
+                    "draws": 3,
+                    "adapter_passed": 3,
+                    "outcome_passed": 3,
+                    "timed_out": 0,
+                }
+                for subject in certify.SUBJECTS
+            },
+        }
+        self.assertEqual([], certify._comparison_eligible(comparison))
+        comparison["subjects"]["codex"]["outcome_passed"] = 2
+        self.assertIn(
+            "codex is not adapter/outcome 3/3 with zero timeouts",
+            certify._comparison_eligible(comparison),
+        )
+
+    def test_certification_credential_scan_covers_nested_and_generated_files(
+        self,
+    ) -> None:
+        credential = "private-certification-value"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "runs" / "one"
+            nested.mkdir(parents=True)
+            (nested / "record.json").write_text("clean", encoding="utf-8")
+            scan = certify._scan_retained(
+                root,
+                (credential,),
+                virtual_files={"certification-candidate.json": b"clean"},
+            )
+            self.assertTrue(scan["passed"])
+            self.assertIn("runs/one/record.json", scan["files"])
+            scan = certify._scan_retained(
+                root,
+                (credential,),
+                virtual_files={
+                    "certification-candidate.json": credential.encode("utf-8")
+                },
+            )
+            self.assertFalse(scan["passed"])
+            self.assertIn(
+                "certification-candidate.json: a configured credential value would be present",
+                scan["errors"],
+            )
+
+    def test_certification_usage_gate_starts_no_workbench_run(self) -> None:
+        plan = self._certification_live_plan({"rolling": 80})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in certify.SUBJECTS
+            ],
+        }
+        reading = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {"rolling": {"percent": 80}},
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", return_value=ready
+        ), mock.patch.object(
+            usage_probe, "snapshot", return_value=reading
+        ), mock.patch.object(certify, "_run_command") as run:
+            destination = Path(directory) / "certification"
+            report, status = certify.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+        self.assertEqual(1, status)
+        self.assertEqual("usage_gate_blocked", report["status"])
+        self.assertEqual(0, report["model_calls_started"])
+        run.assert_not_called()
+
+    def test_certification_operational_failure_keeps_post_run_evidence(self) -> None:
+        plan = self._certification_live_plan({"rolling": 80})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in certify.SUBJECTS
+            ],
+        }
+        before = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {
+                name: {"percent": value, "resets_at": "T"}
+                for name, value in (("rolling", 2), ("weekly", 3), ("monthly", 4))
+            },
+        }
+        after = json.loads(json.dumps(before))
+        after["windows"]["rolling"]["percent"] = 3
+
+        def bounded(returncode: int) -> Bounded:
+            return Bounded(
+                argv=["fixture"],
+                returncode=returncode,
+                termination_reason=None,
+                stdout=b"",
+                stderr=b"",
+                stdout_source_bytes=0,
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        receipts = iter((
+            (bounded(2), {"label": "run-claude", "cleanup_passed": True}),
+            (bounded(0), {"label": "gitleaks", "cleanup_passed": True}),
+        ))
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {usage_probe.KEY_ENV: "private-certification-value"},
+            clear=False,
+        ), mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", side_effect=(ready, ready)
+        ), mock.patch.object(
+            usage_probe, "snapshot", side_effect=(before, after)
+        ), mock.patch.object(
+            certify, "_run_command", side_effect=lambda *args, **kwargs: next(receipts)
+        ):
+            destination = Path(directory) / "certification"
+            report, status = certify.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+            self.assertEqual(2, status)
+            self.assertEqual("operational_failure", report["status"])
+            self.assertIn("after", report["usage"])
+            self.assertEqual("ready", report["postflight"]["overall_status"])
+            self.assertTrue((destination / "usage-after.json").is_file())
+            self.assertTrue((destination / "certification-candidate.json").is_file())
+            self.assertTrue((destination / "credential-scan.json").is_file())
+
+    def test_certification_success_emits_a_digest_bound_unpromoted_candidate(
+        self,
+    ) -> None:
+        plan = self._certification_live_plan({"rolling": 80, "weekly": 90})
+        ready = {
+            "schema": doctor.SCHEMA,
+            "model_calls_made": False,
+            "overall_status": "ready",
+            "subjects": [
+                {"subject": subject, "status": "ready"}
+                for subject in certify.SUBJECTS
+            ],
+        }
+        before = {
+            "schema": usage_probe.SCHEMA,
+            "profile": "test",
+            "metered": True,
+            "windows": {
+                name: {"percent": value, "resets_at": "T"}
+                for name, value in (("rolling", 2), ("weekly", 3), ("monthly", 4))
+            },
+        }
+        after = json.loads(json.dumps(before))
+        after["windows"]["weekly"]["percent"] = 4
+        comparison = {
+            "schema": "cross-harness-contract-comparison/v0.1",
+            "contract_passed": True,
+            "errors": [],
+            "subjects": {
+                subject: {
+                    "draws": 3,
+                    "adapter_passed": 3,
+                    "outcome_passed": 3,
+                    "timed_out": 0,
+                }
+                for subject in certify.SUBJECTS
+            },
+        }
+
+        def bounded(argv: list[str], *, stdout: bytes = b"") -> Bounded:
+            return Bounded(
+                argv=argv,
+                returncode=0,
+                termination_reason=None,
+                stdout=stdout,
+                stderr=b"",
+                stdout_source_bytes=len(stdout),
+                stderr_source_bytes=0,
+                stdout_overflow=False,
+                stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        def fake_command(
+            process_root: Path,
+            index: int,
+            label: str,
+            argv: list[str],
+            **_: object,
+        ) -> tuple[Bounded, dict]:
+            stdout = b""
+            if label.startswith("run-"):
+                subject = label.removeprefix("run-")
+                run_root = Path(argv[argv.index("--root") + 1])
+                run_dir = run_root / f"run-{subject}"
+                run_dir.mkdir()
+                (run_dir / "attempts.jsonl").write_text(
+                    "".join(
+                        json.dumps({"step_id": subject, "n": draw}) + "\n"
+                        for draw in range(3)
+                    ),
+                    encoding="utf-8",
+                )
+                (run_dir / "record.json").write_text(
+                    json.dumps({"run_id": run_dir.name}), encoding="utf-8"
+                )
+                (run_dir / "integrity.json").write_text(
+                    json.dumps({"schema": "fixture"}), encoding="utf-8"
+                )
+                stdout = f"{run_dir.name} complete\n".encode("utf-8")
+            elif label == "compare-exact-five":
+                stdout = (json.dumps(comparison, indent=2, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                )
+            elif label == "gitleaks-retained-evidence":
+                report_path = Path(argv[argv.index("--report-path") + 1])
+                report_path.write_text("[]\n", encoding="utf-8")
+            receipt = {
+                "label": label,
+                "receipt": f"process/{index:02d}-{label}.json",
+                "cleanup_passed": True,
+            }
+            return bounded(argv, stdout=stdout), receipt
+
+        certification_before = certify.digest_file(certify.CERTIFICATION)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {usage_probe.KEY_ENV: "private-certification-value"},
+            clear=False,
+        ), mock.patch.object(
+            preflight, "prepare_environment", return_value={"credential_source": "test"}
+        ), mock.patch.object(
+            doctor, "report", side_effect=(ready, ready)
+        ), mock.patch.object(
+            usage_probe, "snapshot", side_effect=(before, after)
+        ), mock.patch.object(
+            certify, "_run_command", side_effect=fake_command
+        ):
+            destination = Path(directory) / "certification"
+            report, status = certify.execute(
+                plan, destination, config_path=Path("unused.json")
+            )
+            candidate = json.loads(
+                (destination / "certification-candidate.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            scan = json.loads(
+                (destination / "credential-scan.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(0, status)
+        self.assertEqual("candidate_ready", report["status"])
+        self.assertTrue(candidate["eligible_for_review"])
+        self.assertEqual(15, candidate["calls"]["started"])
+        self.assertEqual(set(certify.SUBJECTS), set(candidate["runs"]))
+        self.assertTrue(all(row["verify_passed"] for row in candidate["runs"].values()))
+        self.assertIsNotNone(candidate["comparator"]["result_sha256"])
+        self.assertTrue(scan["passed"])
+        self.assertFalse(candidate["promotion"]["performed"])
+        self.assertEqual(certification_before, certify.digest_file(certify.CERTIFICATION))
 
     def test_live_smoke_receipt_checks_order_effect_digest_and_credential(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
