@@ -44,6 +44,7 @@ APPARATUS_FILES = (
     "agent_task_schema.py",
     "agent_task_schemas.json",
     "agent_task_services.py",
+    "agent_task_store.py",
     "agent_task_test_vectors.json",
     "agent_task_validate.py",
     "dsh_patch.yml",

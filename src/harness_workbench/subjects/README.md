@@ -145,6 +145,23 @@ postcheck workspaces under `process/`, reconstructs the observed effects in the
 postcheck workspace, and emits the same run envelope and verdict fields as the
 offline runtime. Failure to resolve an authorization after permit allocation
 hard-stops rather than abandoning an ambiguous inflight permit.
+The write-smoke wrapper then replays that closed-world envelope through the
+independent validator before retaining it, materializes exactly one ordinary
+single-draw Workbench store under `records/write-smoke/`, runs bounded
+`hwb verify`, and records the store-tree, `record.json`, and `integrity.json`
+digests. Producer-only workspace paths and authorization receipts are not added
+to the normative episode; authorization consumption remains in the durable
+control-plane evidence. A validation, partial-store, topology, or freeze
+failure latches later release. This is still a fake-transport implementation
+slice. Its exact-five smoke orchestrator scans and digest-checks the task,
+workspace archive, and fake plan before atomically retaining them with a bound
+bundle manifest; consumes five separate one-call artifacts; verifies all five
+stores; retains the independent comparison, permit-usage evidence, and
+credential scan; and seals a durable journal/registry phase checkpoint while
+both services remain live. It refuses every non-fake transport. The planned
+spec documents are still explicitly virtual at this milestone: pre-call
+ordinary `hwbspec`/freeze-lock assembly, repair-matrix stores, and a reviewed
+real-provider execution entry point remain absent.
 
 The destination must not exist. The offline run builds one deterministic task
 and workspace archive, executes it through five route-specific fake providers,

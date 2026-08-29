@@ -164,7 +164,7 @@ def compare_exact_five(
         errors.extend(f"{subject}: {error}" for error in report["errors"])
         attempt = run.get("base_attempt", {})
         if attempt.get("ordinal") != 0:
-            errors.append(f"{subject}: offline base-attempt ordinal is not zero")
+            errors.append(f"{subject}: base-attempt ordinal is not zero")
         if type(attempt.get("call_id")) is int:
             call_ids.append(attempt["call_id"])
     if sorted(call_ids) != [1, 2, 3, 4, 5]:

@@ -8,23 +8,17 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
-import sys
 from typing import Any
 
-from harness_workbench import canon
-from harness_workbench.capture import credential_values, run_bounded
+from harness_workbench.capture import credential_values
 
 from agent_task_archives import build_workspace_archive_from_entries
 from agent_task_broker import build_phase_checkpoint, validate_prefix
 from agent_task_runtime import run_episode
 from agent_task_services import ControlPlaneSupervisor
 from agent_task_schema import SUBJECTS, bytes_sha256, canonical_sha256, validate_task
+from agent_task_store import materialize_single_draw_store
 from agent_task_validate import compare_exact_five, scan_credentials
-
-
-HERE = Path(__file__).resolve().parent
-EMITTER = HERE / "agent_task_emit.py"
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -114,132 +108,6 @@ def build_conformance_bundle(bundle: Path) -> tuple[dict[str, Any], bytes, Path]
     return task, workspace_archive, fake_plan
 
 
-def _freeze_lock(spec_path: Path, inputs: list[str]) -> None:
-    digests = {
-        name: canon.digest_file(str(spec_path.parent / name))
-        for name in inputs
-    }
-    _write_json(spec_path.with_suffix(".freeze.lock"), {"digests": digests})
-
-
-def _store_episode(
-    *,
-    subject: str,
-    episode_path: Path,
-    spec_root: Path,
-    records: Path,
-) -> tuple[Path, dict[str, Any]]:
-    own = spec_root / subject
-    own.mkdir(parents=True)
-    shutil.copy2(EMITTER, own / "agent_task_emit.py")
-    shutil.copy2(episode_path, own / "episode.json")
-    episode = json.loads(episode_path.read_text(encoding="utf-8"))
-    inputs = ["agent_task_emit.py", "episode.json"]
-    spec_path = own / f"{subject}.json"
-    _write_json(spec_path, {
-        "schema": "hwbspec/v0.1",
-        "run_class": "discovery",
-        "features_root": "harness_workbench:builtin",
-        "features": [
-            {"name": "freeze"},
-            {"name": "receipt"},
-            {"name": "retry", "config": {"max": 2}},
-            {"name": "sample", "config": {"n": 1}},
-            {"name": "timing"},
-        ],
-        "steps": [{
-            "id": f"{subject}-agent-task",
-            "argv": [
-                sys.executable, "agent_task_emit.py",
-                "--store-nonce", episode["store_nonce"], "episode.json"
-            ],
-            "inputs": inputs,
-        }],
-    })
-    _freeze_lock(spec_path, inputs)
-    environment = dict(os.environ)
-    if environment.get("PYTHONPATH"):
-        environment["PYTHONPATH"] = os.pathsep.join(
-            str((Path.cwd() / item).resolve()) if not Path(item).is_absolute() else item
-            for item in environment["PYTHONPATH"].split(os.pathsep)
-        )
-    completed = run_bounded(
-        [
-            sys.executable, "-m", "harness_workbench",
-            "--root", str(records), "run", str(spec_path),
-        ],
-        cwd=own,
-        env=environment,
-        timeout=30,
-        stdout_limit=1024 * 1024,
-        stderr_limit=1024 * 1024,
-        termination_grace=1.0,
-        forward_signals=False,
-    )
-    if (
-        completed.returncode != 0
-        or completed.termination_reason is not None
-        or completed.stdout_overflow
-        or completed.stderr_overflow
-        or completed.group_alive_after_cleanup
-    ):
-        raise RuntimeError(
-            "offline Workbench run was not bounded and clean: "
-            + completed.stderr.decode("utf-8", errors="replace")[:1000]
-        )
-    lines = completed.stdout.decode("utf-8", errors="strict").splitlines()
-    fields = lines[0].split() if lines else []
-    if len(fields) < 5 or fields[-1] != "completed":
-        raise RuntimeError("offline Workbench run did not report completion")
-    run_id = fields[0]
-    run_dir = records / run_id
-    verify = run_bounded(
-        [
-            sys.executable, "-m", "harness_workbench",
-            "--root", str(records), "verify", run_id,
-        ],
-        cwd=own,
-        env=environment,
-        timeout=15,
-        stdout_limit=1024 * 1024,
-        stderr_limit=1024 * 1024,
-        termination_grace=1.0,
-        forward_signals=False,
-    )
-    if (
-        verify.returncode != 0
-        or verify.termination_reason is not None
-        or verify.stdout_overflow
-        or verify.stderr_overflow
-        or verify.group_alive_after_cleanup
-        or b"conforms: yes" not in verify.stdout
-    ):
-        raise RuntimeError("offline Workbench store failed hwb verify")
-    record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
-    attempts = [
-        json.loads(line)
-        for line in (run_dir / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    expected_cause = [
-        {"feature": "sample", "i": 0},
-        {"feature": "retry", "i": 0},
-    ]
-    if (
-        len(attempts) != 1
-        or attempts[0].get("n") != episode["base_attempt"]["ordinal"]
-        or attempts[0].get("caused_by") != expected_cause
-        or attempts[0].get("exit") != 0
-    ):
-        raise RuntimeError("Workbench attempt order does not reconcile with call control")
-    if record["extras"]["freeze"]["baseline"] != "compared" or record["extras"]["freeze"]["drifted"]:
-        raise RuntimeError("offline Workbench freeze baseline did not compare cleanly")
-    stdout = run_dir / "steps" / f"{subject}-agent-task" / "attempts" / "0" / "stdout.bin"
-    expected = episode_path.read_bytes()
-    if stdout.read_bytes() != expected:
-        raise RuntimeError("Workbench store did not retain the exact episode bytes")
-    return run_dir, record
-
-
 def run_offline_campaign(destination: Path) -> dict[str, Any]:
     if destination.exists():
         raise FileExistsError(f"offline destination already exists: {destination}")
@@ -281,16 +149,17 @@ def run_offline_campaign(destination: Path) -> dict[str, Any]:
         )
         episode_path = episodes / f"{subject}.json"
         _write_json(episode_path, run)
-        run_dir, record = _store_episode(
+        store = materialize_single_draw_store(
             subject=subject,
+            phase="offline-conformance",
             episode_path=episode_path,
             spec_root=specs,
             records=records,
         )
         runs.append(run)
         store_rows[subject] = {
-            "run_id": record["run_id"],
-            "run_store_tree_sha256": canon.digest_tree(str(run_dir)),
+            "run_id": store["run_id"],
+            "run_store_tree_sha256": store["run_store_tree_sha256"],
         }
     comparison = compare_exact_five(runs, task=task, workspace_archive=archive)
     _write_json(destination / "comparison.json", comparison)

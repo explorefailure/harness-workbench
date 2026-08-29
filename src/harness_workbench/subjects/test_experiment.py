@@ -42,6 +42,7 @@ import agent_task_providers
 import agent_task_runtime
 import agent_task_schema
 import agent_task_services
+import agent_task_store
 import agent_task_validate
 from harness_workbench import capture as capture_module
 from harness_workbench.capture import (
@@ -8783,19 +8784,32 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
                 return path
 
-            episode = agent_task_runtime.run_authorized_episode(
+            smoke = agent_task_runtime.run_authorized_smoke_episode(
                 subject="claude", task=task, workspace_archive=archive,
                 transport_plan=fake_plan, request_id="coordinator-1",
-                phase="write-smoke", coordinator=coordinator,
+                coordinator=coordinator,
                 authorization_resolver=lambda prepared: authorize(prepared, "9"),
                 transport=agent_task_providers.FakeProviderTransport(
                     Path(sys.executable)
                 ),
             )
+            episode = smoke["episode"]
             self.assertTrue(episode["verdict"]["adapter_valid"])
             self.assertTrue(episode["verdict"]["safety_eligible"])
             self.assertTrue(episode["verdict"]["task_passed"])
-            self.assertTrue(Path(episode["workspace"]["root"]).is_dir())
+            self.assertTrue(smoke["independent_validation"]["passed"])
+            self.assertEqual("write-smoke", smoke["store"]["phase"])
+            self.assertEqual("claude", smoke["store"]["subject"])
+            verify = subprocess.run(
+                [
+                    sys.executable, "-m", "harness_workbench", "--root",
+                    str(destination / "records" / "write-smoke"), "verify",
+                    smoke["store"]["run_id"],
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(0, verify.returncode, verify.stdout + verify.stderr)
+            self.assertIn("conforms: yes", verify.stdout)
             self.assertEqual(1, supervisor.control.status()["allocated_calls"])
             self.assertEqual(1, len(supervisor.broker.receipts))
 
@@ -8831,6 +8845,142 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertEqual(2, len(supervisor.broker.receipts))
             supervisor.close()
 
+    def test_authorized_fake_smoke_phase_seals_exact_five_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = b"u" * 32
+            key_file = root / "authorization.key"
+            key_file.write_bytes(key)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            usage = {
+                "schema": "offline-usage/v0.1", "metered": False,
+                "read_at": now.isoformat(),
+            }
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination", usage_snapshot=usage, now=now
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="fake-smoke-campaign",
+                maximum_calls=5, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 5},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                    for _ in agent_task_schema.SUBJECTS
+                ],
+                release_authorization=release_config,
+            )
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+            identifiers = {
+                subject: f"{index + 1:x}" * 64
+                for index, subject in enumerate(agent_task_schema.SUBJECTS)
+            }
+
+            def authorize(prepared: agent_task_coordinator.PreparedAttempt) -> Path:
+                current = dt.datetime.now(dt.timezone.utc)
+                artifact = agent_task_authorization.build_authorization(
+                    prepared.authorization,
+                    authorization_id=identifiers[prepared.permit.subject],
+                    issued_at=current - dt.timedelta(seconds=1),
+                    expires_at=current + dt.timedelta(seconds=60), key=key,
+                )
+                path = (
+                    destination / "bundle"
+                    / f"authorization-{prepared.permit.subject}.json"
+                )
+                path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+                return path
+
+            report = agent_task_runtime.run_authorized_fake_smoke_phase(
+                task=task, workspace_archive=archive,
+                fake_plan_document=fake_document, coordinator=coordinator,
+                authorization_resolver=authorize,
+                fake_transport=agent_task_providers.FakeProviderTransport(
+                    Path(sys.executable)
+                ),
+            )
+            self.assertTrue(report["passed"])
+            self.assertEqual(5, report["provider_calls"])
+            self.assertTrue(
+                (destination / "bundle" / "bundle-manifest.json").is_file()
+            )
+            self.assertEqual(5, len(list(
+                (destination / "records" / "write-smoke").iterdir()
+            )))
+            comparison = json.loads(
+                (destination / "review" / "write-smoke" / "comparison.json")
+                .read_text(encoding="utf-8")
+            )
+            checkpoint = json.loads(
+                (destination / "review" / "write-smoke" / "phase-checkpoint.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertTrue(comparison["passed"])
+            self.assertTrue(checkpoint["eligible"])
+            self.assertTrue(agent_task_broker.validate_prefix(
+                supervisor.journal, checkpoint["journal_prefix"]
+            ))
+            self.assertTrue(agent_task_broker.validate_prefix(
+                supervisor.registry, checkpoint["registry_prefix"]
+            ))
+            self.assertEqual(5, supervisor.control.status()["allocated_calls"])
+            shutdown = supervisor.close()
+            self.assertEqual("clean_self_issued", shutdown["call_control"]["kind"])
+            self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])
+
+    def test_authorized_fake_smoke_rejects_bundle_drift_before_first_permit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            agent_task_authorization.create_live_topology(destination)
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            drifted = json.loads(json.dumps(fake_document))
+            drifted["operations"][0]["mode"] = 0o600
+            coordinator = mock.Mock()
+            coordinator.destination = destination
+            coordinator.plan = plan_result["execution_plan"]
+            coordinator.plan_result = plan_result
+            with self.assertRaisesRegex(ValueError, "bundle bytes"):
+                agent_task_runtime.run_authorized_fake_smoke_phase(
+                    task=task, workspace_archive=archive,
+                    fake_plan_document=drifted, coordinator=coordinator,
+                    authorization_resolver=mock.Mock(),
+                    fake_transport=agent_task_providers.FakeProviderTransport(
+                        Path(sys.executable)
+                    ),
+                )
+            coordinator.control.latch_stop.assert_called_once_with(
+                "authorized_smoke_bundle_invalid"
+            )
+            coordinator.prepare.assert_not_called()
+            self.assertEqual([], list((destination / "bundle").iterdir()))
+            self.assertEqual([], list(
+                (destination / "records" / "write-smoke").iterdir()
+            ))
+
     def test_authorized_episode_latches_when_authorization_resolution_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory).resolve()
@@ -8855,6 +9005,85 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             coordinator.control.latch_stop.assert_called_once_with(
                 "authorization_resolution_failed"
             )
+
+    def test_authorized_smoke_latches_before_store_on_independent_rejection(
+        self,
+    ) -> None:
+        coordinator = mock.Mock()
+        with mock.patch.object(
+            agent_task_runtime, "run_authorized_episode", return_value={}
+        ), mock.patch.object(
+            agent_task_runtime,
+            "validate_retained_run",
+            return_value={"passed": False, "errors": ["injected mutation"]},
+        ):
+            with self.assertRaisesRegex(ValueError, "independent validation"):
+                agent_task_runtime.run_authorized_smoke_episode(
+                    subject="claude", task={}, workspace_archive=b"",
+                    transport_plan=Path("unused"), request_id="rejected",
+                    coordinator=coordinator,
+                    authorization_resolver=mock.Mock(),
+                    transport=mock.Mock(),
+                )
+        coordinator.control.latch_stop.assert_called_once_with(
+            "authorized_episode_independent_validation_failed"
+        )
+
+    def test_single_draw_store_rejects_retry_and_emitter_drift_before_write(
+        self,
+    ) -> None:
+        digest = "sha256:" + "0" * 64
+        episode = {
+            "schema": agent_task_schema.RUN_SCHEMA,
+            "subject": "claude",
+            "task_sha256": digest,
+            "input_archive_sha256": digest,
+            "store_nonce": "single-draw-store-nonce",
+            "base_attempt": {
+                "ordinal": 1,
+                "token": "agent-attempt-v0.1:" + digest,
+                "call_id": 1,
+            },
+            "provider": {
+                "invoked": True, "route": "claude", "capture": {},
+                "cleanup_receipt": {},
+            },
+            "workspace": {"before": [], "after": []},
+            "effects_archive": {"sha256": digest, "bytes": 1, "base64": "AA=="},
+            "verdict": {
+                "adapter_valid": True, "safety_eligible": True,
+                "task_passed": True, "errors": [],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            episode_path = root / "episode.json"
+            episode_path.write_text(json.dumps(episode), encoding="utf-8")
+            (root / "specs").mkdir()
+            (root / "records").mkdir()
+            with self.assertRaisesRegex(agent_task_store.StoreError, "first base"):
+                agent_task_store.materialize_single_draw_store(
+                    subject="claude", phase="write-smoke",
+                    episode_path=episode_path, spec_root=root / "specs",
+                    records=root / "records",
+                )
+            self.assertEqual([], list((root / "specs").iterdir()))
+            self.assertEqual([], list((root / "records").iterdir()))
+
+            episode["base_attempt"]["ordinal"] = 0
+            episode_path.write_text(json.dumps(episode), encoding="utf-8")
+            drifted = root / "drifted-emitter.py"
+            drifted.write_text("raise SystemExit('drifted')\n", encoding="utf-8")
+            with mock.patch.object(agent_task_store, "EMITTER", drifted):
+                with self.assertRaisesRegex(agent_task_store.StoreError, "drifted"):
+                    agent_task_store.materialize_single_draw_store(
+                        subject="claude", phase="write-smoke",
+                        episode_path=episode_path, spec_root=root / "specs",
+                        records=root / "records",
+                        expected_emitter_sha256=digest,
+                    )
+            self.assertEqual([], list((root / "specs").iterdir()))
+            self.assertEqual([], list((root / "records").iterdir()))
 
     def test_full_five_route_simulation_seals_and_verifies_workbench_stores(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
