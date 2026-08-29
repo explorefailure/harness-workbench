@@ -107,6 +107,8 @@ python3.11 agent_task.py \
   --live-plan-destination /tmp/hwb-agent-task-live-new
 python3.11 agent_task.py --run-offline \
   --offline-destination /tmp/hwb-agent-task-offline-new
+python3.11 agent_task.py \
+  --review-smoke-destination /tmp/hwb-agent-task-retained-smoke
 ```
 
 The live-plan command performs no network operation and does not create its
@@ -162,6 +164,15 @@ both services remain live. It refuses every non-fake transport. The planned
 spec documents are still explicitly virtual at this milestone: pre-call
 ordinary `hwbspec`/freeze-lock assembly, repair-matrix stores, and a reviewed
 real-provider execution entry point remain absent.
+Before returning success, a separate offline smoke reviewer reopens all five
+stores, reruns `hwb verify`, binds each sealed episode subject to its checkpoint
+tree digest, rechecks the exact comparison, permit-usage and cleanup sets,
+validates the durable journal/registry prefixes, and repeats the configured
+credential scan. The retained `offline-review.json` records that result; store,
+review-file, or prefix mutation is rejected without another provider permit.
+The `--review-smoke-destination` command reruns that same review later and exits
+nonzero on any disagreement. It performs no network operation and allocates no
+permit.
 
 The destination must not exist. The offline run builds one deterministic task
 and workspace archive, executes it through five route-specific fake providers,

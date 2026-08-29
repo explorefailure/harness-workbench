@@ -31,12 +31,14 @@ import route_canary
 import runner as subject_runner
 import smoke
 import usage_probe
+import agent_task
 import agent_task_archives
 import agent_task_authorization
 import agent_task_broker
 import agent_task_control
 import agent_task_coordinator
 import agent_task_offline
+import agent_task_phase_review
 import agent_task_live_plan
 import agent_task_providers
 import agent_task_runtime
@@ -7817,6 +7819,24 @@ class DeepSeekGuardWiringTests(CommandConstructionTests):
 
 
 class DeclarativeAgentOfflineTests(unittest.TestCase):
+    def test_agent_task_smoke_review_cli_returns_review_status(self) -> None:
+        with mock.patch.object(
+            agent_task, "review_fake_smoke_checkpoint",
+            return_value={"passed": True, "schema": "review"},
+        ) as review, mock.patch.object(
+            sys, "argv", ["agent_task.py", "--review-smoke-destination", "/tmp/retained"]
+        ), mock.patch("builtins.print"):
+            self.assertEqual(0, agent_task.main())
+        review.assert_called_once_with(Path("/tmp/retained"))
+
+        with mock.patch.object(
+            agent_task, "review_fake_smoke_checkpoint",
+            return_value={"passed": False, "schema": "review"},
+        ), mock.patch.object(
+            sys, "argv", ["agent_task.py", "--review-smoke-destination", "/tmp/retained"]
+        ), mock.patch("builtins.print"):
+            self.assertEqual(1, agent_task.main())
+
     def test_frozen_contract_has_stable_finite_vector_ids(self) -> None:
         vectors = json.loads(
             (adapters.HERE / "agent_task_test_vectors.json").read_text(
@@ -8927,6 +8947,10 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             )
             self.assertTrue(comparison["passed"])
             self.assertTrue(checkpoint["eligible"])
+            offline_review = agent_task_phase_review.review_fake_smoke_checkpoint(
+                destination
+            )
+            self.assertTrue(offline_review["passed"], offline_review["errors"])
             self.assertTrue(agent_task_broker.validate_prefix(
                 supervisor.journal, checkpoint["journal_prefix"]
             ))
@@ -8934,6 +8958,17 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 supervisor.registry, checkpoint["registry_prefix"]
             ))
             self.assertEqual(5, supervisor.control.status()["allocated_calls"])
+            first_store = next(
+                iter((destination / "records" / "write-smoke").iterdir())
+            )
+            with (first_store / "record.json").open("ab") as stream:
+                stream.write(b"\n")
+            mutated = agent_task_phase_review.review_fake_smoke_checkpoint(destination)
+            self.assertFalse(mutated["passed"])
+            self.assertTrue(any(
+                "store digest disagrees" in error or "hwb verify failed" in error
+                for error in mutated["errors"]
+            ))
             shutdown = supervisor.close()
             self.assertEqual("clean_self_issued", shutdown["call_control"]["kind"])
             self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])

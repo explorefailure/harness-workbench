@@ -37,6 +37,7 @@ APPARATUS_FILES = (
     "agent_task_launcher.py",
     "agent_task_live_plan.py",
     "agent_task_offline.py",
+    "agent_task_phase_review.py",
     "agent_task_process.py",
     "agent_task_providers.py",
     "agent_task_routes.py",

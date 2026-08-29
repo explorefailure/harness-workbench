@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from agent_task_offline import run_offline_campaign
+from agent_task_phase_review import review_fake_smoke_checkpoint
 from agent_task_live_plan import generate_live_plan
 from agent_task_schema import SUBJECTS
 
@@ -38,12 +39,33 @@ def main() -> int:
         help="inject a freshly retained usage snapshot into --live-plan-destination",
     )
     parser.add_argument(
+        "--review-smoke-destination", type=Path,
+        help="offline-review one retained fake smoke checkpoint; makes zero calls",
+    )
+    parser.add_argument(
         "--run-offline", action="store_true",
         help="execute the five deterministic fake routes; never makes network calls",
     )
     args = parser.parse_args()
+    selected = sum((
+        args.live_plan_destination is not None,
+        args.run_offline,
+        args.review_smoke_destination is not None,
+    ))
+    if selected > 1:
+        parser.error(
+            "live plan, offline execution, and smoke review are mutually exclusive"
+        )
+    if args.review_smoke_destination is not None:
+        if args.offline_destination is not None or args.usage_snapshot is not None:
+            parser.error("smoke review does not accept execution or usage options")
+        document = review_fake_smoke_checkpoint(
+            args.review_smoke_destination,
+        )
+        print(json.dumps(document, sort_keys=True, indent=2))
+        return 0 if document["passed"] else 1
     if args.live_plan_destination is not None:
-        if args.run_offline or args.offline_destination is not None:
+        if args.offline_destination is not None:
             parser.error("live plan and offline execution options are mutually exclusive")
         usage = None
         if args.usage_snapshot is not None:

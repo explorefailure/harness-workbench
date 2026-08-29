@@ -26,6 +26,7 @@ from agent_task_coordinator import AuthorizedAttemptCoordinator, PreparedAttempt
 from agent_task_control import CallControl
 from agent_task_services import BrokerClient, CallControlClient
 from agent_task_routes import normalize_fake_route
+from agent_task_phase_review import review_fake_smoke_checkpoint
 from agent_task_providers import FakeProviderTransport, ProviderTransport
 from agent_task_schema import (
     RUN_SCHEMA,
@@ -631,6 +632,14 @@ def run_authorized_fake_smoke_phase(
     checkpoint_path = review_root / "phase-checkpoint.json"
     _write_json_exclusive(checkpoint_path, checkpoint)
     validate_live_topology(destination, phase=phase)
+    offline_review = review_fake_smoke_checkpoint(
+        destination, configured_credentials=credential_values(os.environ)
+    )
+    if not offline_review["passed"]:
+        coordinator.control.latch_stop("authorized_smoke_offline_review_failed")
+        raise ValueError("authorized smoke offline review failed")
+    offline_review_path = review_root / "offline-review.json"
+    _write_json_exclusive(offline_review_path, offline_review)
     return {
         "schema": "agent-task-authorized-fake-smoke-phase/v0.1",
         "passed": True,
@@ -642,4 +651,5 @@ def run_authorized_fake_smoke_phase(
         "credential_scan_sha256": bytes_sha256(credential_path.read_bytes()),
         "checkpoint_sha256": canonical_sha256(checkpoint),
         "bundle_manifest_sha256": bundle_manifest_sha256,
+        "offline_review_sha256": bytes_sha256(offline_review_path.read_bytes()),
     }
