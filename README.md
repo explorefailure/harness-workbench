@@ -423,7 +423,7 @@ default:
 
 ```sh
 cd subjects
-python3 -m unittest test_experiment.py            # offline; no subject installed
+python3 -m unittest discover -p 'test*.py'        # offline; no subject installed
 python3 preflight.py                              # offline; all five must be ready
 python3 smoke.py --workload repair                # offline plan; zero calls authorized
 python3 route_canary.py                           # offline gateway-route plan; zero calls
@@ -518,6 +518,7 @@ option reference.
 | [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
 | [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
 | [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
+| [`docs/declarative-agent-task-plan.md`](docs/declarative-agent-task-plan.md) | concrete implementation and acceptance plan for running one immutable agent task through Claude, Codex, DeepSeek, Hermes, or Pi without weakening the certified workload probes |
 | [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the source candidate that became final `0.1.0`; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
 
 **These pages have machine-checked surfaces, not a blanket guarantee.** The

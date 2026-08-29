@@ -1,0 +1,24 @@
+{
+  "schema": "agent-task-test-vectors/v0.1",
+  "cases": [
+    "ATV-001-canonical-success",
+    "ATV-002-valid-task-failure",
+    "ATV-003-one-successful-retry",
+    "ATV-004-exhausted-retry",
+    "ATV-005-hard-stop-refusal",
+    "ATV-006-stale-inflight",
+    "ATV-007-permit-collision",
+    "ATV-008-usage-gate-crossing",
+    "ATV-009-archive-node-kinds",
+    "ATV-010-path-collision",
+    "ATV-011-verifier-mutation",
+    "ATV-012-output-overflow",
+    "ATV-013-credential-value",
+    "ATV-014-credential-filename",
+    "ATV-015-process-interruption",
+    "ATV-016-digest-provenance-mutation",
+    "ATV-017-request-reply-crash",
+    "ATV-018-abnormal-control-plane-witness",
+    "ATV-019-smoke-prefix-checkpoint"
+  ]
+}

@@ -161,7 +161,7 @@ python -m unittest discover -s tests -v
 The offline subject adapter suite is a separate mandatory source gate:
 
 ```sh
-PYTHONPATH=src python -m unittest discover -s src/harness_workbench/subjects -p 'test_experiment.py' -v
+PYTHONPATH=src python -m unittest discover -s src/harness_workbench/subjects -p 'test*.py' -v
 ```
 
 Continue with the artifact gate only after both source gates pass:

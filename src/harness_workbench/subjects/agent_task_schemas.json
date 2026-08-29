@@ -1,0 +1,39 @@
+{
+  "schema": "agent-task-contract-set/v0.1",
+  "closed_world": true,
+  "schemas": {
+    "agent-effects-archive/v0.1": {
+      "required": ["schema", "entries"],
+      "entry_order": "path-ascending",
+      "operations": ["create", "modify", "delete"]
+    },
+    "agent-task-call-control/v0.1": {
+      "required_identity": ["campaign_nonce", "store_nonce", "base_attempt_ordinal", "base_attempt_token", "call_id"],
+      "states": ["ready", "inflight", "retry_pending", "hard_stop"]
+    },
+    "agent-task-phase-checkpoint/v0.1": {
+      "required": ["journal_prefix", "registry_prefix", "smoke_cleanup_receipts", "usage_sha256", "eligible"]
+    },
+    "agent-task-process-registry/v0.1": {
+      "cleanup_kinds": ["clean_self_issued", "abnormal_supervisor_witnessed"],
+      "required_identity": ["pid", "pgid", "platform_start_identity", "executable_identity"]
+    },
+    "agent-task-supervisor-stop/v0.1": {
+      "required": ["control_plane_child", "reason", "last_prefix_sha256", "latched_at"]
+    },
+    "agent-task/v0.1": {
+      "required": ["schema", "task_id", "prompt", "workspace_archive_sha256", "effects_policy", "verification", "limits"]
+    },
+    "agent-workspace-archive/v0.1": {
+      "required": ["schema", "entries"],
+      "entry_order": "path-ascending",
+      "node_kinds": ["directory", "file"]
+    },
+    "cross-harness-agent-task-comparison/v0.1": {
+      "subjects": ["claude", "codex", "deepseek", "hermes", "pi"]
+    },
+    "cross-harness-agent-task-run/v0.1": {
+      "required": ["schema", "subject", "task_sha256", "input_archive_sha256", "store_nonce", "base_attempt", "provider", "workspace", "effects_archive", "verdict"]
+    }
+  }
+}

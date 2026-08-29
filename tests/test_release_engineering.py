@@ -366,7 +366,7 @@ class TestInstalledArtifactSubjectGate(unittest.TestCase):
                     "/venv/bin/python",
                     "-m", "unittest", "discover",
                     "-s", str(destination),
-                    "-p", "test_experiment.py",
+                    "-p", "test*.py",
                     "-v",
                 ],
                 run.call_args_list[1].args[0],
@@ -989,7 +989,7 @@ class TestReleaseSurfaces(unittest.TestCase):
         """
         command = (
             "PYTHONPATH=src python -m unittest discover "
-            "-s src/harness_workbench/subjects -p 'test_experiment.py' -v"
+            "-s src/harness_workbench/subjects -p 'test*.py' -v"
         )
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

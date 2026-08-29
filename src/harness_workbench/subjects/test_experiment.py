@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -28,6 +30,15 @@ import route_canary
 import runner as subject_runner
 import smoke
 import usage_probe
+import agent_task_archives
+import agent_task_broker
+import agent_task_control
+import agent_task_offline
+import agent_task_live_plan
+import agent_task_providers
+import agent_task_schema
+import agent_task_services
+import agent_task_validate
 from harness_workbench import capture as capture_module
 from harness_workbench.capture import (
     Bounded,
@@ -7798,6 +7809,570 @@ class DeepSeekGuardWiringTests(CommandConstructionTests):
         # guarantee containment by construction and measure nothing.
         patched = self.patched()
         self.assertNotIn("- id: tool-bash\n  disabled: true", patched)
+
+
+class DeclarativeAgentOfflineTests(unittest.TestCase):
+    def test_frozen_contract_has_stable_finite_vector_ids(self) -> None:
+        vectors = json.loads(
+            (adapters.HERE / "agent_task_test_vectors.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("agent-task-test-vectors/v0.1", vectors["schema"])
+        self.assertEqual(19, len(vectors["cases"]))
+        self.assertEqual(len(vectors["cases"]), len(set(vectors["cases"])))
+        self.assertEqual(
+            "ATV-001-canonical-success", vectors["cases"][0]
+        )
+        self.assertEqual(
+            "ATV-019-smoke-prefix-checkpoint", vectors["cases"][-1]
+        )
+
+    def test_workspace_archive_is_deterministic_and_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "fixture"
+            (root / "nested").mkdir(parents=True)
+            (root / "empty.txt").write_bytes(b"")
+            (root / "nested" / "naïve.txt").write_bytes(b"stable\n")
+            first = agent_task_archives.build_workspace_archive(root)
+            second = agent_task_archives.build_workspace_archive(root)
+            self.assertEqual(first, second)
+            archive_doc = agent_task_archives.validate_archive(
+                first, agent_task_schema.WORKSPACE_SCHEMA
+            )
+            self.assertEqual(
+                ["empty.txt", "nested", "nested/naïve.txt"],
+                [row["path"] for row in archive_doc["entries"]],
+            )
+            self.assertEqual(0, archive_doc["entries"][0]["size"])
+            (root / "escape").symlink_to(Path(directory) / "outside")
+            with self.assertRaisesRegex(
+                agent_task_archives.ArchiveError, "symlink nodes are unsupported"
+            ):
+                agent_task_archives.build_workspace_archive(root)
+
+    def test_broker_timeout_cleans_registered_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            broker = agent_task_broker.SpawnBroker(
+                root / "registry.jsonl", python=Path(sys.executable)
+            )
+            capture, receipt = broker.launch(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=root,
+                env=dict(os.environ),
+                phase="offline-timeout-test",
+                timeout=0.1,
+                stdout_limit=1024,
+                stderr_limit=1024,
+            )
+            self.assertEqual("timeout", capture["termination_reason"])
+            self.assertFalse(capture["group_alive_after_cleanup"])
+            self.assertEqual("clean_self_issued", receipt["kind"])
+            rows = [
+                json.loads(line)
+                for line in broker.registry.read_text(encoding="utf-8").splitlines()
+            ]
+            registration = next(row for row in rows if row["event"] == "registered")
+            self.assertIn("platform_start_identity", registration)
+            self.assertIn("launcher_executable_identity", registration)
+            self.assertIn("executable_identity", registration)
+            broker.close()
+
+    def test_call_control_owns_retry_and_request_reply_crash_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.jsonl"
+            control = agent_task_control.CallControl(
+                journal,
+                campaign_nonce="campaign-nonce",
+                maximum_calls=3,
+                authorized_phases={"smoke"},
+                lease_seconds=10,
+            )
+            gate = lambda: ({"metered": False}, True)
+            first = control.request(
+                phase="smoke", subject="claude", store_nonce="store-nonce-0001",
+                request_id="request-1", usage_gate=gate,
+            )
+            self.assertEqual(first, control.request(
+                phase="smoke", subject="claude", store_nonce="store-nonce-0001",
+                request_id="request-1", usage_gate=gate,
+            ))
+            control.release(first)
+            control.complete(
+                first, result="operational_failure", cleanup_proved=True
+            )
+            retry = control.request(
+                phase="smoke", subject="claude", store_nonce="store-nonce-0001",
+                request_id="request-2", usage_gate=gate, retry_of=first.call_id,
+            )
+            self.assertEqual(1, retry.base_attempt_ordinal)
+            self.assertEqual(first.call_id, retry.retry_of)
+            control.release(retry)
+            control.complete(retry, result="success", cleanup_proved=True)
+            self.assertEqual("ready", control.state)
+            control.close()
+            events = [
+                json.loads(line)
+                for line in journal.read_text(encoding="utf-8").splitlines()
+            ]
+            allocations = [row for row in events if row["event"] == "permit_allocated"]
+            self.assertEqual([0, 1], [row["base_attempt_ordinal"] for row in allocations])
+
+    def test_call_control_latches_collision_usage_and_lost_reply_after_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            collision = agent_task_control.CallControl(
+                root / "collision.jsonl", campaign_nonce="collision",
+                maximum_calls=2, authorized_phases={"smoke"},
+            )
+            gate = lambda: ({"metered": False}, True)
+            permit = collision.request(
+                phase="smoke", subject="claude", store_nonce="store-nonce-0001",
+                request_id="one", usage_gate=gate,
+            )
+            with self.assertRaisesRegex(agent_task_control.ControlError, "inflight"):
+                collision.request(
+                    phase="smoke", subject="codex", store_nonce="store-nonce-0002",
+                    request_id="two", usage_gate=gate,
+                )
+            self.assertEqual("hard_stop", collision.state)
+
+            lost = agent_task_control.CallControl(
+                root / "lost.jsonl", campaign_nonce="lost",
+                maximum_calls=1, authorized_phases={"smoke"},
+            )
+            allocated = lost.request(
+                phase="smoke", subject="claude", store_nonce="store-nonce-0003",
+                request_id="lost-request", usage_gate=gate,
+            )
+            lost.release(allocated)
+            with self.assertRaisesRegex(
+                agent_task_control.ControlError, "already released"
+            ):
+                lost.request(
+                    phase="smoke", subject="claude", store_nonce="store-nonce-0003",
+                    request_id="lost-request", usage_gate=gate,
+                )
+            self.assertEqual("hard_stop", lost.state)
+
+            blocked = agent_task_control.CallControl(
+                root / "blocked.jsonl", campaign_nonce="blocked",
+                maximum_calls=1, authorized_phases={"smoke"},
+            )
+            with self.assertRaisesRegex(agent_task_control.ControlError, "usage gate"):
+                blocked.request(
+                    phase="smoke", subject="pi", store_nonce="store-nonce-0004",
+                    request_id="blocked", usage_gate=lambda: ({"rolling": 80}, False),
+                )
+            self.assertEqual(0, blocked.allocated_calls)
+            self.assertEqual("hard_stop", blocked.state)
+
+    def test_supervisor_abnormal_witness_is_separate_and_candidate_ineligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = root / "registry.jsonl"
+            registry.write_text(
+                json.dumps({"schema": agent_task_schema.PROCESS_REGISTRY_SCHEMA,
+                            "event": "broker_started"}) + "\n",
+                encoding="utf-8",
+            )
+            stop = agent_task_broker.witness_abnormal_termination(
+                registry, root / "stop.json", child="broker", reason="channel_eof"
+            )
+            self.assertFalse(stop["candidate_eligible"])
+            rows = [json.loads(line) for line in registry.read_text().splitlines()]
+            self.assertEqual("abnormal_supervisor_witnessed", rows[-1]["kind"])
+            self.assertEqual(
+                agent_task_schema.SUPERVISOR_STOP_SCHEMA,
+                json.loads((root / "stop.json").read_text())["schema"],
+            )
+
+    def test_smoke_checkpoint_authorizes_repair_without_service_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = agent_task_control.CallControl(
+                root / "journal.jsonl", campaign_nonce="split-authorization",
+                maximum_calls=43, authorized_phases={"canary-write-smoke"},
+                phase_maximums={"canary-write-smoke": 13},
+            )
+            registry = root / "registry.jsonl"
+            registry.write_text(
+                json.dumps({
+                    "schema": agent_task_schema.PROCESS_REGISTRY_SCHEMA,
+                    "event": "broker_started",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            receipts = [
+                {
+                    "kind": "clean_self_issued",
+                    "group_alive_after_cleanup": False,
+                    "registration_id": f"smoke-{index}",
+                }
+                for index in range(5)
+            ]
+            checkpoint = agent_task_broker.build_phase_checkpoint(
+                journal=control.journal,
+                registry=registry,
+                store_digests={subject: "sha256:" + str(index) * 64
+                               for index, subject in enumerate(agent_task_schema.SUBJECTS)},
+                comparison_sha256="sha256:" + "a" * 64,
+                usage_sha256="sha256:" + "b" * 64,
+                cleanup_receipts=receipts,
+            )
+            self.assertTrue(checkpoint["eligible"])
+            control.authorize_phase("repair-matrix", maximum_calls=30)
+            permit = control.request(
+                phase="repair-matrix", subject="pi", store_nonce="repair-store-0001",
+                request_id="repair-1",
+                usage_gate=lambda: ({"rolling": 1, "weekly": 1}, True),
+            )
+            self.assertEqual("inflight", control.state)
+            self.assertTrue(agent_task_broker.validate_prefix(
+                control.journal, checkpoint["journal_prefix"]
+            ))
+            self.assertTrue(agent_task_broker.validate_prefix(
+                registry, checkpoint["registry_prefix"]
+            ))
+            control.release(permit)
+            control.complete(permit, result="success", cleanup_proved=True)
+            control.close()
+
+    def test_authenticated_call_service_owns_lost_reply_and_wrong_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                root / "session", campaign_nonce="authenticated-campaign",
+                maximum_calls=3, authorized_phases={"smoke"},
+                phase_maximums={"smoke": 3}, lease_seconds=2,
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                ],
+            )
+            values = {
+                "phase": "smoke", "subject": "claude",
+                "store_nonce": "stable-store-nonce", "request_id": "lost-reply",
+                "retry_of": None,
+            }
+            supervisor.control.request_without_reply(**values)
+            permit = supervisor.control.request(**{
+                key: value for key, value in values.items() if key != "retry_of"
+            })
+            self.assertEqual(0, permit.base_attempt_ordinal)
+            supervisor.control.release(permit)
+            supervisor.control.complete(
+                permit, result="operational_failure", cleanup_proved=True
+            )
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "retry"):
+                supervisor.control.request(
+                    phase="smoke", subject="codex",
+                    store_nonce="stable-store-nonce", request_id="wrong-owner",
+                    retry_of=permit.call_id,
+                )
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            shutdown = supervisor.close()
+            self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])
+
+    def test_authenticated_call_service_latches_stale_usage_and_maximum(self) -> None:
+        fresh = {
+            "schema": "cross-harness-usage-snapshot/v0.1", "metered": True,
+            "windows": {
+                "rolling": {"percent": 79}, "weekly": {"percent": 89},
+            },
+        }
+        crossed = {
+            "schema": "cross-harness-usage-snapshot/v0.1", "metered": True,
+            "windows": {
+                "rolling": {"percent": 80}, "weekly": {"percent": 89},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "usage", campaign_nonce="usage-crossing",
+                maximum_calls=2, authorized_phases={"smoke"},
+                lease_seconds=1, usage_snapshots=[fresh, crossed],
+            )
+            permit = supervisor.control.request(
+                phase="smoke", subject="pi", store_nonce="usage-store-1",
+                request_id="usage-1",
+            )
+            supervisor.control.release(permit)
+            supervisor.control.complete(permit, result="success", cleanup_proved=True)
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "usage gate"):
+                supervisor.control.request(
+                    phase="smoke", subject="pi", store_nonce="usage-store-2",
+                    request_id="usage-2",
+                )
+            status = supervisor.control.status()
+            self.assertEqual(1, status["allocated_calls"])
+            self.assertEqual("hard_stop", status["state"])
+            supervisor.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "maximum", campaign_nonce="maximum-calls",
+                maximum_calls=2, authorized_phases={"smoke"},
+                lease_seconds=1, usage_snapshots=[fresh, fresh],
+            )
+            for index in range(2):
+                permit = supervisor.control.request(
+                    phase="smoke", subject="claude",
+                    store_nonce=f"maximum-store-{index}", request_id=f"maximum-{index}",
+                )
+                supervisor.control.release(permit)
+                supervisor.control.complete(
+                    permit, result="success", cleanup_proved=True
+                )
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "budget"):
+                supervisor.control.request(
+                    phase="smoke", subject="claude", store_nonce="maximum-store-2",
+                    request_id="maximum-2",
+                )
+            self.assertEqual(2, supervisor.control.status()["allocated_calls"])
+            supervisor.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "stale", campaign_nonce="stale-lease",
+                maximum_calls=1, authorized_phases={"smoke"},
+                lease_seconds=0.05, usage_snapshots=[fresh],
+            )
+            permit = supervisor.control.request(
+                phase="smoke", subject="claude", store_nonce="stale-store",
+                request_id="stale-1",
+            )
+            time.sleep(0.08)
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "expired"):
+                supervisor.control.release(permit)
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            supervisor.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "stale-retry", campaign_nonce="stale-retry",
+                maximum_calls=2, authorized_phases={"smoke"},
+                lease_seconds=0.05, usage_snapshots=[fresh],
+            )
+            permit = supervisor.control.request(
+                phase="smoke", subject="claude", store_nonce="retry-store",
+                request_id="retry-base",
+            )
+            supervisor.control.release(permit)
+            supervisor.control.complete(
+                permit, result="operational_failure", cleanup_proved=True
+            )
+            time.sleep(0.08)
+            supervisor.control.expire()
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            supervisor.close()
+
+    def test_authenticated_call_service_never_exceeds_maximum_under_contention(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "session", campaign_nonce="concurrent-maximum",
+                maximum_calls=1, authorized_phases={"smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+            )
+            outcomes: list[object] = []
+
+            def request(index: int) -> None:
+                try:
+                    outcomes.append(supervisor.control.request(
+                        phase="smoke", subject="pi",
+                        store_nonce=f"contended-store-{index}",
+                        request_id=f"contended-{index}",
+                    ))
+                except Exception as error:
+                    outcomes.append(error)
+
+            threads = [threading.Thread(target=request, args=(index,)) for index in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            permits = [row for row in outcomes if isinstance(row, agent_task_control.Permit)]
+            self.assertEqual(1, len(permits))
+            self.assertEqual(1, supervisor.control.status()["allocated_calls"])
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            supervisor.close()
+
+    def test_authenticated_services_do_not_depend_on_destination_socket_length(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            long_root = Path(directory) / ("retained-destination-" + "x" * 100)
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                long_root / "session", campaign_nonce="long-destination",
+                maximum_calls=1, authorized_phases={"smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+            )
+            self.assertGreater(len(str(long_root / "session" / "broker.sock")), 104)
+            self.assertLess(len(str(supervisor.broker_socket)), 104)
+            supervisor.close()
+
+    def test_supervisor_witnesses_broker_death_and_cleans_registered_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                root / "session", campaign_nonce="broker-death",
+                maximum_calls=1, authorized_phases={"smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+            )
+            result: list[Exception] = []
+
+            def launch() -> None:
+                try:
+                    supervisor.broker.launch(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        cwd=root, env=dict(os.environ), phase="broker-death-test",
+                        timeout=60, stdout_limit=1024, stderr_limit=1024,
+                    )
+                except Exception as error:
+                    result.append(error)
+
+            thread = threading.Thread(target=launch)
+            thread.start()
+            deadline = time.monotonic() + 5
+            registered = False
+            while time.monotonic() < deadline:
+                if supervisor.registry.exists():
+                    registered = '"event":"registered"' in supervisor.registry.read_text(
+                        encoding="utf-8"
+                    )
+                if registered:
+                    break
+                time.sleep(0.01)
+            self.assertTrue(registered)
+            os.killpg(supervisor.broker_process.pid, capture_module.signal.SIGKILL)
+            supervisor.broker_process.wait(timeout=2)
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "broker"):
+                supervisor.assert_live()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+            stop = json.loads(supervisor.stop_record.read_text(encoding="utf-8"))
+            self.assertFalse(stop["candidate_eligible"])
+            self.assertEqual("broker", stop["control_plane_child"])
+            self.assertTrue(stop["cleanup"])
+            self.assertTrue(all(
+                not row["group_alive_after_cleanup"] for row in stop["cleanup"]
+            ))
+            self.assertTrue(result)
+
+    def test_supervisor_witnesses_call_control_death_and_stops_broker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "session", campaign_nonce="control-death",
+                maximum_calls=1, authorized_phases={"smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+            )
+            os.killpg(supervisor.call_process.pid, capture_module.signal.SIGKILL)
+            supervisor.call_process.wait(timeout=2)
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "call_control"):
+                supervisor.assert_live()
+            stop = json.loads(supervisor.stop_record.read_text(encoding="utf-8"))
+            self.assertEqual("call_control", stop["control_plane_child"])
+            self.assertFalse(stop["candidate_eligible"])
+            self.assertIsNotNone(supervisor.broker_process.poll())
+
+    def test_live_plan_binds_all_routes_digests_usage_and_zero_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = dt.datetime(2026, 8, 29, 4, 0, tzinfo=dt.timezone.utc)
+            usage = {
+                "schema": "cross-harness-usage-snapshot/v0.1",
+                "read_at": now.isoformat(), "profile": "injected", "metered": True,
+                "windows": {
+                    "rolling": {"percent": 79},
+                    "weekly": {"percent": 89},
+                },
+            }
+            result = agent_task_live_plan.generate_live_plan(
+                root / "nonexistent-live", usage_snapshot=usage, now=now
+            )
+            plan = result["execution_plan"]
+            self.assertEqual(
+                result["execution_plan_sha256"], agent_task_schema.canonical_sha256(plan)
+            )
+            self.assertFalse(plan["release"]["enabled"])
+            self.assertEqual(0, plan["paid_provider_calls_authorized"])
+            self.assertTrue(plan["usage"]["fresh"]["gate_passed"])
+            self.assertEqual(
+                {"rolling": 80, "weekly": 90}, plan["usage"]["stop_thresholds"]
+            )
+            self.assertEqual(set(agent_task_schema.SUBJECTS), set(
+                plan["provider_pins"]["routes"]
+            ))
+            self.assertEqual(set(agent_task_schema.SUBJECTS), set(
+                plan["inputs"]["specs"]["write-smoke"]
+            ))
+            self.assertEqual({"nominal": 23, "maximum": 43},
+                             plan["calls"]["combined_informational_only"])
+            self.assertFalse((root / "nonexistent-live").exists())
+            with self.assertRaisesRegex(RuntimeError, "plan-only"):
+                agent_task_providers.RealProviderPlanTransport().command(
+                    subject="claude", workspace=root, prompt="task", plan=root
+                )
+
+    def test_full_five_route_simulation_seals_and_verifies_workbench_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "offline"
+            report = agent_task_offline.run_offline_campaign(destination)
+            self.assertTrue(report["passed"])
+            self.assertEqual(5, report["provider_calls"])
+            self.assertEqual(set(agent_task_schema.SUBJECTS), set(report["stores"]))
+            self.assertTrue(
+                json.loads((destination / "comparison.json").read_text())["passed"]
+            )
+            checkpoint = json.loads(
+                (destination / "phase-checkpoint.json").read_text()
+            )
+            self.assertTrue(checkpoint["eligible"])
+            self.assertTrue(agent_task_broker.validate_prefix(
+                destination / "session" / "call-control.jsonl",
+                checkpoint["journal_prefix"],
+            ))
+            self.assertTrue(agent_task_broker.validate_prefix(
+                destination / "session" / "process-registry.jsonl",
+                checkpoint["registry_prefix"],
+            ))
+            for row in report["stores"].values():
+                result = subprocess.run(
+                    [
+                        sys.executable, "-m", "harness_workbench",
+                        "--root", str(destination / "records"),
+                        "verify", row["run_id"],
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("conforms: yes", result.stdout)
+
+    def test_independent_validator_rejects_effect_digest_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "offline"
+            agent_task_offline.run_offline_campaign(destination)
+            task = json.loads((destination / "bundle" / "task.json").read_text())
+            archive = (destination / "bundle" / "workspace.zip").read_bytes()
+            run = json.loads(
+                (destination / "bundle" / "episodes" / "claude.json").read_text()
+            )
+            run["effects_archive"]["sha256"] = "sha256:" + "0" * 64
+            result = agent_task_validate.validate_retained_run(
+                run, task=task, workspace_archive=archive
+            )
+            self.assertFalse(result["passed"])
+            self.assertIn("effects archive digest disagrees", result["errors"])
 
 
 if __name__ == "__main__":

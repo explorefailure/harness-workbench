@@ -138,7 +138,7 @@ def verify_materialized_subjects(
             python,
             "-m", "unittest", "discover",
             "-s", str(destination),
-            "-p", "test_experiment.py",
+            "-p", "test*.py",
             "-v",
         ],
         cwd=work,

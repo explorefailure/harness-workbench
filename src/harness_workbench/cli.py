@@ -94,7 +94,7 @@ def cmd_subjects(args) -> int:
     if written:
         print("\nRead %s, then run a subject:"
               % os.path.join(args.into, "README.md"))
-        print("  cd %s && python3 -m unittest test_experiment.py" % args.into)
+        print("  cd %s && python3 -m unittest discover -p 'test*.py'" % args.into)
     return 0
 
 

@@ -82,7 +82,7 @@ and four more reported a quantity that moves between samples. Prefer
 `freeze` lock without being asked.
 
 ```sh
-python3.11 -m unittest -v test_experiment.py     # offline; no subject installed
+python3.11 -m unittest discover -p 'test*.py' -v # offline; no subject installed
 python3.11 runner.py --subject claude
 python3.11 runner.py --subject claude --workload guard --variant block \
     --record ../../../measure/guard/claude-block.json
@@ -97,6 +97,40 @@ python3.11 runner.py --subject pi
 python3.11 runner.py --subject pi --workload repair
 python3.11 fault_runner.py
 ```
+
+The declarative path has a separate finite offline gate. Its default is
+plan-only and authorizes no network or paid provider calls:
+
+```sh
+python3.11 agent_task.py
+python3.11 agent_task.py \
+  --live-plan-destination /tmp/hwb-agent-task-live-new
+python3.11 agent_task.py --run-offline \
+  --offline-destination /tmp/hwb-agent-task-offline-new
+```
+
+The live-plan command performs no network operation and does not create its
+destination. It displays the exact task/archive/apparatus/validator/comparator
+and per-subject spec digests, real-route templates and provider pins, rolling
+80 and weekly 90 stop thresholds, derived outer timeouts, stable store nonces,
+and nominal/maximum call counts. With no freshly injected usage snapshot it
+marks usage unreadable and remains ineligible. Real-route release is always
+disabled and requires a separate one-attempt authorization artifact; campaign
+failure never authorizes an automatic repeat.
+
+The destination must not exist. The offline run builds one deterministic task
+and workspace archive, executes it through five route-specific fake providers,
+reconstructs each effect set in an independent postcheck workspace, emits five
+ordinary Workbench stores using `[freeze, receipt, retry, sample, timing]`, runs
+`hwb verify` on every store, replays the independent exact-five comparator,
+scans retained evidence for configured credential values, validates a durable
+phase checkpoint while call control and the broker are still live, and only
+then records clean control-plane shutdown. Passing this gate authorizes no live
+campaign; live generic acceptance remains separately usage-gated and explicit.
+Call control and spawning run as separate authenticated services. The
+supervisor witnesses either service's death, latches later release, and uses
+the durable registry to perform bounded cleanup; any abnormal witness makes the
+candidate ineligible even when cleanup succeeds.
 
 ## Adapter operations
 
