@@ -8349,6 +8349,28 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertEqual(set(agent_task_schema.SUBJECTS), set(
                 plan["inputs"]["specs"]["write-smoke"]
             ))
+            for phase, draws in (("write-smoke", 1), ("repair-matrix", 3)):
+                for subject in agent_task_schema.SUBJECTS:
+                    planned_spec = plan["inputs"]["specs"][phase][subject]
+                    document = planned_spec["document"]
+                    self.assertEqual("hwbspec/v0.1", document["schema"])
+                    self.assertEqual(
+                        ["freeze", "receipt", "retry", "sample", "timing"],
+                        [feature["name"] for feature in document["features"]],
+                    )
+                    self.assertEqual({"max": 2}, document["features"][2]["config"])
+                    self.assertEqual({"n": draws}, document["features"][3]["config"])
+                    self.assertNotIn("step_timeout_ms", document)
+                    self.assertEqual(
+                        os.path.abspath(sys.executable),
+                        document["steps"][0]["argv"][0],
+                    )
+                    self.assertEqual(
+                        agent_task_schema.canonical_sha256(document),
+                        planned_spec["sha256"],
+                    )
+            self.assertIn("agent_task_specs.py", plan["inputs"]["apparatus"])
+            self.assertIn("agent_task_step.py", plan["inputs"]["apparatus"])
             self.assertEqual({"nominal": 23, "maximum": 43},
                              plan["calls"]["combined_informational_only"])
             self.assertFalse((root / "nonexistent-live").exists())
@@ -8934,9 +8956,27 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertTrue(
                 (destination / "bundle" / "bundle-manifest.json").is_file()
             )
+            self.assertFalse((destination / "bundle" / "specs").exists())
+            self.assertFalse((destination / "bundle" / "episodes").exists())
             self.assertEqual(5, len(list(
                 (destination / "records" / "write-smoke").iterdir()
             )))
+            for subject, store in report["stores"].items():
+                record = json.loads(
+                    (
+                        destination / "records" / "write-smoke"
+                        / store["run_id"] / "record.json"
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    plan_result["execution_plan"]["inputs"]["specs"]
+                    ["write-smoke"][subject]["sha256"],
+                    record["spec_digest"],
+                )
+                self.assertEqual(
+                    "agent_task_step.py", record["steps"][0]["argv"][1]
+                )
+                self.assertNotIn("agent_task_emit.py", record["steps"][0]["argv"])
             comparison = json.loads(
                 (destination / "review" / "write-smoke" / "comparison.json")
                 .read_text(encoding="utf-8")
@@ -8951,6 +8991,92 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 destination
             )
             self.assertTrue(offline_review["passed"], offline_review["errors"])
+            precall_spec = (
+                destination / "bundle" / "precall-specs" / "write-smoke"
+                / "claude" / "claude.json"
+            )
+            original_spec = precall_spec.read_bytes()
+            spec_document = json.loads(original_spec)
+            step_argv = spec_document["steps"][0]["argv"]
+            isolated_step = subprocess.run(
+                [sys.executable, "-I", "agent_task_step.py", *step_argv[2:]],
+                cwd=precall_spec.parent,
+                env={"PATH": os.environ.get("PATH", "")},
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(64, isolated_step.returncode, isolated_step.stderr)
+            refusal = json.loads(isolated_step.stderr)
+            self.assertFalse(refusal["provider_invoked"])
+            self.assertEqual("claude", refusal["subject"])
+            nonfake_environment = {
+                "PATH": os.environ.get("PATH", ""),
+                "HWB_AGENT_TASK_AUTHKEY_B64": base64.b64encode(b"z" * 32).decode(),
+                "HWB_AGENT_TASK_AUTHORIZATION_SOCKET": "/tmp/not-used-auth.sock",
+                "HWB_AGENT_TASK_BROKER_SOCKET": "/tmp/not-used-broker.sock",
+                "HWB_AGENT_TASK_CALL_SOCKET": "/tmp/not-used-call.sock",
+                "HWB_AGENT_TASK_DESTINATION": str(destination),
+                "HWB_AGENT_TASK_REQUEST_ID": "nonfake-refusal",
+                "HWB_AGENT_TASK_TRANSPORT": "real",
+            }
+            nonfake = subprocess.run(
+                [sys.executable, "-I", "agent_task_step.py", *step_argv[2:]],
+                cwd=precall_spec.parent,
+                env=nonfake_environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(64, nonfake.returncode, nonfake.stderr)
+            self.assertIn("refuses every non-fake transport", nonfake.stderr)
+            self.assertEqual(5, supervisor.control.status()["allocated_calls"])
+            refusal_runs = root / "precall-refusal-runs"
+            workbench_refusal = subprocess.run(
+                [
+                    sys.executable, "-m", "harness_workbench",
+                    "--root", str(refusal_runs), "run", str(precall_spec),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                0, workbench_refusal.returncode,
+                workbench_refusal.stdout + workbench_refusal.stderr,
+            )
+            refusal_records = list(refusal_runs.glob("*/record.json"))
+            self.assertEqual(1, len(refusal_records))
+            refusal_record = json.loads(refusal_records[0].read_text(encoding="utf-8"))
+            self.assertEqual("compared", refusal_record["extras"]["freeze"]["baseline"])
+            self.assertFalse(refusal_record["extras"]["freeze"]["drifted"])
+            self.assertEqual(5, supervisor.control.status()["allocated_calls"])
+            precall_spec.write_bytes(original_spec + b"\n")
+            spec_mutated = agent_task_phase_review.review_fake_smoke_checkpoint(
+                destination
+            )
+            self.assertFalse(spec_mutated["passed"])
+            self.assertIn(
+                "pre-call spec tree digest disagrees", spec_mutated["errors"]
+            )
+            precall_spec.write_bytes(original_spec)
+            bundle_manifest_path = destination / "bundle" / "bundle-manifest.json"
+            original_manifest = bundle_manifest_path.read_bytes()
+            bundle_manifest = json.loads(original_manifest)
+            bundle_manifest["precall_spec_assembly_sha256"] = "sha256:" + "0" * 64
+            bundle_manifest_path.write_text(
+                json.dumps(bundle_manifest, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            assembly_mutated = agent_task_phase_review.review_fake_smoke_checkpoint(
+                destination
+            )
+            self.assertFalse(assembly_mutated["passed"])
+            self.assertIn(
+                "pre-call spec assembly digest disagrees",
+                assembly_mutated["errors"],
+            )
+            bundle_manifest_path.write_bytes(original_manifest)
             self.assertTrue(agent_task_broker.validate_prefix(
                 supervisor.journal, checkpoint["journal_prefix"]
             ))
@@ -9015,6 +9141,141 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertEqual([], list(
                 (destination / "records" / "write-smoke").iterdir()
             ))
+
+    def test_preassembled_step_does_not_repeat_after_authorization_refusal(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key_file = root / "authorization.key"
+            key_file.write_bytes(b"v" * 32)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            consumed = root / "consumed"
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=consumed
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="step-refusal-campaign",
+                maximum_calls=1, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 1},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+                release_authorization=release_config,
+            )
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+            agent_task_runtime._prepare_bound_fake_bundle(
+                coordinator=coordinator, task=task,
+                workspace_archive=archive, fake_plan_document=fake_document,
+            )
+            prepared_attempts = []
+
+            def refuse(prepared: agent_task_coordinator.PreparedAttempt) -> Path:
+                prepared_attempts.append(prepared)
+                raise RuntimeError("operator withheld authorization")
+
+            with self.assertRaisesRegex(ValueError, "authorization bridge failed"):
+                agent_task_runtime.run_preassembled_fake_smoke_episode(
+                    subject="claude", task=task, workspace_archive=archive,
+                    request_id="refused-preassembled-claude",
+                    coordinator=coordinator, authorization_resolver=refuse,
+                )
+            self.assertEqual(1, len(prepared_attempts))
+            self.assertEqual(1, supervisor.control.status()["allocated_calls"])
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            self.assertEqual([], list(consumed.iterdir()))
+            self.assertEqual([], supervisor.broker.receipt_snapshot())
+            stores = list((destination / "records" / "write-smoke").iterdir())
+            self.assertEqual(1, len(stores))
+            attempts = [
+                json.loads(line)
+                for line in (stores[0] / "attempts.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+            self.assertEqual([64, 64], [row["exit"] for row in attempts])
+            supervisor.close()
+
+    def test_preassembled_step_freeze_drift_starts_zero_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key_file = root / "authorization.key"
+            key_file.write_bytes(b"w" * 32)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="step-drift-campaign",
+                maximum_calls=1, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 1},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                ],
+                release_authorization=release_config,
+            )
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+            agent_task_runtime._prepare_bound_fake_bundle(
+                coordinator=coordinator, task=task,
+                workspace_archive=archive, fake_plan_document=fake_document,
+            )
+            copied_runtime = (
+                destination / "bundle" / "precall-specs" / "write-smoke"
+                / "claude" / "agent_task_runtime.py"
+            )
+            copied_runtime.write_bytes(copied_runtime.read_bytes() + b"\n")
+            resolver = mock.Mock()
+            with self.assertRaisesRegex(ValueError, "attempt is not exact"):
+                agent_task_runtime.run_preassembled_fake_smoke_episode(
+                    subject="claude", task=task, workspace_archive=archive,
+                    request_id="drifted-preassembled-claude",
+                    coordinator=coordinator, authorization_resolver=resolver,
+                )
+            resolver.assert_not_called()
+            self.assertEqual(0, supervisor.control.status()["allocated_calls"])
+            self.assertEqual([], supervisor.broker.receipt_snapshot())
+            stores = list((destination / "records" / "write-smoke").iterdir())
+            self.assertEqual(1, len(stores))
+            attempts = [
+                json.loads(line)
+                for line in (stores[0] / "attempts.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+            self.assertEqual([64, 64], [row["exit"] for row in attempts])
+            supervisor.close()
 
     def test_authorized_episode_latches_when_authorization_resolution_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

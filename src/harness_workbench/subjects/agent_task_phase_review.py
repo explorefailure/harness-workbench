@@ -15,6 +15,35 @@ from agent_task_schema import SUBJECTS, bytes_sha256, canonical_sha256, validate
 from agent_task_validate import scan_credentials
 
 
+PHASES = ("write-smoke", "repair-matrix")
+STEP_MODULE_INPUTS = (
+    "agent_task_archives.py",
+    "agent_task_authorization.py",
+    "agent_task_broker.py",
+    "agent_task_control.py",
+    "agent_task_coordinator.py",
+    "agent_task_fake_provider.py",
+    "agent_task_phase_review.py",
+    "agent_task_process.py",
+    "agent_task_providers.py",
+    "agent_task_routes.py",
+    "agent_task_runtime.py",
+    "agent_task_schema.py",
+    "agent_task_services.py",
+    "agent_task_specs.py",
+    "agent_task_store.py",
+    "agent_task_validate.py",
+)
+STATIC_INPUTS = (
+    "agent_task_step.py",
+    *STEP_MODULE_INPUTS,
+    "task.json",
+    "workspace.zip",
+    "fake-provider-plan.json",
+    "execution-plan.json",
+)
+
+
 EXPECTED_REVIEW_FILES = {
     "comparison.json",
     "credential-scan.json",
@@ -63,6 +92,183 @@ def _prefix_valid(path: Path, prefix: Any) -> bool:
     with path.open("rb") as stream:
         raw = stream.read(prefix["bytes"])
     return len(raw) == prefix["bytes"] and bytes_sha256(raw) == prefix["sha256"]
+
+
+def _argument(argv: Any, name: str) -> Any:
+    if type(argv) is not list:
+        return None
+    try:
+        index = argv.index(name)
+        return argv[index + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def _review_pre_call_specs(
+    destination: Path, bundle_manifest: dict[str, Any], errors: list[str]
+) -> None:
+    root = destination / "bundle" / "precall-specs"
+    if root.is_symlink() or not root.is_dir():
+        errors.append("pre-call spec root is not a real directory")
+        return
+    if canon.digest_tree(str(root)) != bundle_manifest.get(
+        "precall_spec_tree_sha256"
+    ):
+        errors.append("pre-call spec tree digest disagrees")
+    planned = bundle_manifest.get("precall_specs")
+    execution_outer = _load_json(
+        destination / "bundle" / "execution-plan.json", errors
+    )
+    execution_plan = (
+        execution_outer.get("execution_plan")
+        if type(execution_outer) is dict else None
+    )
+    planned_documents = (
+        execution_plan.get("inputs", {}).get("specs")
+        if type(execution_plan) is dict else None
+    )
+    planned_nonces = (
+        execution_plan.get("store_nonces")
+        if type(execution_plan) is dict else None
+    )
+    if type(planned) is not dict or set(planned) != set(PHASES):
+        errors.append("pre-call spec manifest phases are not exact")
+        return
+    if (
+        type(planned_documents) is not dict
+        or set(planned_documents) != set(PHASES)
+        or type(planned_nonces) is not dict
+        or set(planned_nonces) != set(PHASES)
+    ):
+        errors.append("pre-call execution-plan spec phases are not exact")
+        return
+    phase_children = {path.name: path for path in root.iterdir()}
+    if set(phase_children) != set(PHASES):
+        errors.append("pre-call spec directory phases are not exact")
+        return
+    observed_rows: dict[str, Any] = {}
+    for phase in PHASES:
+        phase_root = phase_children[phase]
+        if phase_root.is_symlink() or not phase_root.is_dir():
+            errors.append(f"pre-call phase root is not a real directory: {phase}")
+            continue
+        if type(planned[phase]) is not dict:
+            errors.append(f"pre-call {phase} manifest subjects are invalid")
+            continue
+        if (
+            type(planned_documents[phase]) is not dict
+            or type(planned_nonces[phase]) is not dict
+        ):
+            errors.append(f"pre-call {phase} execution-plan subjects are invalid")
+            continue
+        subjects = {path.name: path for path in phase_root.iterdir()}
+        if (
+            set(subjects) != set(SUBJECTS)
+            or set(planned[phase]) != set(SUBJECTS)
+            or set(planned_documents[phase]) != set(SUBJECTS)
+            or set(planned_nonces[phase]) != set(SUBJECTS)
+        ):
+            errors.append(f"pre-call {phase} subject set is not exact-five")
+            continue
+        observed_rows[phase] = {}
+        for subject in SUBJECTS:
+            own = subjects[subject]
+            expected_names = {
+                *STATIC_INPUTS, f"{subject}.json", f"{subject}.freeze.lock",
+            }
+            if (
+                own.is_symlink() or not own.is_dir()
+                or {path.name for path in own.iterdir()} != expected_names
+            ):
+                errors.append(f"pre-call spec file set disagrees: {phase}/{subject}")
+                continue
+            expected_paths = [own / name for name in expected_names]
+            if any(path.is_symlink() or not path.is_file() for path in expected_paths):
+                errors.append(f"pre-call spec input is not regular: {phase}/{subject}")
+                continue
+            spec = _load_json(own / f"{subject}.json", errors)
+            lock = _load_json(own / f"{subject}.freeze.lock", errors)
+            if spec is None or lock is None:
+                continue
+            features = spec.get("features")
+            names = (
+                [
+                    row.get("name") if type(row) is dict else None
+                    for row in features
+                ]
+                if type(features) is list else []
+            )
+            draws = 1 if phase == "write-smoke" else 3
+            steps = spec.get("steps")
+            step = steps[0] if type(steps) is list and len(steps) == 1 else None
+            if (
+                spec.get("schema") != "hwbspec/v0.1"
+                or names != ["freeze", "receipt", "retry", "sample", "timing"]
+                or features[2].get("config") != {"max": 2}
+                or features[3].get("config") != {"n": draws}
+                or type(step) is not dict
+                or step.get("id") != f"{subject}-agent-task"
+                or step.get("inputs") != list(STATIC_INPUTS)
+                or spec.get("step_timeout_ms") is not None
+            ):
+                errors.append(f"pre-call spec semantics disagree: {phase}/{subject}")
+            argv = step.get("argv") if type(step) is dict else None
+            if (
+                type(argv) is not list
+                or len(argv) != 16
+                or type(argv[0]) is not str
+                or not Path(argv[0]).is_absolute()
+                or argv[1] != "agent_task_step.py"
+                or _argument(argv, "--phase") != phase
+                or _argument(argv, "--subject") != subject
+                or _argument(argv, "--store-nonce")
+                != planned_nonces[phase][subject]
+                or _argument(argv, "--task") != "task.json"
+                or _argument(argv, "--workspace-archive") != "workspace.zip"
+                or _argument(argv, "--transport-plan")
+                != "fake-provider-plan.json"
+                or _argument(argv, "--execution-plan") != "execution-plan.json"
+            ):
+                errors.append(f"pre-call spec invocation disagrees: {phase}/{subject}")
+            if canonical_sha256(spec) != planned[phase][subject]:
+                errors.append(f"pre-call planned spec digest disagrees: {phase}/{subject}")
+            execution_spec = planned_documents[phase][subject]
+            if (
+                type(execution_spec) is not dict
+                or execution_spec.get("document") != spec
+                or execution_spec.get("sha256") != canonical_sha256(spec)
+            ):
+                errors.append(
+                    f"pre-call execution-plan spec disagrees: {phase}/{subject}"
+                )
+            observed_inputs = {
+                name: canon.digest_file(str(own / name)) for name in STATIC_INPUTS
+            }
+            if lock != {"digests": observed_inputs}:
+                errors.append(f"pre-call freeze lock disagrees: {phase}/{subject}")
+            observed_rows[phase][subject] = {
+                "spec_sha256": canonical_sha256(spec),
+                "spec_file_sha256": bytes_sha256(
+                    (own / f"{subject}.json").read_bytes()
+                ),
+                "freeze_lock_sha256": bytes_sha256(
+                    (own / f"{subject}.freeze.lock").read_bytes()
+                ),
+                "inputs": observed_inputs,
+            }
+    if (
+        set(observed_rows) == set(PHASES)
+        and all(set(observed_rows[phase]) == set(SUBJECTS) for phase in PHASES)
+    ):
+        observed_assembly = {
+            "schema": "agent-task-precall-spec-assembly/v0.1",
+            "specs": observed_rows,
+            "tree_sha256": canon.digest_tree(str(root)),
+        }
+        if canonical_sha256(observed_assembly) != bundle_manifest.get(
+            "precall_spec_assembly_sha256"
+        ):
+            errors.append("pre-call spec assembly digest disagrees")
 
 
 def review_fake_smoke_checkpoint(
@@ -123,6 +329,7 @@ def review_fake_smoke_checkpoint(
             or type(files) is not dict
             or set(files) != {
                 "task.json", "workspace.zip", "fake-provider-plan.json",
+                "execution-plan.json",
             }
         ):
             errors.append("retained bundle manifest is invalid")
@@ -135,6 +342,24 @@ def review_fake_smoke_checkpoint(
                     or bytes_sha256(path.read_bytes()) != expected
                 ):
                     errors.append(f"retained bundle file digest disagrees: {name}")
+            execution_plan = _load_json(
+                destination / "bundle" / "execution-plan.json", errors
+            )
+            if (
+                execution_plan is not None
+                and (
+                    type(execution_plan) is not dict
+                    or set(execution_plan) != {
+                        "execution_plan", "execution_plan_sha256",
+                    }
+                    or canonical_sha256(execution_plan.get("execution_plan"))
+                    != execution_plan.get("execution_plan_sha256")
+                    or execution_plan.get("execution_plan_sha256")
+                    != bundle_manifest.get("execution_plan_sha256")
+                )
+            ):
+                errors.append("retained execution plan digest disagrees")
+        _review_pre_call_specs(destination, bundle_manifest, errors)
     if comparison is not None and (
         comparison.get("passed") is not True
         or set(comparison.get("subjects", {})) != set(SUBJECTS)

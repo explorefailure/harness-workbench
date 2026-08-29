@@ -11,6 +11,7 @@ from typing import Any
 
 from agent_task_offline import build_conformance_documents
 from agent_task_providers import RealProviderPlanTransport
+from agent_task_specs import build_spec_document
 from agent_task_schema import SUBJECTS, bytes_sha256, canonical_bytes, canonical_sha256
 
 
@@ -45,6 +46,8 @@ APPARATUS_FILES = (
     "agent_task_schema.py",
     "agent_task_schemas.json",
     "agent_task_services.py",
+    "agent_task_specs.py",
+    "agent_task_step.py",
     "agent_task_store.py",
     "agent_task_test_vectors.json",
     "agent_task_validate.py",
@@ -138,23 +141,10 @@ def _spec(
     *, subject: str, phase: str, task_sha256: str, archive_sha256: str,
     store_nonce: str,
 ) -> dict[str, Any]:
-    draws = 1 if phase == "write-smoke" else 3
-    return {
-        "schema": "agent-task-virtual-spec/v0.1",
-        "subject": subject,
-        "phase": phase,
-        "task_sha256": task_sha256,
-        "input_archive_sha256": archive_sha256,
-        "store_nonce": store_nonce,
-        "features": [
-            {"name": "freeze"},
-            {"name": "receipt"},
-            {"name": "retry", "config": {"max": 2}},
-            {"name": "sample", "config": {"n": draws}},
-            {"name": "timing"},
-        ],
-        "step_timeout_ms_present": False,
-    }
+    del task_sha256, archive_sha256
+    return build_spec_document(
+        subject=subject, phase=phase, store_nonce=store_nonce
+    )
 
 
 def generate_live_plan(

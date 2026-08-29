@@ -255,6 +255,13 @@ class BrokerClient:
     def status(self) -> dict[str, Any]:
         return _rpc(self.socket_path, self.authkey, {"op": "status"})
 
+    def receipt_snapshot(self) -> list[dict[str, Any]]:
+        value = _rpc(self.socket_path, self.authkey, {"op": "receipt_snapshot"})
+        if type(value) is not list or any(type(row) is not dict for row in value):
+            raise ServiceError("authenticated broker returned malformed receipts")
+        self.receipts = value
+        return value
+
     def shutdown(self) -> dict[str, Any]:
         return _rpc(self.socket_path, self.authkey, {"op": "shutdown"})
 
@@ -507,6 +514,8 @@ def _broker_server(args: argparse.Namespace) -> int:
             return {"capture": capture, "receipt": receipt}, False
         if operation == "status":
             return {"closed": broker.closed, "receipts": len(broker.receipts)}, False
+        if operation == "receipt_snapshot":
+            return list(broker.receipts), False
         if operation == "shutdown":
             receipt = broker.close()
             closing.set()

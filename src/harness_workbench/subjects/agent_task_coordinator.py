@@ -136,7 +136,10 @@ class AuthorizedAttemptCoordinator:
             raise
         environment = minimal_environment(
             process_root / f"provider-home-{permit.call_id}",
-            overrides={"PYTHONNOUSERSITE": "1"},
+            overrides={
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+            },
         )
         try:
             capture, cleanup = self.broker.launch(

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import base64
 import json
+from multiprocessing.connection import Client, Listener
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
+import threading
 from typing import Any, Callable
 
 from harness_workbench import canon
-from harness_workbench.capture import credential_values, minimal_environment
+from harness_workbench.capture import credential_values, minimal_environment, run_bounded
 
 from agent_task_archives import (
     apply_effects_archive,
@@ -20,10 +23,10 @@ from agent_task_archives import (
     snapshot_tree,
     validate_archive,
 )
-from agent_task_authorization import validate_live_topology
+from agent_task_authorization import AuthorizationExpectation, validate_live_topology
 from agent_task_broker import SpawnBroker, build_phase_checkpoint, validate_prefix
 from agent_task_coordinator import AuthorizedAttemptCoordinator, PreparedAttempt
-from agent_task_control import CallControl
+from agent_task_control import CallControl, Permit
 from agent_task_services import BrokerClient, CallControlClient
 from agent_task_routes import normalize_fake_route
 from agent_task_phase_review import review_fake_smoke_checkpoint
@@ -37,6 +40,7 @@ from agent_task_schema import (
     canonical_sha256,
     validate_task,
 )
+from agent_task_specs import assemble_pre_call_specs
 from agent_task_store import materialize_single_draw_store
 from agent_task_validate import compare_exact_five, scan_credentials, validate_retained_run
 
@@ -95,20 +99,23 @@ def _prepare_bound_fake_bundle(
         raise ValueError("fake smoke bundle root is not fresh and empty")
     task_raw = canonical_bytes(task) + b"\n"
     fake_raw = canonical_bytes(fake_plan_document) + b"\n"
+    execution_plan_raw = canonical_bytes(coordinator.plan_result) + b"\n"
     planned = coordinator.plan["inputs"]
     expected = {
         "task.json": planned["task_file_sha256"],
         "workspace.zip": planned["workspace_archive_sha256"],
         "fake-provider-plan.json": planned["fake_transport_plan_sha256"],
+        "execution-plan.json": bytes_sha256(execution_plan_raw),
     }
     supplied = {
         "task.json": bytes_sha256(task_raw),
         "workspace.zip": bytes_sha256(workspace_archive),
         "fake-provider-plan.json": bytes_sha256(fake_raw),
+        "execution-plan.json": bytes_sha256(execution_plan_raw),
     }
     if supplied != expected:
         raise ValueError("fake smoke bundle bytes do not match the execution plan")
-    untrusted = (task_raw, workspace_archive, fake_raw)
+    untrusted = (task_raw, workspace_archive, fake_raw, execution_plan_raw)
     for value in credential_values(os.environ):
         raw = value.encode("utf-8", errors="surrogatepass")
         if raw and any(raw in document for document in untrusted):
@@ -117,8 +124,10 @@ def _prepare_bound_fake_bundle(
         ("task.json", task_raw),
         ("workspace.zip", workspace_archive),
         ("fake-provider-plan.json", fake_raw),
+        ("execution-plan.json", execution_plan_raw),
     ):
         _write_bytes_exclusive(bundle / name, raw)
+    spec_assembly = assemble_pre_call_specs(bundle, coordinator.plan)
     bundle_manifest = {
         "schema": "agent-task-live-bundle-manifest/v0.1",
         "execution_plan_sha256": coordinator.plan_result["execution_plan_sha256"],
@@ -126,17 +135,154 @@ def _prepare_bound_fake_bundle(
         "apparatus_map_sha256": planned["apparatus_map_sha256"],
         "validator_program_sha256": planned["validator_program_sha256"],
         "comparator_program_sha256": planned["comparator_program_sha256"],
-        "virtual_specs": {
+        "precall_specs": {
             phase: {
                 subject: row["sha256"]
                 for subject, row in sorted(subjects.items())
             }
             for phase, subjects in sorted(planned["specs"].items())
         },
+        "precall_spec_tree_sha256": spec_assembly["tree_sha256"],
+        "precall_spec_assembly_sha256": canonical_sha256(spec_assembly),
     }
     manifest_path = bundle / "bundle-manifest.json"
     _write_json_exclusive(manifest_path, bundle_manifest)
     return bundle / "fake-provider-plan.json", bytes_sha256(manifest_path.read_bytes())
+
+
+class _AuthorizationBridge:
+    """Resolve exactly one prepared fake attempt without exposing the callback."""
+
+    def __init__(
+        self,
+        *,
+        coordinator: AuthorizedAttemptCoordinator,
+        subject: str,
+        phase: str,
+        request_id: str,
+        resolver: Callable[[PreparedAttempt], Path],
+    ) -> None:
+        if (
+            type(coordinator.control) is not CallControlClient
+            or type(coordinator.broker) is not BrokerClient
+            or coordinator.control.authkey != coordinator.broker.authkey
+        ):
+            raise ValueError("preassembled step requires the authenticated services")
+        self.coordinator = coordinator
+        self.subject = subject
+        self.phase = phase
+        self.request_id = request_id
+        self.resolver = resolver
+        self.authkey = coordinator.control.authkey
+        self.error: Exception | None = None
+        self._root = Path(tempfile.mkdtemp(prefix="hwb-agent-task-authorize-"))
+        os.chmod(self._root, 0o700)
+        self.socket = self._root / "authorize.sock"
+        self._listener = Listener(
+            str(self.socket), family="AF_UNIX", authkey=self.authkey
+        )
+        os.chmod(self.socket, 0o600)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        try:
+            connection = self._listener.accept()
+            try:
+                request = connection.recv()
+                if request == {"op": "cancel"}:
+                    response = {"ok": False, "authorization_path": None}
+                else:
+                    if type(request) is not dict or set(request) != {
+                        "permit", "authorization",
+                    }:
+                        raise ValueError("authorization bridge request is malformed")
+                    permit = Permit(**request["permit"])
+                    authorization = AuthorizationExpectation(**request["authorization"])
+                    expected = AuthorizationExpectation.from_permit(
+                        permit,
+                        execution_plan_sha256=self.coordinator.plan_result[
+                            "execution_plan_sha256"
+                        ],
+                        provider_route_sha256=self.coordinator.plan[
+                            "provider_pins"
+                        ]["route_sha256"][self.subject],
+                        model=self.coordinator.plan["provider_pins"]["routes"][
+                            self.subject
+                        ]["model"],
+                    )
+                    if (
+                        permit.phase != self.phase
+                        or permit.subject != self.subject
+                        or permit.request_id != self.request_id
+                        or permit.store_nonce
+                        != self.coordinator.plan["store_nonces"][self.phase][self.subject]
+                        or authorization != expected
+                    ):
+                        raise ValueError("authorization bridge identity disagrees")
+                    path = self.resolver(
+                        PreparedAttempt(permit=permit, authorization=authorization)
+                    )
+                    if type(path) is not Path:
+                        path = Path(path)
+                    response = {"ok": True, "authorization_path": str(path)}
+            except Exception as error:
+                self.error = error
+                response = {"ok": False, "authorization_path": None}
+            try:
+                connection.send(response)
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+            finally:
+                connection.close()
+        except Exception as error:
+            self.error = error
+        finally:
+            self._listener.close()
+
+    def close(self) -> None:
+        if self._thread.is_alive():
+            try:
+                connection = Client(
+                    str(self.socket), family="AF_UNIX", authkey=self.authkey
+                )
+                try:
+                    connection.send({"op": "cancel"})
+                    connection.recv()
+                finally:
+                    connection.close()
+            except (EOFError, OSError, ConnectionError):
+                pass
+        self._thread.join(timeout=2)
+        if self._thread.is_alive() and self.error is None:
+            self.error = RuntimeError("authorization bridge did not stop")
+        shutil.rmtree(self._root, ignore_errors=True)
+
+
+def _workbench_environment(
+    coordinator: AuthorizedAttemptCoordinator,
+    bridge: _AuthorizationBridge,
+    *,
+    request_id: str,
+) -> dict[str, str]:
+    environment = dict(os.environ)
+    if environment.get("PYTHONPATH"):
+        environment["PYTHONPATH"] = os.pathsep.join(
+            str((Path.cwd() / item).resolve())
+            if not Path(item).is_absolute() else item
+            for item in environment["PYTHONPATH"].split(os.pathsep)
+        )
+    environment.update({
+        "HWB_AGENT_TASK_AUTHKEY_B64": base64.b64encode(bridge.authkey).decode("ascii"),
+        "HWB_AGENT_TASK_AUTHORIZATION_SOCKET": str(bridge.socket),
+        "HWB_AGENT_TASK_BROKER_SOCKET": str(coordinator.broker.socket_path),
+        "HWB_AGENT_TASK_CALL_SOCKET": str(coordinator.control.socket_path),
+        "HWB_AGENT_TASK_DESTINATION": str(coordinator.destination),
+        "HWB_AGENT_TASK_REQUEST_ID": request_id,
+        "HWB_AGENT_TASK_TRANSPORT": "fake",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    })
+    return environment
 
 
 def _assertions(entries: list[dict[str, Any]], expected: list[dict[str, Any]]) -> list[str]:
@@ -507,6 +653,193 @@ def run_authorized_smoke_episode(
     }
 
 
+def run_preassembled_fake_smoke_episode(
+    *,
+    subject: str,
+    task: dict[str, Any],
+    workspace_archive: bytes,
+    request_id: str,
+    coordinator: AuthorizedAttemptCoordinator,
+    authorization_resolver: Callable[[PreparedAttempt], Path],
+) -> dict[str, Any]:
+    """Execute one fake episode as the preassembled Workbench step itself."""
+    phase = "write-smoke"
+    destination = coordinator.destination
+    records = destination / "records" / phase
+    spec_root = destination / "bundle" / "precall-specs" / phase / subject
+    spec_path = spec_root / f"{subject}.json"
+    if (
+        records.is_symlink()
+        or not records.is_dir()
+        or spec_root.is_symlink()
+        or not spec_root.is_dir()
+        or spec_path.is_symlink()
+        or not spec_path.is_file()
+    ):
+        coordinator.control.latch_stop("preassembled_workbench_topology_invalid")
+        raise ValueError("preassembled Workbench store topology is invalid")
+    before = {child.name for child in records.iterdir()}
+    if any(child.is_symlink() or not child.is_dir() for child in records.iterdir()):
+        coordinator.control.latch_stop("preassembled_workbench_store_partial")
+        raise ValueError("preassembled Workbench phase contains a partial store")
+
+    bridge = _AuthorizationBridge(
+        coordinator=coordinator,
+        subject=subject,
+        phase=phase,
+        request_id=request_id,
+        resolver=authorization_resolver,
+    )
+    environment = _workbench_environment(
+        coordinator, bridge, request_id=request_id
+    )
+    try:
+        completed = run_bounded(
+            [
+                sys.executable, "-m", "harness_workbench",
+                "--root", str(records), "run", str(spec_path),
+            ],
+            cwd=spec_root,
+            env=environment,
+            timeout=(
+                coordinator.plan["timeouts"]["subject_episode_seconds"][subject]
+                * 2 + 60
+            ),
+            stdout_limit=4 * 1024 * 1024,
+            stderr_limit=4 * 1024 * 1024,
+            termination_grace=1.0,
+            forward_signals=False,
+        )
+    finally:
+        bridge.close()
+    if bridge.error is not None:
+        coordinator.control.latch_stop("preassembled_authorization_bridge_failed")
+        raise ValueError("preassembled authorization bridge failed") from bridge.error
+    if (
+        completed.returncode != 0
+        or completed.termination_reason is not None
+        or completed.stdout_overflow
+        or completed.stderr_overflow
+        or completed.group_alive_after_cleanup
+    ):
+        coordinator.control.latch_stop("preassembled_workbench_run_failed")
+        raise ValueError("preassembled Workbench run was not bounded and clean")
+    lines = completed.stdout.decode("utf-8", errors="strict").splitlines()
+    fields = lines[0].split() if lines else []
+    if len(fields) < 5 or fields[-1] != "completed":
+        coordinator.control.latch_stop("preassembled_workbench_identity_invalid")
+        raise ValueError("preassembled Workbench run did not report completion")
+    run_id = fields[0]
+    after = {child.name for child in records.iterdir()}
+    if run_id != Path(run_id).name or after - before != {run_id} or before - after:
+        coordinator.control.latch_stop("preassembled_workbench_store_set_invalid")
+        raise ValueError("preassembled Workbench did not create exactly one store")
+    run_dir = records / run_id
+    verify_environment = dict(os.environ)
+    if verify_environment.get("PYTHONPATH"):
+        verify_environment["PYTHONPATH"] = os.pathsep.join(
+            str((Path.cwd() / item).resolve())
+            if not Path(item).is_absolute() else item
+            for item in verify_environment["PYTHONPATH"].split(os.pathsep)
+        )
+    verify = run_bounded(
+        [
+            sys.executable, "-m", "harness_workbench", "--root",
+            str(records), "verify", run_id,
+        ],
+        cwd=spec_root,
+        env=verify_environment,
+        timeout=15,
+        stdout_limit=1024 * 1024,
+        stderr_limit=1024 * 1024,
+        termination_grace=1.0,
+        forward_signals=False,
+    )
+    if (
+        verify.returncode != 0
+        or verify.termination_reason is not None
+        or verify.stdout_overflow
+        or verify.stderr_overflow
+        or verify.group_alive_after_cleanup
+        or b"conforms: yes" not in verify.stdout
+    ):
+        coordinator.control.latch_stop("preassembled_workbench_verify_failed")
+        raise ValueError("preassembled Workbench store failed hwb verify")
+    record_path = run_dir / "record.json"
+    integrity_path = run_dir / "integrity.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    attempts = [
+        json.loads(line)
+        for line in (run_dir / "attempts.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    expected_cause = [
+        {"feature": "sample", "i": 0},
+        {"feature": "retry", "i": 0},
+    ]
+    if (
+        len(attempts) != 1
+        or attempts[0].get("n") != 0
+        or attempts[0].get("caused_by") != expected_cause
+        or attempts[0].get("exit") != 0
+    ):
+        coordinator.control.latch_stop("preassembled_workbench_attempt_invalid")
+        raise ValueError("preassembled Workbench attempt is not exact single-draw")
+    stdout_path = (
+        run_dir / "steps" / f"{subject}-agent-task"
+        / "attempts" / "0" / "stdout.bin"
+    )
+    try:
+        episode = json.loads(stdout_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        coordinator.control.latch_stop("preassembled_workbench_episode_invalid")
+        raise ValueError("preassembled Workbench episode output is invalid") from error
+    validation = validate_retained_run(
+        episode, task=task, workspace_archive=workspace_archive
+    )
+    if not validation["passed"]:
+        coordinator.control.latch_stop(
+            "authorized_episode_independent_validation_failed"
+        )
+        raise ValueError("preassembled episode failed independent validation")
+    freeze = record.get("extras", {}).get("freeze", {})
+    receipt = record.get("extras", {}).get("receipt", {}).get("bound", {})
+    if (
+        episode["subject"] != subject
+        or episode["store_nonce"]
+        != coordinator.plan["store_nonces"][phase][subject]
+        or record.get("run_id") != run_id
+        or freeze.get("baseline") != "compared"
+        or freeze.get("drifted") is not False
+        or receipt.get("inputs_from") != "freeze"
+        or receipt.get("inputs") != freeze.get("digests")
+    ):
+        coordinator.control.latch_stop("preassembled_workbench_binding_invalid")
+        raise ValueError("preassembled Workbench store binding is invalid")
+    try:
+        validate_live_topology(destination, phase=phase)
+    except Exception:
+        coordinator.control.latch_stop("authorized_store_topology_invalid")
+        raise
+    store = {
+        "schema": "agent-task-single-draw-store/v0.1",
+        "phase": phase,
+        "subject": subject,
+        "run_id": run_id,
+        "run_store_tree_sha256": canon.digest_tree(str(run_dir)),
+        "record_json_sha256": canon.digest_file(str(record_path)),
+        "integrity_json_sha256": canon.digest_file(str(integrity_path)),
+    }
+    return {
+        "schema": "agent-task-authorized-smoke-result/v0.1",
+        "episode": episode,
+        "independent_validation": validation,
+        "episode_path": str(stdout_path),
+        "store": store,
+    }
+
+
 def run_authorized_fake_smoke_phase(
     *,
     task: dict[str, Any],
@@ -526,7 +859,7 @@ def run_authorized_fake_smoke_phase(
     phase = "write-smoke"
     validate_live_topology(destination, phase=phase)
     try:
-        transport_plan, bundle_manifest_sha256 = _prepare_bound_fake_bundle(
+        _, bundle_manifest_sha256 = _prepare_bound_fake_bundle(
             coordinator=coordinator,
             task=task,
             workspace_archive=workspace_archive,
@@ -545,15 +878,13 @@ def run_authorized_fake_smoke_phase(
         coordinator.control.latch_stop("authorized_smoke_subject_set_invalid")
         raise ValueError("authorized smoke planned subject set is not exact-five")
     for subject in SUBJECTS:
-        result = run_authorized_smoke_episode(
+        result = run_preassembled_fake_smoke_episode(
             subject=subject,
             task=task,
             workspace_archive=workspace_archive,
-            transport_plan=transport_plan,
             request_id=f"{request_prefix}-{subject}",
             coordinator=coordinator,
             authorization_resolver=authorization_resolver,
-            transport=fake_transport,
         )
         results.append(result)
 
@@ -604,7 +935,8 @@ def run_authorized_fake_smoke_phase(
     if not credential_scan["passed"]:
         coordinator.control.latch_stop("authorized_smoke_credential_scan_failed")
         raise ValueError("authorized smoke retained a configured credential")
-    if len(coordinator.broker.receipts) != 5:
+    cleanup_receipts = coordinator.broker.receipt_snapshot()
+    if len(cleanup_receipts) != 5:
         coordinator.control.latch_stop("authorized_smoke_cleanup_set_invalid")
         raise ValueError("authorized smoke cleanup receipt set is not exact-five")
     checkpoint = build_phase_checkpoint(
@@ -616,7 +948,7 @@ def run_authorized_fake_smoke_phase(
         },
         comparison_sha256=canonical_sha256(comparison),
         usage_sha256=canonical_sha256(usage_evidence),
-        cleanup_receipts=coordinator.broker.receipts,
+        cleanup_receipts=cleanup_receipts,
     )
     if (
         not checkpoint["eligible"]

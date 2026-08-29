@@ -161,9 +161,20 @@ bundle manifest; consumes five separate one-call artifacts; verifies all five
 stores; retains the independent comparison, permit-usage evidence, and
 credential scan; and seals a durable journal/registry phase checkpoint while
 both services remain live. It refuses every non-fake transport. The planned
-spec documents are still explicitly virtual at this milestone: pre-call
-ordinary `hwbspec`/freeze-lock assembly, repair-matrix stores, and a reviewed
-real-provider execution entry point remain absent.
+spec documents are now ordinary `hwbspec/v0.1` documents. Before the first
+permit, the bundle assembler materializes exact smoke and matrix copies for all
+five subjects, copies every declared input beside each spec, creates its freeze
+lock, and verifies the resulting spec digest against the execution plan. The
+offline reviewer independently re-hashes that complete tree and each lock.
+The exact-five fake smoke now executes inside those preassembled Workbench
+steps. Each step independently rechecks its freeze lock, execution plan,
+apparatus copies, task, archive, and fake plan before requesting a permit, then
+uses the authenticated call-control and broker services through a one-shot
+authorization bridge. The resulting Workbench attempt stdout is the retained
+episode itself; no post-call emitter or replacement spec is used. Missing,
+incomplete, or non-fake step context refuses before a permit, and authorization
+failure cannot obtain a second artifact through Workbench retry. Repair-matrix
+stores and a reviewed real-provider execution entry point remain absent.
 Before returning success, a separate offline smoke reviewer reopens all five
 stores, reruns `hwb verify`, binds each sealed episode subject to its checkpoint
 tree digest, rechecks the exact comparison, permit-usage and cleanup sets,
