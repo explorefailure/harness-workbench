@@ -11,6 +11,11 @@
       "required_identity": ["campaign_nonce", "store_nonce", "base_attempt_ordinal", "base_attempt_token", "call_id"],
       "states": ["ready", "inflight", "retry_pending", "hard_stop"]
     },
+    "agent-task-one-attempt-authorization/v0.1": {
+      "maximum_provider_calls": 1,
+      "automatic_retry": false,
+      "required_binding": ["execution_plan_sha256", "provider_route_sha256", "usage_snapshot_sha256", "campaign_nonce", "phase", "subject", "model", "store_nonce", "request_id", "base_attempt_ordinal", "base_attempt_token", "call_id"]
+    },
     "agent-task-phase-checkpoint/v0.1": {
       "required": ["journal_prefix", "registry_prefix", "smoke_cleanup_receipts", "usage_sha256", "eligible"]
     },

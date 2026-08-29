@@ -24,6 +24,14 @@ from agent_task_broker import (
     append_registry_row,
     witness_abnormal_termination,
 )
+from agent_task_authorization import (
+    AuthorizationError,
+    AuthorizationExpectation,
+    OneAttemptAuthorizer,
+    load_authorization_key,
+    validate_bound_files,
+    validate_release_configuration,
+)
 from agent_task_control import CallControl, ControlError, Permit
 from agent_task_process import platform_start_identity, process_executable
 from agent_task_schema import PROCESS_REGISTRY_SCHEMA
@@ -173,8 +181,15 @@ class CallControlClient:
             self.socket_path, self.authkey, {"op": "request", **values}
         )
 
-    def release(self, permit: Permit) -> None:
-        _rpc(self.socket_path, self.authkey, {"op": "release", "permit": asdict(permit)})
+    def release(
+        self, permit: Permit, *, authorization_path: Path | None = None
+    ) -> dict[str, Any] | None:
+        return _rpc(self.socket_path, self.authkey, {
+            "op": "release", "permit": asdict(permit),
+            "authorization_path": (
+                str(authorization_path) if authorization_path is not None else None
+            ),
+        })
 
     def complete(self, permit: Permit, *, result: str, cleanup_proved: bool) -> None:
         _rpc(self.socket_path, self.authkey, {
@@ -349,6 +364,16 @@ def _call_control_server(args: argparse.Namespace) -> int:
         lease_seconds=config["lease_seconds"],
     )
     usage = _UsageReader(config)
+    release_config = config.get("release_authorization")
+    authorizer = None
+    if release_config is not None:
+        release_config = validate_release_configuration(
+            release_config, require_destination_nonexistent=True
+        )
+        authorizer = OneAttemptAuthorizer(
+            Path(release_config["consumed_dir"]),
+            key=load_authorization_key(Path(release_config["key_file"])),
+        )
     closing = threading.Event()
 
     def abnormal() -> None:
@@ -373,8 +398,44 @@ def _call_control_server(args: argparse.Namespace) -> int:
             )
             return asdict(permit), False
         if operation == "release":
-            control.release(_permit(request["permit"]))
-            return None, False
+            permit = _permit(request["permit"])
+            artifact_path = request.get("authorization_path")
+            receipt = None
+            if authorizer is None:
+                if artifact_path is not None:
+                    raise ServiceError(
+                        "authorization artifact supplied to an offline control plane"
+                    )
+            else:
+                if type(artifact_path) is not str or not artifact_path:
+                    control.latch_stop("release_authorization_missing")
+                    raise ServiceError(
+                        "provider release requires a one-attempt authorization artifact"
+                    )
+                route = release_config["routes"].get(permit.subject)
+                if type(route) is not dict:
+                    control.latch_stop("release_authorization_route_unbound")
+                    raise ServiceError("provider release has no bound route")
+                expectation = AuthorizationExpectation.from_permit(
+                    permit,
+                    execution_plan_sha256=release_config["execution_plan_sha256"],
+                    provider_route_sha256=route["provider_route_sha256"],
+                    model=route["model"],
+                )
+                try:
+                    validate_bound_files(release_config["bound_files"])
+                except AuthorizationError:
+                    control.latch_stop("release_bound_input_drift")
+                    raise
+                try:
+                    receipt = authorizer.consume(Path(artifact_path), expectation)
+                except AuthorizationError:
+                    control.latch_stop("release_authorization_rejected")
+                    raise
+            # Consumption deliberately precedes release. If release then fails,
+            # the authorization remains spent and cannot cause a repeated call.
+            control.release(permit)
+            return receipt, False
         if operation == "complete":
             control.complete(
                 _permit(request["permit"]), result=request["result"],
@@ -465,9 +526,10 @@ class ControlPlaneSupervisor:
         usage_mode: str = "injected",
         usage_limits: dict[str, int] | None = None,
         usage_snapshots: list[dict[str, Any]] | None = None,
+        release_authorization: dict[str, Any] | None = None,
         startup_seconds: float = DEFAULT_STARTUP_SECONDS,
     ) -> None:
-        if usage_mode == "gateway":
+        if usage_mode == "gateway" and release_authorization is None:
             raise ServiceError(
                 "gateway control-plane release requires a separately validated authorization artifact"
             )
@@ -497,6 +559,7 @@ class ControlPlaneSupervisor:
             "usage_limits": usage_limits or {"rolling": 80, "weekly": 90},
             "usage_snapshots": usage_snapshots or [],
             "usage_dir": str(session / "permit-usage"),
+            "release_authorization": release_authorization,
         })
         _write_json_exclusive(broker_config, {
             "registry": str(self.registry), "python": str(Path(sys.executable).resolve()),

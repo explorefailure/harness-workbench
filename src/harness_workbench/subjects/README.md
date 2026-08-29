@@ -116,7 +116,18 @@ and per-subject spec digests, real-route templates and provider pins, rolling
 and nominal/maximum call counts. With no freshly injected usage snapshot it
 marks usage unreadable and remains ineligible. Real-route release is always
 disabled and requires a separate one-attempt authorization artifact; campaign
-failure never authorizes an automatic repeat.
+failure never authorizes an automatic repeat. The authenticated call-control
+service validates that artifact against the exact execution-plan, provider-route,
+permit-time usage, campaign, phase, subject/model, store, request, and base-attempt
+identities. Service startup independently recomputes the full plan, exact-five
+route map, apparatus map, fresh-usage eligibility, key permissions, and fresh
+destination. Immediately before each release it re-hashes every bound apparatus
+file, then writes an exclusive, fsynced consumption marker. Artifacts expire
+within ten minutes, cover exactly one provider call,
+and cannot be replayed after a process restart. Missing, malformed, mismatched,
+expired, overbroad, or reused authorization hard-stops the campaign. The real
+provider transport remains plan-only until a separately reviewed execution
+entry point is implemented; this boundary alone cannot invoke a provider.
 
 The destination must not exist. The offline run builds one deterministic task
 and workspace archive, executes it through five route-specific fake providers,

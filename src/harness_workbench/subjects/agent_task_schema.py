@@ -18,6 +18,7 @@ CALL_CONTROL_SCHEMA = "agent-task-call-control/v0.1"
 PROCESS_REGISTRY_SCHEMA = "agent-task-process-registry/v0.1"
 PHASE_CHECKPOINT_SCHEMA = "agent-task-phase-checkpoint/v0.1"
 SUPERVISOR_STOP_SCHEMA = "agent-task-supervisor-stop/v0.1"
+AUTHORIZATION_SCHEMA = "agent-task-one-attempt-authorization/v0.1"
 
 MAX_PROMPT_BYTES = 128 * 1024
 MAX_ARCHIVE_BYTES = 72 * 1024 * 1024

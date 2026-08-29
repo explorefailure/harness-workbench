@@ -266,6 +266,9 @@ class CallControl:
             if self._inflight != permit or self.state != "inflight":
                 self._latch("permit_release_identity_mismatch")
                 raise ControlError("permit release does not match inflight allocation")
+            if permit.request_id in self._released:
+                self._latch("duplicate_provider_release")
+                raise ControlError("provider permit was already released")
             if self.clock() >= permit.lease_deadline:
                 self._latch("permit_lease_expired_before_release")
                 raise ControlError("provider permit lease expired")

@@ -28,6 +28,7 @@ APPARATUS_FILES = (
     "adapters.py",
     "agent_task.py",
     "agent_task_archives.py",
+    "agent_task_authorization.py",
     "agent_task_broker.py",
     "agent_task_control.py",
     "agent_task_emit.py",
@@ -223,6 +224,9 @@ def generate_live_plan(
             "active_profile": selection["active"],
             "pins": pins,
             "routes": routes,
+            "route_sha256": {
+                subject: canonical_sha256(routes[subject]) for subject in SUBJECTS
+            },
         },
         "usage": {
             "stop_thresholds": {"rolling": ROLLING_STOP, "weekly": WEEKLY_STOP},
@@ -246,6 +250,15 @@ def generate_live_plan(
             "enabled": False,
             "authorization_artifact_present": False,
             "separate_authorization_artifact_required": True,
+            "authorization_schema": "agent-task-one-attempt-authorization/v0.1",
+            "authorization_must_bind": [
+                "execution_plan_sha256", "provider_route_sha256",
+                "usage_snapshot_sha256", "campaign_nonce", "phase", "subject",
+                "model", "store_nonce", "request_id", "base_attempt_ordinal",
+                "base_attempt_token", "call_id",
+            ],
+            "authorization_maximum_lifetime_seconds": 600,
+            "authorization_consumption": "durable exclusive marker before release",
             "one_authorization_covers": "one paid attempt",
             "automatic_retry_after_campaign_failure": False,
             "adapter_certification_promotion": False,

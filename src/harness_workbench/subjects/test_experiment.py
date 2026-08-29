@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ import runner as subject_runner
 import smoke
 import usage_probe
 import agent_task_archives
+import agent_task_authorization
 import agent_task_broker
 import agent_task_control
 import agent_task_offline
@@ -8312,6 +8314,16 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 plan["provider_pins"]["routes"]
             ))
             self.assertEqual(set(agent_task_schema.SUBJECTS), set(
+                plan["provider_pins"]["route_sha256"]
+            ))
+            for subject in agent_task_schema.SUBJECTS:
+                self.assertEqual(
+                    agent_task_schema.canonical_sha256(
+                        plan["provider_pins"]["routes"][subject]
+                    ),
+                    plan["provider_pins"]["route_sha256"][subject],
+                )
+            self.assertEqual(set(agent_task_schema.SUBJECTS), set(
                 plan["inputs"]["specs"]["write-smoke"]
             ))
             self.assertEqual({"nominal": 23, "maximum": 43},
@@ -8321,6 +8333,345 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 agent_task_providers.RealProviderPlanTransport().command(
                     subject="claude", workspace=root, prompt="task", plan=root
                 )
+
+    def test_one_attempt_authorization_rejects_tamper_mismatch_expiry_and_replay(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = dt.datetime(2026, 8, 29, 5, 0, tzinfo=dt.timezone.utc)
+            key = b"a" * 32
+            permit = agent_task_control.Permit(
+                campaign_nonce="campaign-auth", phase="write-smoke",
+                subject="claude", store_nonce="store-auth", request_id="request-auth",
+                base_attempt_ordinal=0,
+                base_attempt_token="agent-attempt-v0.1:sha256:" + "b" * 64,
+                call_id=1, retry_of=None, lease_deadline=100.0,
+                usage_sha256="sha256:" + "c" * 64,
+            )
+            expected = agent_task_authorization.AuthorizationExpectation.from_permit(
+                permit,
+                execution_plan_sha256="sha256:" + "d" * 64,
+                provider_route_sha256="sha256:" + "e" * 64,
+                model="claude-pinned",
+            )
+
+            def write_artifact(name: str, artifact: dict) -> Path:
+                path = root / name
+                path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+                return path
+
+            valid = agent_task_authorization.build_authorization(
+                expected, authorization_id="1" * 64,
+                issued_at=now - dt.timedelta(seconds=1),
+                expires_at=now + dt.timedelta(seconds=60), key=key,
+            )
+            valid_path = write_artifact("valid.json", valid)
+            authorizer = agent_task_authorization.OneAttemptAuthorizer(
+                root / "consumed", key=key
+            )
+            outcomes: list[object] = []
+
+            def consume() -> None:
+                try:
+                    outcomes.append(authorizer.consume(valid_path, expected, now=now))
+                except Exception as error:
+                    outcomes.append(error)
+
+            threads = [threading.Thread(target=consume) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(1, sum(type(row) is dict for row in outcomes))
+            self.assertEqual(7, sum(
+                isinstance(row, agent_task_authorization.AuthorizationError)
+                for row in outcomes
+            ))
+            restarted = agent_task_authorization.OneAttemptAuthorizer(
+                root / "consumed", key=key
+            )
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "already consumed"
+            ):
+                restarted.consume(valid_path, expected, now=now)
+
+            tampered = agent_task_authorization.build_authorization(
+                expected, authorization_id="2" * 64,
+                issued_at=now - dt.timedelta(seconds=1),
+                expires_at=now + dt.timedelta(seconds=60), key=key,
+            )
+            tampered["payload"]["model"] = "unbound-model"
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "signature is invalid"
+            ):
+                authorizer.consume(
+                    write_artifact("tampered.json", tampered), expected, now=now
+                )
+
+            mismatch = agent_task_authorization.build_authorization(
+                expected, authorization_id="3" * 64,
+                issued_at=now - dt.timedelta(seconds=1),
+                expires_at=now + dt.timedelta(seconds=60), key=key,
+            )
+            wrong_expected = agent_task_authorization.AuthorizationExpectation.from_permit(
+                permit,
+                execution_plan_sha256=expected.execution_plan_sha256,
+                provider_route_sha256=expected.provider_route_sha256,
+                model="different-pin",
+            )
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "model does not match"
+            ):
+                authorizer.consume(
+                    write_artifact("mismatch.json", mismatch), wrong_expected, now=now
+                )
+
+            expired = agent_task_authorization.build_authorization(
+                expected, authorization_id="4" * 64,
+                issued_at=now - dt.timedelta(seconds=61),
+                expires_at=now - dt.timedelta(seconds=1), key=key,
+            )
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "expired"
+            ):
+                authorizer.consume(
+                    write_artifact("expired.json", expired), expected, now=now
+                )
+
+            overbroad = agent_task_authorization.build_authorization(
+                expected, authorization_id="5" * 64,
+                issued_at=now - dt.timedelta(seconds=1),
+                expires_at=now + dt.timedelta(seconds=60), key=key,
+            )
+            overbroad["payload"]["maximum_provider_calls"] = 2
+            overbroad["signature"] = "hmac-sha256:" + hmac.new(
+                key, agent_task_schema.canonical_bytes(overbroad["payload"]),
+                hashlib.sha256,
+            ).hexdigest()
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "one call"
+            ):
+                authorizer.consume(
+                    write_artifact("overbroad.json", overbroad), expected, now=now
+                )
+
+    def test_authenticated_service_consumes_authorization_before_one_release(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = b"z" * 32
+            key_file = root / "authorization.key"
+            descriptor = os.open(
+                key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            try:
+                os.write(descriptor, key)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            plan_now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": plan_now.isoformat(),
+                },
+                now=plan_now,
+            )
+            plan = plan_result["execution_plan"]
+            route = plan["provider_pins"]["routes"]["claude"]
+            plan_sha256 = plan_result["execution_plan_sha256"]
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                root / "session", campaign_nonce="authorized-campaign",
+                maximum_calls=2, authorized_phases={"write-smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                ],
+                release_authorization=release_config,
+            )
+            permit = supervisor.control.request(
+                phase="write-smoke", subject="claude", store_nonce="authorized-store",
+                request_id="authorized-request",
+            )
+            expectation = agent_task_authorization.AuthorizationExpectation.from_permit(
+                permit, execution_plan_sha256=plan_sha256,
+                provider_route_sha256=plan["provider_pins"]["route_sha256"]["claude"],
+                model=route["model"],
+            )
+            current = dt.datetime.now(dt.timezone.utc)
+            artifact = agent_task_authorization.build_authorization(
+                expectation, authorization_id="7" * 64,
+                issued_at=current - dt.timedelta(seconds=1),
+                expires_at=current + dt.timedelta(seconds=60), key=key,
+            )
+            artifact_path = root / "authorization.json"
+            artifact_path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+            receipt = supervisor.control.release(
+                permit, authorization_path=artifact_path
+            )
+            self.assertEqual(permit.call_id, receipt["call_id"])
+            self.assertEqual(1, receipt["maximum_provider_calls"])
+            supervisor.control.complete(
+                permit, result="operational_failure", cleanup_proved=True
+            )
+            retry = supervisor.control.request(
+                phase="write-smoke", subject="claude", store_nonce="authorized-store",
+                request_id="authorized-retry", retry_of=permit.call_id,
+            )
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "does not match"):
+                supervisor.control.release(retry, authorization_path=artifact_path)
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            supervisor.close()
+            rows = [
+                json.loads(line)
+                for line in supervisor.journal.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(1, sum(
+                row["event"] == "provider_released" for row in rows
+            ))
+
+            missing_config = dict(release_config)
+            missing_config["consumed_dir"] = str(root / "missing-consumed")
+            missing = agent_task_services.ControlPlaneSupervisor(
+                root / "missing-session", campaign_nonce="missing-authorization",
+                maximum_calls=1, authorized_phases={"write-smoke"},
+                usage_snapshots=[{"schema": "offline-usage/v0.1", "metered": False}],
+                release_authorization=missing_config,
+            )
+            missing_permit = missing.control.request(
+                phase="write-smoke", subject="claude", store_nonce="missing-store",
+                request_id="missing-request",
+            )
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "requires"):
+                missing.control.release(missing_permit)
+            self.assertEqual("hard_stop", missing.control.status()["state"])
+            missing.close()
+
+    def test_release_configuration_rejects_plan_tamper_and_existing_destination(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key_file = root / "authorization.key"
+            key_file.write_bytes(b"q" * 32)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            config = agent_task_authorization.build_release_configuration(
+                result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            self.assertEqual(
+                result["execution_plan_sha256"], config["execution_plan_sha256"]
+            )
+
+            tampered = json.loads(json.dumps(config))
+            tampered["execution_plan"]["provider_pins"]["routes"]["claude"][
+                "model"
+            ] = "unbound-model"
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "plan digest"
+            ):
+                agent_task_authorization.validate_release_configuration(
+                    tampered, require_destination_nonexistent=True
+                )
+
+            tampered["execution_plan_sha256"] = agent_task_schema.canonical_sha256(
+                tampered["execution_plan"]
+            )
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "route digest"
+            ):
+                agent_task_authorization.validate_release_configuration(
+                    tampered, require_destination_nonexistent=True
+                )
+
+            (root / "live-destination").mkdir()
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "no longer nonexistent"
+            ):
+                agent_task_authorization.validate_release_configuration(
+                    config, require_destination_nonexistent=True
+                )
+
+    def test_release_time_apparatus_drift_hard_stops_without_consuming_authorization(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apparatus = root / "apparatus"
+            apparatus.mkdir()
+            for name in agent_task_live_plan.APPARATUS_FILES:
+                source = agent_task_live_plan.HERE / name
+                (apparatus / name).write_bytes(source.read_bytes())
+            key_file = root / "authorization.key"
+            key_file.write_bytes(b"r" * 32)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            consumed = root / "consumed"
+            release_config = agent_task_authorization.build_release_configuration(
+                result, key_file=key_file, consumed_dir=consumed,
+                apparatus_root=apparatus,
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                root / "session", campaign_nonce="drift-campaign",
+                maximum_calls=1, authorized_phases={"write-smoke"},
+                usage_snapshots=[{"schema": "offline-usage/v0.1", "metered": False}],
+                release_authorization=release_config,
+            )
+            permit = supervisor.control.request(
+                phase="write-smoke", subject="claude", store_nonce="drift-store",
+                request_id="drift-request",
+            )
+            plan = result["execution_plan"]
+            expectation = agent_task_authorization.AuthorizationExpectation.from_permit(
+                permit,
+                execution_plan_sha256=result["execution_plan_sha256"],
+                provider_route_sha256=plan["provider_pins"]["route_sha256"]["claude"],
+                model=plan["provider_pins"]["routes"]["claude"]["model"],
+            )
+            artifact = agent_task_authorization.build_authorization(
+                expectation, authorization_id="8" * 64,
+                issued_at=now - dt.timedelta(seconds=1),
+                expires_at=now + dt.timedelta(seconds=60), key=b"r" * 32,
+            )
+            artifact_path = root / "authorization.json"
+            artifact_path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+            (apparatus / "adapters.py").write_bytes(b"drifted after service start\n")
+            with self.assertRaisesRegex(agent_task_services.ServiceError, "drifted"):
+                supervisor.control.release(permit, authorization_path=artifact_path)
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            self.assertEqual([], list(consumed.iterdir()))
+            supervisor.close()
+            rows = [
+                json.loads(line)
+                for line in supervisor.journal.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn(
+                "release_bound_input_drift",
+                [row.get("reason") for row in rows if row["event"] == "hard_stop"],
+            )
 
     def test_full_five_route_simulation_seals_and_verifies_workbench_stores(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
