@@ -121,13 +121,30 @@ service validates that artifact against the exact execution-plan, provider-route
 permit-time usage, campaign, phase, subject/model, store, request, and base-attempt
 identities. Service startup independently recomputes the full plan, exact-five
 route map, apparatus map, fresh-usage eligibility, key permissions, and fresh
-destination. Immediately before each release it re-hashes every bound apparatus
+destination. The supervisor atomically claims that resolved destination with
+mode `0700` and creates the fixed bundle/session/records/process/review skeleton.
+Immediately before each release it rejects aliases, unexpected topology,
+non-directory or overfull phase stores, and re-hashes every bound apparatus
 file, then writes an exclusive, fsynced consumption marker. Artifacts expire
 within ten minutes, cover exactly one provider call,
 and cannot be replayed after a process restart. Missing, malformed, mismatched,
 expired, overbroad, or reused authorization hard-stops the campaign. The real
 provider transport remains plan-only until a separately reviewed execution
 entry point is implemented; this boundary alone cannot invoke a provider.
+
+The execution coordinator is deliberately two-step. `prepare` allocates one
+permit and returns its exact authorization binding; `execute` accepts only that
+prepared identity and a matching artifact, revalidates the retained fake plan
+and contained workspace, and launches once through the broker. It never requests
+a retry. An operational failure leaves call control in `retry_pending` for a
+new, separately authorized decision, while command-construction or uncertain
+broker failures hard-stop. Coordinator conformance uses the fake transport;
+the real transport still refuses command construction even after authorization.
+The authorized episode wrapper retains independent precheck, agent, and
+postcheck workspaces under `process/`, reconstructs the observed effects in the
+postcheck workspace, and emits the same run envelope and verdict fields as the
+offline runtime. Failure to resolve an authorization after permit allocation
+hard-stops rather than abandoning an ambiguous inflight permit.
 
 The destination must not exist. The offline run builds one deterministic task
 and workspace archive, executes it through five route-specific fake providers,

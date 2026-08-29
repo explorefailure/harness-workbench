@@ -28,8 +28,10 @@ from agent_task_authorization import (
     AuthorizationError,
     AuthorizationExpectation,
     OneAttemptAuthorizer,
+    create_live_topology,
     load_authorization_key,
     validate_bound_files,
+    validate_live_topology,
     validate_release_configuration,
 )
 from agent_task_control import CallControl, ControlError, Permit
@@ -368,7 +370,7 @@ def _call_control_server(args: argparse.Namespace) -> int:
     authorizer = None
     if release_config is not None:
         release_config = validate_release_configuration(
-            release_config, require_destination_nonexistent=True
+            release_config, require_destination_nonexistent=False
         )
         authorizer = OneAttemptAuthorizer(
             Path(release_config["consumed_dir"]),
@@ -423,9 +425,13 @@ def _call_control_server(args: argparse.Namespace) -> int:
                     model=route["model"],
                 )
                 try:
+                    validate_live_topology(
+                        Path(release_config["execution_plan"]["destination"]["resolved"]),
+                        phase=permit.phase,
+                    )
                     validate_bound_files(release_config["bound_files"])
                 except AuthorizationError:
-                    control.latch_stop("release_bound_input_drift")
+                    control.latch_stop("release_topology_or_input_drift")
                     raise
                 try:
                     receipt = authorizer.consume(Path(artifact_path), expectation)
@@ -533,8 +539,22 @@ class ControlPlaneSupervisor:
             raise ServiceError(
                 "gateway control-plane release requires a separately validated authorization artifact"
             )
+        if release_authorization is not None:
+            release_authorization = validate_release_configuration(
+                release_authorization, require_destination_nonexistent=True
+            )
+            destination = Path(
+                release_authorization["execution_plan"]["destination"]["resolved"]
+            )
+            expected_session = destination / "session"
+            if session != expected_session:
+                raise ServiceError(
+                    "authorized live control plane must use the planned session root"
+                )
+            create_live_topology(destination)
         self.session = session
-        session.mkdir(mode=0o700, parents=True, exist_ok=False)
+        if release_authorization is None:
+            session.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.stop_record = session / "supervisor-stop.json"
         self.registry = session / "process-registry.jsonl"
         self.journal = session / "call-control.jsonl"

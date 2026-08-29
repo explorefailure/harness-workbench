@@ -35,9 +35,11 @@ import agent_task_archives
 import agent_task_authorization
 import agent_task_broker
 import agent_task_control
+import agent_task_coordinator
 import agent_task_offline
 import agent_task_live_plan
 import agent_task_providers
+import agent_task_runtime
 import agent_task_schema
 import agent_task_services
 import agent_task_validate
@@ -8487,8 +8489,10 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             release_config = agent_task_authorization.build_release_configuration(
                 plan_result, key_file=key_file, consumed_dir=root / "consumed"
             )
+            planned_destination = Path(plan["destination"]["resolved"])
             supervisor = agent_task_services.ControlPlaneSupervisor(
-                root / "session", campaign_nonce="authorized-campaign",
+                planned_destination / "session",
+                campaign_nonce="authorized-campaign",
                 maximum_calls=2, authorized_phases={"write-smoke"},
                 usage_snapshots=[
                     {"schema": "offline-usage/v0.1", "metered": False},
@@ -8537,10 +8541,23 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 row["event"] == "provider_released" for row in rows
             ))
 
-            missing_config = dict(release_config)
-            missing_config["consumed_dir"] = str(root / "missing-consumed")
+            missing_now = dt.datetime.now(dt.timezone.utc)
+            missing_result = agent_task_live_plan.generate_live_plan(
+                root / "missing-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": missing_now.isoformat(),
+                },
+                now=missing_now,
+            )
+            missing_config = agent_task_authorization.build_release_configuration(
+                missing_result, key_file=key_file,
+                consumed_dir=root / "missing-consumed",
+            )
             missing = agent_task_services.ControlPlaneSupervisor(
-                root / "missing-session", campaign_nonce="missing-authorization",
+                Path(missing_result["execution_plan"]["destination"]["resolved"])
+                / "session",
+                campaign_nonce="missing-authorization",
                 maximum_calls=1, authorized_phases={"write-smoke"},
                 usage_snapshots=[{"schema": "offline-usage/v0.1", "metered": False}],
                 release_authorization=missing_config,
@@ -8607,6 +8624,39 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                     config, require_destination_nonexistent=True
                 )
 
+    def test_live_topology_rejects_unexpected_partial_and_overfull_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory).resolve() / "live"
+            agent_task_authorization.create_live_topology(destination)
+            agent_task_authorization.validate_live_topology(
+                destination, phase="write-smoke"
+            )
+            (destination / "unexpected").mkdir()
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "unexpected top-level"
+            ):
+                agent_task_authorization.validate_live_topology(
+                    destination, phase="write-smoke"
+                )
+            (destination / "unexpected").rmdir()
+            partial = destination / "records" / "write-smoke" / "partial.json"
+            partial.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "non-directory store"
+            ):
+                agent_task_authorization.validate_live_topology(
+                    destination, phase="write-smoke"
+                )
+            partial.unlink()
+            for index in range(6):
+                (destination / "records" / "write-smoke" / f"store-{index}").mkdir()
+            with self.assertRaisesRegex(
+                agent_task_authorization.AuthorizationError, "exact-five"
+            ):
+                agent_task_authorization.validate_live_topology(
+                    destination, phase="write-smoke"
+                )
+
     def test_release_time_apparatus_drift_hard_stops_without_consuming_authorization(
         self,
     ) -> None:
@@ -8634,8 +8684,12 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 result, key_file=key_file, consumed_dir=consumed,
                 apparatus_root=apparatus,
             )
+            planned_destination = Path(
+                result["execution_plan"]["destination"]["resolved"]
+            )
             supervisor = agent_task_services.ControlPlaneSupervisor(
-                root / "session", campaign_nonce="drift-campaign",
+                planned_destination / "session",
+                campaign_nonce="drift-campaign",
                 maximum_calls=1, authorized_phases={"write-smoke"},
                 usage_snapshots=[{"schema": "offline-usage/v0.1", "metered": False}],
                 release_authorization=release_config,
@@ -8669,8 +8723,137 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 for line in supervisor.journal.read_text(encoding="utf-8").splitlines()
             ]
             self.assertIn(
-                "release_bound_input_drift",
+                "release_topology_or_input_drift",
                 [row.get("reason") for row in rows if row["event"] == "hard_stop"],
+            )
+
+    def test_authorized_coordinator_executes_fake_once_and_real_transport_refuses(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = b"s" * 32
+            key_file = root / "authorization.key"
+            key_file.write_bytes(key)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="coordinator-campaign",
+                maximum_calls=3, authorized_phases={"write-smoke"},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                    {"schema": "offline-usage/v0.1", "metered": False},
+                ],
+                release_authorization=release_config,
+            )
+            fake_plan = destination / "bundle" / "fake-provider-plan.json"
+            fake_plan.write_bytes(agent_task_schema.canonical_bytes(fake_document) + b"\n")
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+
+            def authorize(
+                prepared: agent_task_coordinator.PreparedAttempt,
+                identifier: str,
+            ) -> Path:
+                current = dt.datetime.now(dt.timezone.utc)
+                artifact = agent_task_authorization.build_authorization(
+                    prepared.authorization, authorization_id=identifier * 64,
+                    issued_at=current - dt.timedelta(seconds=1),
+                    expires_at=current + dt.timedelta(seconds=60), key=key,
+                )
+                path = destination / "bundle" / f"authorization-{identifier}.json"
+                path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+                return path
+
+            episode = agent_task_runtime.run_authorized_episode(
+                subject="claude", task=task, workspace_archive=archive,
+                transport_plan=fake_plan, request_id="coordinator-1",
+                phase="write-smoke", coordinator=coordinator,
+                authorization_resolver=lambda prepared: authorize(prepared, "9"),
+                transport=agent_task_providers.FakeProviderTransport(
+                    Path(sys.executable)
+                ),
+            )
+            self.assertTrue(episode["verdict"]["adapter_valid"])
+            self.assertTrue(episode["verdict"]["safety_eligible"])
+            self.assertTrue(episode["verdict"]["task_passed"])
+            self.assertTrue(Path(episode["workspace"]["root"]).is_dir())
+            self.assertEqual(1, supervisor.control.status()["allocated_calls"])
+            self.assertEqual(1, len(supervisor.broker.receipts))
+
+            refused_workspace = destination / "process" / "codex-workspace"
+            agent_task_archives.extract_workspace_archive(archive, refused_workspace)
+            failed = coordinator.prepare(
+                phase="write-smoke", subject="codex", request_id="coordinator-2"
+            )
+            class ExitTransport:
+                def command(self, **_: object) -> list[str]:
+                    return [sys.executable, "-c", "raise SystemExit(7)"]
+
+            failure = coordinator.execute(
+                failed, authorization_path=authorize(failed, "a"),
+                workspace=refused_workspace, transport_plan=fake_plan,
+                transport=ExitTransport(),
+            )
+            self.assertEqual("operational_failure", failure["result"])
+            self.assertFalse(failure["automatic_retry_requested"])
+            self.assertEqual("retry_pending", supervisor.control.status()["state"])
+            self.assertEqual(2, supervisor.control.status()["allocated_calls"])
+            refused = coordinator.prepare(
+                phase="write-smoke", subject="codex", request_id="coordinator-3",
+                retry_of=failed.permit.call_id,
+            )
+            with self.assertRaisesRegex(RuntimeError, "plan-only"):
+                coordinator.execute(
+                    refused, authorization_path=authorize(refused, "b"),
+                    workspace=refused_workspace, transport_plan=fake_plan,
+                    transport=agent_task_providers.RealProviderPlanTransport(),
+                )
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            self.assertEqual(2, len(supervisor.broker.receipts))
+            supervisor.close()
+
+    def test_authorized_episode_latches_when_authorization_resolution_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory).resolve()
+            (destination / "process").mkdir()
+            task, archive, _ = agent_task_offline.build_conformance_documents()
+            coordinator = mock.Mock()
+            coordinator.destination = destination
+            coordinator.prepare.return_value = object()
+            with self.assertRaisesRegex(RuntimeError, "operator stopped"):
+                agent_task_runtime.run_authorized_episode(
+                    subject="claude", task=task, workspace_archive=archive,
+                    transport_plan=destination / "unused.json",
+                    request_id="authorization-resolution", phase="write-smoke",
+                    coordinator=coordinator,
+                    authorization_resolver=lambda _: (_ for _ in ()).throw(
+                        RuntimeError("operator stopped")
+                    ),
+                    transport=agent_task_providers.FakeProviderTransport(
+                        Path(sys.executable)
+                    ),
+                )
+            coordinator.control.latch_stop.assert_called_once_with(
+                "authorization_resolution_failed"
             )
 
     def test_full_five_route_simulation_seals_and_verifies_workbench_stores(self) -> None:

@@ -31,6 +31,7 @@ APPARATUS_FILES = (
     "agent_task_authorization.py",
     "agent_task_broker.py",
     "agent_task_control.py",
+    "agent_task_coordinator.py",
     "agent_task_emit.py",
     "agent_task_fake_provider.py",
     "agent_task_launcher.py",

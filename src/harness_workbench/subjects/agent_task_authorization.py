@@ -31,6 +31,8 @@ MAX_CLOCK_SKEW_SECONDS = 5
 MAX_BOUND_FILE_BYTES = 8 * 1024 * 1024
 RELEASE_CONFIGURATION_SCHEMA = "agent-task-release-configuration/v0.1"
 HERE = Path(__file__).resolve().parent
+LIVE_TOP_LEVEL = {"bundle", "session", "records", "process", "review"}
+LIVE_PHASES = {"write-smoke", "repair-matrix"}
 
 
 class AuthorizationError(ValueError):
@@ -175,6 +177,65 @@ def validate_bound_files(bound_files: Any) -> None:
             raise AuthorizationError("release-bound file is unreadable") from error
         if observed != expected:
             raise AuthorizationError(f"release-bound file drifted: {raw_path}")
+
+
+def validate_live_topology(destination: Path, *, phase: str) -> None:
+    """Reject aliases, unexpected roots, and structurally impossible stores."""
+    if phase not in LIVE_PHASES:
+        raise AuthorizationError(f"release phase has no declared root: {phase}")
+    metadata = destination.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or destination.is_symlink()
+        or metadata.st_mode & 0o077
+    ):
+        raise AuthorizationError("live destination must be an owner-only directory")
+    children = {entry.name: entry for entry in destination.iterdir()}
+    if set(children) != LIVE_TOP_LEVEL:
+        raise AuthorizationError("live destination has an unexpected top-level child")
+    for name, path in children.items():
+        row = path.lstat()
+        if not stat.S_ISDIR(row.st_mode) or path.is_symlink():
+            raise AuthorizationError(f"live topology node is not a directory: {name}")
+    for parent_name in ("records", "review"):
+        parent = destination / parent_name
+        phase_children = {entry.name: entry for entry in parent.iterdir()}
+        expected = set(LIVE_PHASES)
+        if parent_name == "review" and "campaign.json" in phase_children:
+            campaign = phase_children.pop("campaign.json")
+            row = campaign.lstat()
+            if not stat.S_ISREG(row.st_mode) or campaign.is_symlink():
+                raise AuthorizationError("review campaign manifest is not a regular file")
+        if set(phase_children) != expected:
+            raise AuthorizationError(f"{parent_name} has an unexpected phase child")
+        for phase_name, path in phase_children.items():
+            row = path.lstat()
+            if not stat.S_ISDIR(row.st_mode) or path.is_symlink():
+                raise AuthorizationError(
+                    f"{parent_name}/{phase_name} is not a directory"
+                )
+    run_root = destination / "records" / phase
+    stores = list(run_root.iterdir())
+    if len(stores) > len(SUBJECTS):
+        raise AuthorizationError("phase root exceeds the exact-five store bound")
+    for store in stores:
+        row = store.lstat()
+        if not stat.S_ISDIR(row.st_mode) or store.is_symlink():
+            raise AuthorizationError("phase root contains a non-directory store")
+
+
+def create_live_topology(destination: Path) -> None:
+    """Atomically claim one planned destination and create its fixed skeleton."""
+    parent = destination.parent.resolve(strict=True)
+    resolved = parent / destination.name
+    if resolved != destination or destination.exists() or destination.is_symlink():
+        raise AuthorizationError("live destination is not fresh and resolved")
+    destination.mkdir(mode=0o700, parents=False, exist_ok=False)
+    for name in sorted(LIVE_TOP_LEVEL):
+        (destination / name).mkdir(mode=0o700)
+    for parent_name in ("records", "review"):
+        for phase in sorted(LIVE_PHASES):
+            (destination / parent_name / phase).mkdir(mode=0o700)
 
 
 def build_release_configuration(
