@@ -36,7 +36,7 @@ from agent_task_authorization import (
 )
 from agent_task_control import CallControl, ControlError, Permit
 from agent_task_process import platform_start_identity, process_executable
-from agent_task_schema import PROCESS_REGISTRY_SCHEMA
+from agent_task_schema import PROCESS_REGISTRY_SCHEMA, canonical_sha256
 
 
 HERE = Path(__file__).resolve().parent
@@ -204,6 +204,11 @@ class CallControlClient:
             "op": "authorize_phase", "phase": phase, "maximum_calls": maximum_calls,
         })
 
+    def check_usage_boundary(self, label: str) -> dict[str, Any]:
+        return _rpc(self.socket_path, self.authkey, {
+            "op": "check_usage_boundary", "label": label,
+        })
+
     def latch_stop(self, reason: str) -> None:
         _rpc(self.socket_path, self.authkey, {"op": "latch_stop", "reason": reason})
 
@@ -290,7 +295,9 @@ class _UsageReader:
         self.usage_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.ordinal = 0
 
-    def __call__(self) -> tuple[dict[str, Any], bool]:
+    def read(self, label: str) -> tuple[dict[str, Any], bool, Path]:
+        if label not in {"permit", "after-smoke-before-matrix"}:
+            raise ServiceError("usage evidence label is unsupported")
         if self.mode == "injected":
             if not self.snapshots:
                 raise ServiceError("injected usage sequence is exhausted")
@@ -302,10 +309,14 @@ class _UsageReader:
             raise ServiceError(f"unknown service usage mode: {self.mode}")
         if type(reading) is not dict:
             raise ServiceError("usage reader returned a non-object")
-        path = self.usage_dir / f"permit-{self.ordinal:04d}.json"
+        path = self.usage_dir / f"{label}-{self.ordinal:04d}.json"
         self.ordinal += 1
         _write_json_exclusive(path, reading)
-        return reading, _gate_snapshot(reading, self.limits)
+        return reading, _gate_snapshot(reading, self.limits), path
+
+    def __call__(self) -> tuple[dict[str, Any], bool]:
+        reading, passed, _ = self.read("permit")
+        return reading, passed
 
 
 def _watch_supervisor(
@@ -458,6 +469,16 @@ def _call_control_server(args: argparse.Namespace) -> int:
         if operation == "authorize_phase":
             control.authorize_phase(request["phase"], maximum_calls=request["maximum_calls"])
             return None, False
+        if operation == "check_usage_boundary":
+            reading, passed, path = usage.read(request["label"])
+            usage_sha256 = canonical_sha256(reading)
+            control.record_usage_boundary(
+                label=request["label"], usage_sha256=usage_sha256, passed=passed,
+            )
+            return {
+                "label": request["label"], "passed": passed,
+                "usage_sha256": usage_sha256, "path": str(path),
+            }, False
         if operation == "latch_stop":
             control.latch_stop(request["reason"])
             return None, False

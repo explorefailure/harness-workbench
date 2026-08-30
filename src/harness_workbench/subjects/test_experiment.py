@@ -8193,6 +8193,41 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertEqual("hard_stop", supervisor.control.status()["state"])
             supervisor.close()
 
+    def test_authenticated_matrix_boundary_usage_crossing_hard_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                Path(directory) / "session", campaign_nonce="boundary-crossing",
+                maximum_calls=43, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 13},
+                usage_snapshots=[{
+                    "schema": "offline-usage/v0.1", "metered": True,
+                    "windows": {
+                        "rolling": {"percent": 80},
+                        "weekly": {"percent": 1},
+                    },
+                }],
+            )
+            with self.assertRaisesRegex(
+                agent_task_services.ServiceError, "blocked the matrix"
+            ):
+                supervisor.control.check_usage_boundary(
+                    "after-smoke-before-matrix"
+                )
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            self.assertEqual(0, supervisor.control.status()["allocated_calls"])
+            rows = [
+                json.loads(line)
+                for line in supervisor.journal.read_text(encoding="utf-8").splitlines()
+            ]
+            boundary = [row for row in rows if row["event"] == "usage_boundary"]
+            self.assertEqual(1, len(boundary))
+            self.assertFalse(boundary[0]["passed"])
+            self.assertIn(
+                "usage_boundary_blocked",
+                [row.get("reason") for row in rows if row["event"] == "hard_stop"],
+            )
+            supervisor.close()
+
     def test_authenticated_call_service_never_exceeds_maximum_under_contention(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             supervisor = agent_task_services.ControlPlaneSupervisor(
@@ -9098,6 +9133,276 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             shutdown = supervisor.close()
             self.assertEqual("clean_self_issued", shutdown["call_control"]["kind"])
             self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])
+
+    def test_authorized_fake_repair_matrix_runs_exact_three_draw_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = b"x" * 32
+            key_file = root / "authorization.key"
+            key_file.write_bytes(key)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                },
+                now=now,
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=root / "consumed"
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="fake-matrix-campaign",
+                maximum_calls=43, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 13},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                    for _ in range(21)
+                ],
+                release_authorization=release_config,
+            )
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+
+            def authorize(prepared: agent_task_coordinator.PreparedAttempt) -> Path:
+                current = dt.datetime.now(dt.timezone.utc)
+                artifact = agent_task_authorization.build_authorization(
+                    prepared.authorization,
+                    authorization_id=f"{prepared.permit.call_id:064x}",
+                    issued_at=current - dt.timedelta(seconds=1),
+                    expires_at=current + dt.timedelta(seconds=60), key=key,
+                )
+                path = (
+                    destination / "bundle"
+                    / f"authorization-{prepared.permit.call_id:04d}.json"
+                )
+                path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+                return path
+
+            smoke = agent_task_runtime.run_authorized_fake_smoke_phase(
+                task=task, workspace_archive=archive,
+                fake_plan_document=fake_document, coordinator=coordinator,
+                authorization_resolver=authorize,
+                fake_transport=agent_task_providers.FakeProviderTransport(
+                    Path(sys.executable)
+                ),
+            )
+            self.assertTrue(smoke["passed"])
+            boundary = supervisor.control.check_usage_boundary(
+                "after-smoke-before-matrix"
+            )
+            self.assertTrue(boundary["passed"])
+            self.assertTrue(Path(boundary["path"]).is_file())
+            supervisor.control.authorize_phase(
+                "repair-matrix", maximum_calls=30
+            )
+            matrix = agent_task_runtime.run_authorized_fake_repair_matrix_phase(
+                task=task, workspace_archive=archive, coordinator=coordinator,
+                authorization_resolver=authorize,
+                fake_transport=agent_task_providers.FakeProviderTransport(
+                    Path(sys.executable)
+                ),
+            )
+            self.assertTrue(matrix["passed"])
+            self.assertEqual(15, matrix["provider_calls"])
+            self.assertEqual(20, supervisor.control.status()["allocated_calls"])
+            self.assertEqual(20, len(supervisor.broker.receipt_snapshot()))
+            self.assertEqual(5, len(matrix["stores"]))
+            self.assertEqual(30, matrix["boundary"]["authorized_maximum_calls"])
+            comparison = json.loads(
+                (destination / "review" / "repair-matrix" / "comparison.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertTrue(comparison["passed"], comparison["errors"])
+            self.assertEqual(3, comparison["draws_per_subject"])
+            for subject, store in matrix["stores"].items():
+                self.assertEqual(3, store["draws"])
+                run = destination / "records" / "repair-matrix" / store["run_id"]
+                attempts = [
+                    json.loads(line)
+                    for line in (run / "attempts.jsonl").read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                ]
+                self.assertEqual([0, 1, 2], [row["n"] for row in attempts])
+                self.assertEqual(
+                    [0, 1, 2],
+                    [row["caused_by"][0]["i"] for row in attempts],
+                )
+                self.assertEqual([0, 0, 0], [
+                    row["caused_by"][1]["i"] for row in attempts
+                ])
+                record = json.loads((run / "record.json").read_text(encoding="utf-8"))
+                self.assertEqual(
+                    plan_result["execution_plan"]["inputs"]["specs"]
+                    ["repair-matrix"][subject]["sha256"],
+                    record["spec_digest"],
+                )
+                self.assertTrue(comparison["subjects"][subject]["passed"])
+                self.assertEqual(
+                    3, len(comparison["subjects"][subject]["draws"])
+                )
+            usage = json.loads(
+                (destination / "review" / "repair-matrix" / "permit-usage.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(15, len(usage["snapshots"]))
+            checkpoint = json.loads(
+                (destination / "review" / "write-smoke" / "phase-checkpoint.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertTrue(agent_task_broker.validate_prefix(
+                supervisor.journal, checkpoint["journal_prefix"]
+            ))
+            self.assertTrue(agent_task_broker.validate_prefix(
+                supervisor.registry, checkpoint["registry_prefix"]
+            ))
+            retained_runs = []
+            for subject, store in matrix["stores"].items():
+                run = destination / "records" / "repair-matrix" / store["run_id"]
+                retained_runs.extend(
+                    json.loads((
+                        run / "steps" / f"{subject}-agent-task" / "attempts"
+                        / str(draw) / "stdout.bin"
+                    ).read_text(encoding="utf-8"))
+                    for draw in range(3)
+                )
+            missing = agent_task_validate.compare_exact_five_matrix(
+                retained_runs[:-1], task=task, workspace_archive=archive
+            )
+            self.assertFalse(missing["passed"])
+            ordinal_drift = json.loads(json.dumps(retained_runs))
+            ordinal_drift[1]["base_attempt"]["ordinal"] = 0
+            drifted = agent_task_validate.compare_exact_five_matrix(
+                ordinal_drift, task=task, workspace_archive=archive
+            )
+            self.assertFalse(drifted["passed"])
+            self.assertTrue(any(
+                "ordinals" in error for error in drifted["errors"]
+            ))
+            call_gap = json.loads(json.dumps(retained_runs))
+            call_gap[-1]["base_attempt"]["call_id"] += 100
+            gapped = agent_task_validate.compare_exact_five_matrix(
+                call_gap, task=task, workspace_archive=archive
+            )
+            self.assertFalse(gapped["passed"])
+            self.assertIn(
+                "matrix call-control IDs are not fifteen contiguous calls",
+                gapped["errors"],
+            )
+            shutdown = supervisor.close()
+            self.assertEqual("clean_self_issued", shutdown["call_control"]["kind"])
+            self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])
+
+    def test_preassembled_matrix_does_not_repeat_refused_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = b"y" * 32
+            key_file = root / "authorization.key"
+            key_file.write_bytes(key)
+            key_file.chmod(0o600)
+            now = dt.datetime.now(dt.timezone.utc)
+            plan_result = agent_task_live_plan.generate_live_plan(
+                root / "live-destination",
+                usage_snapshot={
+                    "schema": "offline-usage/v0.1", "metered": False,
+                    "read_at": now.isoformat(),
+                }, now=now,
+            )
+            task, archive, fake_document = agent_task_offline.build_conformance_documents()
+            consumed = root / "consumed"
+            release_config = agent_task_authorization.build_release_configuration(
+                plan_result, key_file=key_file, consumed_dir=consumed
+            )
+            destination = Path(
+                plan_result["execution_plan"]["destination"]["resolved"]
+            )
+            supervisor = agent_task_services.ControlPlaneSupervisor(
+                destination / "session", campaign_nonce="matrix-refusal-campaign",
+                maximum_calls=43, authorized_phases={"write-smoke"},
+                phase_maximums={"write-smoke": 13},
+                usage_snapshots=[
+                    {"schema": "offline-usage/v0.1", "metered": False}
+                    for _ in range(7)
+                ],
+                release_authorization=release_config,
+            )
+            coordinator = agent_task_coordinator.AuthorizedAttemptCoordinator(
+                plan_result=plan_result, task=task,
+                control=supervisor.control, broker=supervisor.broker,
+            )
+
+            def authorize_smoke(
+                prepared: agent_task_coordinator.PreparedAttempt,
+            ) -> Path:
+                current = dt.datetime.now(dt.timezone.utc)
+                artifact = agent_task_authorization.build_authorization(
+                    prepared.authorization,
+                    authorization_id=f"{prepared.permit.call_id:064x}",
+                    issued_at=current - dt.timedelta(seconds=1),
+                    expires_at=current + dt.timedelta(seconds=60), key=key,
+                )
+                path = (
+                    destination / "bundle"
+                    / f"authorization-{prepared.permit.call_id:04d}.json"
+                )
+                path.write_bytes(agent_task_authorization.artifact_bytes(artifact))
+                return path
+
+            smoke = agent_task_runtime.run_authorized_fake_smoke_phase(
+                task=task, workspace_archive=archive,
+                fake_plan_document=fake_document, coordinator=coordinator,
+                authorization_resolver=authorize_smoke,
+                fake_transport=agent_task_providers.FakeProviderTransport(
+                    Path(sys.executable)
+                ),
+            )
+            self.assertTrue(smoke["passed"])
+            supervisor.control.check_usage_boundary("after-smoke-before-matrix")
+            supervisor.control.authorize_phase("repair-matrix", maximum_calls=30)
+            refused: list[agent_task_coordinator.PreparedAttempt] = []
+
+            def refuse(prepared: agent_task_coordinator.PreparedAttempt) -> Path:
+                refused.append(prepared)
+                raise RuntimeError("operator withheld matrix authorization")
+
+            with self.assertRaisesRegex(ValueError, "authorization bridge failed"):
+                agent_task_runtime.run_preassembled_fake_subject(
+                    subject="claude", phase="repair-matrix", expected_draws=3,
+                    task=task, workspace_archive=archive,
+                    request_id="refused-matrix-claude", coordinator=coordinator,
+                    authorization_resolver=refuse,
+                )
+            self.assertEqual(1, len(refused))
+            self.assertEqual(6, supervisor.control.status()["allocated_calls"])
+            self.assertEqual("hard_stop", supervisor.control.status()["state"])
+            self.assertEqual(5, len(supervisor.broker.receipt_snapshot()))
+            self.assertEqual(5, len(list(consumed.iterdir())))
+            stores = list((destination / "records" / "repair-matrix").iterdir())
+            self.assertEqual(1, len(stores))
+            attempts = [
+                json.loads(line)
+                for line in (stores[0] / "attempts.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+            self.assertEqual([64] * 6, [row["exit"] for row in attempts])
+            self.assertEqual(
+                [(draw, retry) for draw in range(3) for retry in range(2)],
+                [
+                    (row["caused_by"][0]["i"], row["caused_by"][1]["i"])
+                    for row in attempts
+                ],
+            )
+            supervisor.close()
 
     def test_authorized_fake_smoke_rejects_bundle_drift_before_first_permit(
         self,

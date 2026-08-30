@@ -177,3 +177,73 @@ def compare_exact_five(
         "input_archive_sha256": bytes_sha256(workspace_archive),
         "subjects": dict(sorted(subjects.items())),
     }
+
+
+def compare_exact_five_matrix(
+    runs: list[dict[str, Any]],
+    *,
+    task: dict[str, Any],
+    workspace_archive: bytes,
+) -> dict[str, Any]:
+    """Independently require three exact successful draws for every subject."""
+    errors: list[str] = []
+    grouped: dict[str, list[dict[str, Any]]] = {
+        subject: [] for subject in SUBJECTS
+    }
+    if len(runs) != 15:
+        errors.append("matrix comparison requires exactly fifteen runs")
+    for run in runs:
+        subject = run.get("subject")
+        if subject not in grouped:
+            errors.append("matrix comparison contains an unsupported subject")
+            continue
+        grouped[subject].append(run)
+
+    subjects: dict[str, Any] = {}
+    call_ids: list[int] = []
+    for subject in SUBJECTS:
+        own = grouped[subject]
+        subject_errors: list[str] = []
+        reports: list[dict[str, Any]] = []
+        if len(own) != 3:
+            subject_errors.append("subject does not have exactly three draws")
+        ordinals = [run.get("base_attempt", {}).get("ordinal") for run in own]
+        if ordinals != [0, 1, 2]:
+            subject_errors.append("base-attempt ordinals are not exact 0,1,2")
+        tokens = [run.get("base_attempt", {}).get("token") for run in own]
+        if any(type(token) is not str or not token for token in tokens) or len(
+            set(tokens)
+        ) != len(tokens):
+            subject_errors.append("base-attempt tokens are missing or repeated")
+        for draw, run in enumerate(own):
+            report = validate_retained_run(
+                run, task=task, workspace_archive=workspace_archive
+            )
+            reports.append(report)
+            subject_errors.extend(
+                f"draw {draw}: {error}" for error in report["errors"]
+            )
+            call_id = run.get("base_attempt", {}).get("call_id")
+            if type(call_id) is int:
+                call_ids.append(call_id)
+        subjects[subject] = {
+            "passed": not subject_errors,
+            "errors": subject_errors,
+            "draws": reports,
+        }
+        errors.extend(f"{subject}: {error}" for error in subject_errors)
+    if not call_ids or (
+        len(call_ids) != 15
+        or sorted(call_ids) != list(range(min(call_ids), min(call_ids) + 15))
+    ):
+        errors.append("matrix call-control IDs are not fifteen contiguous calls")
+    return {
+        "schema": "cross-harness-agent-task-comparison/v0.1",
+        "phase": "repair-matrix",
+        "draws_per_subject": 3,
+        "passed": not errors,
+        "errors": errors,
+        "task_sha256": canonical_sha256(task),
+        "input_archive_sha256": bytes_sha256(workspace_archive),
+        "subjects": dict(sorted(subjects.items())),
+    }

@@ -210,9 +210,9 @@ def main() -> int:
         destination = Path(environment["HWB_AGENT_TASK_DESTINATION"])
         if destination.is_symlink() or not destination.is_dir():
             raise ValueError("authorized destination is not a real directory")
-        request_id = environment["HWB_AGENT_TASK_REQUEST_ID"]
-        if request_id != Path(request_id).name:
-            raise ValueError("authorized request identity is not a basename")
+        request_prefix = environment["HWB_AGENT_TASK_REQUEST_ID"]
+        if request_prefix != Path(request_prefix).name:
+            raise ValueError("authorized request prefix is not a basename")
         plan_result = json.loads(args.execution_plan.read_text(encoding="utf-8"))
         task = json.loads(args.task.read_text(encoding="utf-8"))
         plan = plan_result.get("execution_plan", {})
@@ -234,23 +234,37 @@ def main() -> int:
             plan_result=plan_result, task=task, control=call, broker=broker,
         )
 
-        def resolve(prepared: PreparedAttempt) -> Path:
+        def bridge_request(request: dict[str, object]) -> dict[str, object]:
             connection = Client(
                 environment["HWB_AGENT_TASK_AUTHORIZATION_SOCKET"],
                 family="AF_UNIX", authkey=authkey,
             )
             try:
-                connection.send({
-                    "permit": asdict(prepared.permit),
-                    "authorization": asdict(prepared.authorization),
-                })
+                connection.send(request)
                 response = connection.recv()
             finally:
                 connection.close()
+            if type(response) is not dict or response.get("ok") is not True:
+                raise RuntimeError("explicit authorization resolver refused the attempt")
+            return response
+
+        claim = bridge_request({"op": "claim"})
+        request_id = claim.get("request_id")
+        if (
+            type(request_id) is not str
+            or not request_id.startswith(request_prefix + "-draw-")
+            or request_id != Path(request_id).name
+        ):
+            raise RuntimeError("authorization bridge returned an invalid request identity")
+
+        def resolve(prepared: PreparedAttempt) -> Path:
+            response = bridge_request({
+                "op": "authorize",
+                "permit": asdict(prepared.permit),
+                "authorization": asdict(prepared.authorization),
+            })
             if (
-                type(response) is not dict
-                or set(response) != {"ok", "authorization_path"}
-                or response["ok"] is not True
+                set(response) != {"ok", "authorization_path"}
                 or type(response["authorization_path"]) is not str
             ):
                 raise RuntimeError("explicit authorization resolver refused the attempt")
@@ -267,6 +281,15 @@ def main() -> int:
             authorization_resolver=resolve,
             transport=FakeProviderTransport(Path(sys.executable)),
         )
+        attempt = episode["base_attempt"]
+        completion = bridge_request({
+            "op": "complete",
+            "request_id": request_id,
+            "call_id": attempt["call_id"],
+            "base_attempt_ordinal": attempt["ordinal"],
+        })
+        if set(completion) != {"ok"}:
+            raise RuntimeError("authorization bridge completion was not exact")
         sys.stdout.buffer.write(canonical_bytes(episode) + b"\n")
         return 0
     except Exception as error:

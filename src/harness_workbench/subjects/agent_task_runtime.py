@@ -42,7 +42,12 @@ from agent_task_schema import (
 )
 from agent_task_specs import assemble_pre_call_specs
 from agent_task_store import materialize_single_draw_store
-from agent_task_validate import compare_exact_five, scan_credentials, validate_retained_run
+from agent_task_validate import (
+    compare_exact_five,
+    compare_exact_five_matrix,
+    scan_credentials,
+    validate_retained_run,
+)
 
 
 HERE = Path(__file__).resolve().parent
@@ -151,7 +156,7 @@ def _prepare_bound_fake_bundle(
 
 
 class _AuthorizationBridge:
-    """Resolve exactly one prepared fake attempt without exposing the callback."""
+    """Resolve a fixed draw sequence without exposing the authorization callback."""
 
     def __init__(
         self,
@@ -160,6 +165,7 @@ class _AuthorizationBridge:
         subject: str,
         phase: str,
         request_id: str,
+        expected_draws: int,
         resolver: Callable[[PreparedAttempt], Path],
     ) -> None:
         if (
@@ -168,13 +174,20 @@ class _AuthorizationBridge:
             or coordinator.control.authkey != coordinator.broker.authkey
         ):
             raise ValueError("preassembled step requires the authenticated services")
+        if expected_draws not in {1, 3}:
+            raise ValueError("authorization bridge draw count is unsupported")
         self.coordinator = coordinator
         self.subject = subject
         self.phase = phase
         self.request_id = request_id
+        self.expected_draws = expected_draws
         self.resolver = resolver
         self.authkey = coordinator.control.authkey
         self.error: Exception | None = None
+        self.completed: list[str] = []
+        self._active_request_id: str | None = None
+        self._active_permit: Permit | None = None
+        self._authorization_started = False
         self._root = Path(tempfile.mkdtemp(prefix="hwb-agent-task-authorize-"))
         os.chmod(self._root, 0o700)
         self.socket = self._root / "authorize.sock"
@@ -187,58 +200,94 @@ class _AuthorizationBridge:
 
     def _serve(self) -> None:
         try:
-            connection = self._listener.accept()
-            try:
-                request = connection.recv()
-                if request == {"op": "cancel"}:
-                    response = {"ok": False, "authorization_path": None}
-                else:
-                    if type(request) is not dict or set(request) != {
-                        "permit", "authorization",
-                    }:
-                        raise ValueError("authorization bridge request is malformed")
-                    permit = Permit(**request["permit"])
-                    authorization = AuthorizationExpectation(**request["authorization"])
-                    expected = AuthorizationExpectation.from_permit(
-                        permit,
-                        execution_plan_sha256=self.coordinator.plan_result[
-                            "execution_plan_sha256"
-                        ],
-                        provider_route_sha256=self.coordinator.plan[
-                            "provider_pins"
-                        ]["route_sha256"][self.subject],
-                        model=self.coordinator.plan["provider_pins"]["routes"][
-                            self.subject
-                        ]["model"],
-                    )
-                    if (
-                        permit.phase != self.phase
-                        or permit.subject != self.subject
-                        or permit.request_id != self.request_id
-                        or permit.store_nonce
-                        != self.coordinator.plan["store_nonces"][self.phase][self.subject]
-                        or authorization != expected
-                    ):
-                        raise ValueError("authorization bridge identity disagrees")
-                    path = self.resolver(
-                        PreparedAttempt(permit=permit, authorization=authorization)
-                    )
-                    if type(path) is not Path:
-                        path = Path(path)
-                    response = {"ok": True, "authorization_path": str(path)}
-            except Exception as error:
-                self.error = error
-                response = {"ok": False, "authorization_path": None}
-            try:
-                connection.send(response)
-            except (BrokenPipeError, EOFError, OSError):
-                pass
-            finally:
-                connection.close()
+            stop = False
+            while not stop and len(self.completed) < self.expected_draws:
+                connection = self._listener.accept()
+                try:
+                    request = connection.recv()
+                    response, stop = self._dispatch(request)
+                except Exception as error:
+                    self.error = error
+                    response = {"ok": False}
+                    stop = True
+                try:
+                    connection.send(response)
+                except (BrokenPipeError, EOFError, OSError):
+                    pass
+                finally:
+                    connection.close()
         except Exception as error:
             self.error = error
         finally:
             self._listener.close()
+
+    def _dispatch(self, request: Any) -> tuple[dict[str, Any], bool]:
+        if request == {"op": "cancel"}:
+            return {"ok": False}, True
+        if type(request) is not dict or type(request.get("op")) is not str:
+            raise ValueError("authorization bridge request is malformed")
+        operation = request["op"]
+        if operation == "claim":
+            if set(request) != {"op"} or self._active_request_id is not None:
+                raise ValueError("authorization bridge draw claim is not fresh")
+            request_id = f"{self.request_id}-draw-{len(self.completed)}"
+            if request_id != Path(request_id).name:
+                raise ValueError("authorization bridge request identity is invalid")
+            self._active_request_id = request_id
+            return {"ok": True, "request_id": request_id}, False
+        if operation == "authorize":
+            if set(request) != {"op", "permit", "authorization"}:
+                raise ValueError("authorization bridge request is malformed")
+            if self._active_request_id is None or self._authorization_started:
+                raise ValueError("authorization bridge draw has no fresh claim")
+            permit = Permit(**request["permit"])
+            authorization = AuthorizationExpectation(**request["authorization"])
+            expected = AuthorizationExpectation.from_permit(
+                permit,
+                execution_plan_sha256=self.coordinator.plan_result[
+                    "execution_plan_sha256"
+                ],
+                provider_route_sha256=self.coordinator.plan["provider_pins"]
+                ["route_sha256"][self.subject],
+                model=self.coordinator.plan["provider_pins"]["routes"]
+                [self.subject]["model"],
+            )
+            if (
+                permit.phase != self.phase
+                or permit.subject != self.subject
+                or permit.request_id != self._active_request_id
+                or permit.store_nonce
+                != self.coordinator.plan["store_nonces"][self.phase][self.subject]
+                or authorization != expected
+            ):
+                raise ValueError("authorization bridge identity disagrees")
+            self._authorization_started = True
+            path = self.resolver(
+                PreparedAttempt(permit=permit, authorization=authorization)
+            )
+            if type(path) is not Path:
+                path = Path(path)
+            self._active_permit = permit
+            return {"ok": True, "authorization_path": str(path)}, False
+        if operation == "complete":
+            if set(request) != {
+                "op", "request_id", "call_id", "base_attempt_ordinal",
+            }:
+                raise ValueError("authorization bridge completion is malformed")
+            permit = self._active_permit
+            if (
+                permit is None
+                or request["request_id"] != self._active_request_id
+                or request["call_id"] != permit.call_id
+                or request["base_attempt_ordinal"] != permit.base_attempt_ordinal
+            ):
+                raise ValueError("authorization bridge completion identity disagrees")
+            self.completed.append(permit.request_id)
+            self._active_request_id = None
+            self._active_permit = None
+            self._authorization_started = False
+            return {"ok": True}, len(self.completed) == self.expected_draws
+        raise ValueError("authorization bridge operation is unsupported")
 
     def close(self) -> None:
         if self._thread.is_alive():
@@ -653,17 +702,22 @@ def run_authorized_smoke_episode(
     }
 
 
-def run_preassembled_fake_smoke_episode(
+def run_preassembled_fake_subject(
     *,
     subject: str,
+    phase: str,
+    expected_draws: int,
     task: dict[str, Any],
     workspace_archive: bytes,
     request_id: str,
     coordinator: AuthorizedAttemptCoordinator,
     authorization_resolver: Callable[[PreparedAttempt], Path],
 ) -> dict[str, Any]:
-    """Execute one fake episode as the preassembled Workbench step itself."""
-    phase = "write-smoke"
+    """Execute one subject store through its preassembled Workbench step."""
+    if (phase, expected_draws) not in {
+        ("write-smoke", 1), ("repair-matrix", 3),
+    }:
+        raise ValueError("preassembled Workbench phase/draw count is unsupported")
     destination = coordinator.destination
     records = destination / "records" / phase
     spec_root = destination / "bundle" / "precall-specs" / phase / subject
@@ -688,6 +742,7 @@ def run_preassembled_fake_smoke_episode(
         subject=subject,
         phase=phase,
         request_id=request_id,
+        expected_draws=expected_draws,
         resolver=authorization_resolver,
     )
     environment = _workbench_environment(
@@ -703,7 +758,7 @@ def run_preassembled_fake_smoke_episode(
             env=environment,
             timeout=(
                 coordinator.plan["timeouts"]["subject_episode_seconds"][subject]
-                * 2 + 60
+                * expected_draws * 2 + 60
             ),
             stdout_limit=4 * 1024 * 1024,
             stderr_limit=4 * 1024 * 1024,
@@ -774,31 +829,36 @@ def run_preassembled_fake_smoke_episode(
             encoding="utf-8"
         ).splitlines()
     ]
-    expected_cause = [
-        {"feature": "sample", "i": 0},
-        {"feature": "retry", "i": 0},
-    ]
-    if (
-        len(attempts) != 1
-        or attempts[0].get("n") != 0
-        or attempts[0].get("caused_by") != expected_cause
-        or attempts[0].get("exit") != 0
+    if len(attempts) != expected_draws or any(
+        attempt.get("n") != draw
+        or attempt.get("caused_by") != [
+            {"feature": "sample", "i": draw},
+            {"feature": "retry", "i": 0},
+        ]
+        or attempt.get("exit") != 0
+        for draw, attempt in enumerate(attempts)
     ):
         coordinator.control.latch_stop("preassembled_workbench_attempt_invalid")
-        raise ValueError("preassembled Workbench attempt is not exact single-draw")
-    stdout_path = (
+        raise ValueError("preassembled Workbench attempt is not exact")
+    stdout_paths = [
         run_dir / "steps" / f"{subject}-agent-task"
-        / "attempts" / "0" / "stdout.bin"
-    )
+        / "attempts" / str(draw) / "stdout.bin"
+        for draw in range(expected_draws)
+    ]
     try:
-        episode = json.loads(stdout_path.read_text(encoding="utf-8"))
+        episodes = [
+            json.loads(path.read_text(encoding="utf-8")) for path in stdout_paths
+        ]
     except (OSError, ValueError, json.JSONDecodeError) as error:
         coordinator.control.latch_stop("preassembled_workbench_episode_invalid")
         raise ValueError("preassembled Workbench episode output is invalid") from error
-    validation = validate_retained_run(
-        episode, task=task, workspace_archive=workspace_archive
-    )
-    if not validation["passed"]:
+    validations = [
+        validate_retained_run(
+            episode, task=task, workspace_archive=workspace_archive
+        )
+        for episode in episodes
+    ]
+    if any(not validation["passed"] for validation in validations):
         coordinator.control.latch_stop(
             "authorized_episode_independent_validation_failed"
         )
@@ -806,9 +866,14 @@ def run_preassembled_fake_smoke_episode(
     freeze = record.get("extras", {}).get("freeze", {})
     receipt = record.get("extras", {}).get("receipt", {}).get("bound", {})
     if (
-        episode["subject"] != subject
-        or episode["store_nonce"]
-        != coordinator.plan["store_nonces"][phase][subject]
+        any(episode["subject"] != subject for episode in episodes)
+        or any(
+            episode["store_nonce"]
+            != coordinator.plan["store_nonces"][phase][subject]
+            for episode in episodes
+        )
+        or [episode["base_attempt"]["ordinal"] for episode in episodes]
+        != list(range(expected_draws))
         or record.get("run_id") != run_id
         or freeze.get("baseline") != "compared"
         or freeze.get("drifted") is not False
@@ -823,20 +888,45 @@ def run_preassembled_fake_smoke_episode(
         coordinator.control.latch_stop("authorized_store_topology_invalid")
         raise
     store = {
-        "schema": "agent-task-single-draw-store/v0.1",
+        "schema": "agent-task-preassembled-store/v0.1",
         "phase": phase,
         "subject": subject,
+        "draws": expected_draws,
         "run_id": run_id,
         "run_store_tree_sha256": canon.digest_tree(str(run_dir)),
         "record_json_sha256": canon.digest_file(str(record_path)),
         "integrity_json_sha256": canon.digest_file(str(integrity_path)),
     }
     return {
-        "schema": "agent-task-authorized-smoke-result/v0.1",
-        "episode": episode,
-        "independent_validation": validation,
-        "episode_path": str(stdout_path),
+        "schema": "agent-task-authorized-preassembled-result/v0.1",
+        "episodes": episodes,
+        "independent_validations": validations,
+        "episode_paths": [str(path) for path in stdout_paths],
         "store": store,
+    }
+
+
+def run_preassembled_fake_smoke_episode(
+    *,
+    subject: str,
+    task: dict[str, Any],
+    workspace_archive: bytes,
+    request_id: str,
+    coordinator: AuthorizedAttemptCoordinator,
+    authorization_resolver: Callable[[PreparedAttempt], Path],
+) -> dict[str, Any]:
+    """Compatibility wrapper for the exact one-draw smoke store."""
+    result = run_preassembled_fake_subject(
+        subject=subject, phase="write-smoke", expected_draws=1,
+        task=task, workspace_archive=workspace_archive, request_id=request_id,
+        coordinator=coordinator, authorization_resolver=authorization_resolver,
+    )
+    return {
+        "schema": "agent-task-authorized-smoke-result/v0.1",
+        "episode": result["episodes"][0],
+        "independent_validation": result["independent_validations"][0],
+        "episode_path": result["episode_paths"][0],
+        "store": result["store"],
     }
 
 
@@ -984,4 +1074,195 @@ def run_authorized_fake_smoke_phase(
         "checkpoint_sha256": canonical_sha256(checkpoint),
         "bundle_manifest_sha256": bundle_manifest_sha256,
         "offline_review_sha256": bytes_sha256(offline_review_path.read_bytes()),
+    }
+
+
+def _validate_repair_matrix_boundary(
+    coordinator: AuthorizedAttemptCoordinator,
+) -> dict[str, Any]:
+    """Revalidate smoke, fresh usage, and separate matrix authorization."""
+    destination = coordinator.destination
+    checkpoint_path = destination / "review" / "write-smoke" / "phase-checkpoint.json"
+    try:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("repair matrix has no readable smoke checkpoint") from error
+    offline = review_fake_smoke_checkpoint(
+        destination, configured_credentials=credential_values(os.environ)
+    )
+    if (
+        not offline["passed"]
+        or not checkpoint.get("eligible")
+        or not validate_prefix(coordinator.control.journal, checkpoint["journal_prefix"])
+        or not validate_prefix(coordinator.broker.registry, checkpoint["registry_prefix"])
+    ):
+        raise ValueError("repair matrix smoke checkpoint is no longer valid")
+    journal = coordinator.control.journal
+    raw = journal.read_bytes()
+    suffix = raw[checkpoint["journal_prefix"]["bytes"]:]
+    try:
+        rows = [json.loads(line) for line in suffix.splitlines() if line]
+    except (ValueError, json.JSONDecodeError) as error:
+        raise ValueError("repair matrix authorization journal is malformed") from error
+    boundary_rows = [row for row in rows if row.get("event") == "usage_boundary"]
+    authorization_rows = [row for row in rows if row.get("event") == "phase_authorized"]
+    matrix_permits = [
+        row for row in rows
+        if row.get("event") == "permit_allocated"
+        and row.get("phase") == "repair-matrix"
+    ]
+    if (
+        len(boundary_rows) != 1
+        or boundary_rows[0].get("label") != "after-smoke-before-matrix"
+        or boundary_rows[0].get("passed") is not True
+        or len(authorization_rows) != 1
+        or authorization_rows[0].get("phase") != "repair-matrix"
+        or authorization_rows[0].get("maximum_calls") != 30
+        or rows.index(boundary_rows[0]) >= rows.index(authorization_rows[0])
+        or matrix_permits
+    ):
+        raise ValueError("repair matrix lacks a fresh, separate 30-call authorization")
+    usage_paths = sorted(
+        (destination / "session" / "permit-usage").glob(
+            "after-smoke-before-matrix-*.json"
+        )
+    )
+    if len(usage_paths) != 1:
+        raise ValueError("repair matrix boundary usage evidence is not exact")
+    usage = json.loads(usage_paths[0].read_text(encoding="utf-8"))
+    if canonical_sha256(usage) != boundary_rows[0].get("usage_sha256"):
+        raise ValueError("repair matrix boundary usage digest disagrees")
+    status = coordinator.control.status()
+    if status.get("state") != "ready":
+        raise ValueError("repair matrix control plane is not ready")
+    return {
+        "checkpoint_sha256": canonical_sha256(checkpoint),
+        "usage_sha256": canonical_sha256(usage),
+        "authorized_maximum_calls": 30,
+        "allocated_calls_before": status.get("allocated_calls"),
+    }
+
+
+def run_authorized_fake_repair_matrix_phase(
+    *,
+    task: dict[str, Any],
+    workspace_archive: bytes,
+    coordinator: AuthorizedAttemptCoordinator,
+    authorization_resolver: Callable[[PreparedAttempt], Path],
+    fake_transport: FakeProviderTransport,
+    request_prefix: str = "fake-matrix",
+) -> dict[str, Any]:
+    """Run five preassembled stores with exactly three fake draws each."""
+    if type(fake_transport) is not FakeProviderTransport:
+        raise ValueError("fake repair matrix refuses every non-fake transport")
+    if not request_prefix or request_prefix != Path(request_prefix).name:
+        raise ValueError("fake matrix request prefix is not a basename")
+    destination = coordinator.destination
+    phase = "repair-matrix"
+    validate_live_topology(destination, phase=phase)
+    try:
+        boundary = _validate_repair_matrix_boundary(coordinator)
+    except Exception:
+        coordinator.control.latch_stop("authorized_matrix_boundary_invalid")
+        raise
+    bundle_manifest_path = destination / "bundle" / "bundle-manifest.json"
+    if bundle_manifest_path.is_symlink() or not bundle_manifest_path.is_file():
+        coordinator.control.latch_stop("authorized_matrix_bundle_invalid")
+        raise ValueError("fake repair matrix bundle manifest is unavailable")
+    records = destination / "records" / phase
+    review_root = destination / "review" / phase
+    if any(records.iterdir()) or any(review_root.iterdir()):
+        coordinator.control.latch_stop("authorized_matrix_root_not_empty")
+        raise ValueError("fake repair matrix requires empty records and review roots")
+    planned_subjects = coordinator.plan["store_nonces"].get(phase)
+    if type(planned_subjects) is not dict or set(planned_subjects) != set(SUBJECTS):
+        coordinator.control.latch_stop("authorized_matrix_subject_set_invalid")
+        raise ValueError("authorized matrix planned subject set is not exact-five")
+
+    usage_root = destination / "session" / "permit-usage"
+    usage_before = {path.name for path in usage_root.glob("permit-*.json")}
+    cleanup_before = coordinator.broker.receipt_snapshot()
+    results = [
+        run_preassembled_fake_subject(
+            subject=subject, phase=phase, expected_draws=3,
+            task=task, workspace_archive=workspace_archive,
+            request_id=f"{request_prefix}-{subject}", coordinator=coordinator,
+            authorization_resolver=authorization_resolver,
+        )
+        for subject in SUBJECTS
+    ]
+    runs = [episode for result in results for episode in result["episodes"]]
+    comparison = compare_exact_five_matrix(
+        runs, task=task, workspace_archive=workspace_archive
+    )
+    if not comparison["passed"]:
+        coordinator.control.latch_stop("authorized_matrix_comparison_failed")
+        raise ValueError("authorized matrix exact-five comparison failed")
+    store_rows = {result["store"]["subject"]: result["store"] for result in results}
+    expected_run_ids = {row["run_id"] for row in store_rows.values()}
+    observed_run_ids = {child.name for child in records.iterdir()}
+    if observed_run_ids != expected_run_ids or len(observed_run_ids) != 5:
+        coordinator.control.latch_stop("authorized_matrix_store_set_invalid")
+        raise ValueError("authorized matrix store set is not exact-five")
+    for row in store_rows.values():
+        if canon.digest_tree(str(records / row["run_id"])) != row[
+            "run_store_tree_sha256"
+        ]:
+            coordinator.control.latch_stop("authorized_matrix_store_digest_drift")
+            raise ValueError("authorized matrix store drifted before comparison")
+
+    usage_after = {path.name for path in usage_root.glob("permit-*.json")}
+    matrix_usage_names = sorted(usage_after - usage_before)
+    if len(matrix_usage_names) != 15 or usage_before - usage_after:
+        coordinator.control.latch_stop("authorized_matrix_usage_set_invalid")
+        raise ValueError("authorized matrix permit usage set is not exact-fifteen")
+    usage_evidence = {
+        "schema": "agent-task-matrix-permit-usage/v0.1",
+        "snapshots": [
+            {
+                "path": name,
+                "sha256": bytes_sha256((usage_root / name).read_bytes()),
+                "document_sha256": canonical_sha256(json.loads(
+                    (usage_root / name).read_text(encoding="utf-8")
+                )),
+            }
+            for name in matrix_usage_names
+        ],
+    }
+    cleanup_after = coordinator.broker.receipt_snapshot()
+    matrix_cleanup = cleanup_after[len(cleanup_before):]
+    if (
+        len(matrix_cleanup) != 15
+        or cleanup_after[:len(cleanup_before)] != cleanup_before
+    ):
+        coordinator.control.latch_stop("authorized_matrix_cleanup_set_invalid")
+        raise ValueError("authorized matrix cleanup receipt set is not exact-fifteen")
+    credential_scan = scan_credentials(destination, credential_values(os.environ))
+    if not credential_scan["passed"]:
+        coordinator.control.latch_stop("authorized_matrix_credential_scan_failed")
+        raise ValueError("authorized matrix retained a configured credential")
+    comparison_path = review_root / "comparison.json"
+    usage_path = review_root / "permit-usage.json"
+    credential_path = review_root / "credential-scan.json"
+    cleanup_path = review_root / "cleanup-receipts.json"
+    _write_json_exclusive(comparison_path, comparison)
+    _write_json_exclusive(usage_path, usage_evidence)
+    _write_json_exclusive(credential_path, credential_scan)
+    _write_json_exclusive(cleanup_path, {
+        "schema": "agent-task-matrix-cleanup/v0.1",
+        "receipts": matrix_cleanup,
+    })
+    validate_live_topology(destination, phase=phase)
+    return {
+        "schema": "agent-task-authorized-fake-repair-matrix/v0.1",
+        "passed": True,
+        "provider_calls": len(runs),
+        "subjects": sorted(store_rows),
+        "stores": dict(sorted(store_rows.items())),
+        "comparison_sha256": canonical_sha256(comparison),
+        "usage_sha256": canonical_sha256(usage_evidence),
+        "credential_scan_sha256": bytes_sha256(credential_path.read_bytes()),
+        "cleanup_sha256": bytes_sha256(cleanup_path.read_bytes()),
+        "bundle_manifest_sha256": bytes_sha256(bundle_manifest_path.read_bytes()),
+        "boundary": boundary,
     }

@@ -126,6 +126,29 @@ class CallControl:
                 "maximum_calls": maximum_calls,
             })
 
+    def record_usage_boundary(
+        self, *, label: str, usage_sha256: str, passed: bool,
+    ) -> None:
+        """Journal one service-owned non-permit phase-boundary usage gate."""
+        with self._lock:
+            self._require_open()
+            if self.state != "ready" or self._inflight is not None:
+                self._latch("usage_boundary_not_ready")
+                raise ControlError("usage boundary requires ready single-flight state")
+            if label != "after-smoke-before-matrix" or type(passed) is not bool:
+                self._latch("usage_boundary_malformed")
+                raise ControlError("usage boundary identity is malformed")
+            self._append({
+                "schema": CALL_CONTROL_SCHEMA,
+                "event": "usage_boundary",
+                "label": label,
+                "usage_sha256": usage_sha256,
+                "passed": passed,
+            })
+            if not passed:
+                self._latch("usage_boundary_blocked")
+                raise ControlError("fresh phase-boundary usage gate blocked the matrix")
+
     def _latch(self, reason: str) -> None:
         if self.state != "hard_stop":
             self.state = "hard_stop"

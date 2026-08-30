@@ -169,12 +169,27 @@ offline reviewer independently re-hashes that complete tree and each lock.
 The exact-five fake smoke now executes inside those preassembled Workbench
 steps. Each step independently rechecks its freeze lock, execution plan,
 apparatus copies, task, archive, and fake plan before requesting a permit, then
-uses the authenticated call-control and broker services through a one-shot
-authorization bridge. The resulting Workbench attempt stdout is the retained
-episode itself; no post-call emitter or replacement spec is used. Missing,
-incomplete, or non-fake step context refuses before a permit, and authorization
-failure cannot obtain a second artifact through Workbench retry. Repair-matrix
-stores and a reviewed real-provider execution entry point remain absent.
+uses the authenticated call-control and broker services through a fixed-count
+authorization bridge. A draw must claim its deterministic request identity,
+consume one exact authorization, and report the completed permit identity before
+the bridge advances; a failed or lost draw cannot be mistaken for the next draw.
+The resulting Workbench attempt stdout is the retained episode itself; no
+post-call emitter or replacement spec is used. Missing, incomplete, or non-fake
+step context refuses before a permit, and authorization failure cannot obtain a
+second artifact through Workbench retry.
+
+The fake repair matrix now revalidates the independent smoke checkpoint and its
+journal/registry prefixes, requires a service-owned fresh
+`after-smoke-before-matrix` usage gate below rolling 80 and weekly 90, and
+requires a separately journaled 30-call phase authorization. It then executes
+the five preassembled matrix specs with exactly three successful draws each,
+independently validates all 15 episodes, runs `hwb verify` on every store, and
+retains a separate comparison, 15 permit-usage snapshots, cleanup receipts, and
+credential scan. Boundary usage at a stop threshold hard-stops before a matrix
+permit, and refusal on any draw cannot cause another authorization callback.
+Final phase candidates, the campaign manifest, clean control-plane finalization,
+independent offline matrix review, and a real-provider execution entry point
+remain absent.
 Before returning success, a separate offline smoke reviewer reopens all five
 stores, reruns `hwb verify`, binds each sealed episode subject to its checkpoint
 tree digest, rechecks the exact comparison, permit-usage and cleanup sets,
