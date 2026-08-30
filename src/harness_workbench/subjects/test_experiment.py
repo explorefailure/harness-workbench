@@ -9217,6 +9217,20 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
             self.assertEqual(20, len(supervisor.broker.receipt_snapshot()))
             self.assertEqual(5, len(matrix["stores"]))
             self.assertEqual(30, matrix["boundary"]["authorized_maximum_calls"])
+            offline_review_path = (
+                destination / "review" / "repair-matrix" / "offline-review.json"
+            )
+            self.assertEqual(
+                matrix["offline_review_sha256"],
+                agent_task_schema.bytes_sha256(offline_review_path.read_bytes()),
+            )
+            offline_review = agent_task_phase_review.review_fake_repair_matrix(
+                destination
+            )
+            self.assertTrue(offline_review["passed"], offline_review["errors"])
+            self.assertEqual(set(agent_task_schema.SUBJECTS), set(
+                offline_review["store_evidence"]
+            ))
             comparison = json.loads(
                 (destination / "review" / "repair-matrix" / "comparison.json")
                 .read_text(encoding="utf-8")
@@ -9298,9 +9312,139 @@ class DeclarativeAgentOfflineTests(unittest.TestCase):
                 "matrix call-control IDs are not fifteen contiguous calls",
                 gapped["errors"],
             )
+            first_subject = agent_task_schema.SUBJECTS[0]
+            first_run = (
+                destination / "records" / "repair-matrix"
+                / matrix["stores"][first_subject]["run_id"]
+            )
+            first_output = (
+                first_run / "steps" / f"{first_subject}-agent-task"
+                / "attempts" / "0" / "stdout.bin"
+            )
+            original_output = first_output.read_bytes()
+            first_output.write_bytes(original_output + b"\n")
+            output_mutated = agent_task_phase_review.review_fake_repair_matrix(
+                destination
+            )
+            self.assertFalse(output_mutated["passed"])
+            self.assertTrue(any(
+                "sealed episode is invalid" in error or "hwb verify failed" in error
+                for error in output_mutated["errors"]
+            ))
+            first_output.write_bytes(original_output)
+
+            cleanup_path = (
+                destination / "review" / "repair-matrix"
+                / "cleanup-receipts.json"
+            )
+            original_cleanup = cleanup_path.read_bytes()
+            cleanup_document = json.loads(original_cleanup)
+            cleanup_document["receipts"][0]["phase"] = "write-smoke"
+            cleanup_path.write_text(
+                json.dumps(cleanup_document, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            cleanup_mutated = agent_task_phase_review.review_fake_repair_matrix(
+                destination
+            )
+            self.assertFalse(cleanup_mutated["passed"])
+            self.assertIn(
+                "retained matrix cleanup is not exact-fifteen clean",
+                cleanup_mutated["errors"],
+            )
+            cleanup_path.write_bytes(original_cleanup)
+
+            usage_name = usage["snapshots"][0]["path"]
+            permit_usage_path = destination / "session" / "permit-usage" / usage_name
+            original_permit_usage = permit_usage_path.read_bytes()
+            permit_usage_path.write_bytes(original_permit_usage + b"\n")
+            usage_mutated = agent_task_phase_review.review_fake_repair_matrix(
+                destination
+            )
+            self.assertFalse(usage_mutated["passed"])
+            self.assertTrue(any(
+                "matrix permit usage digest disagrees" in error
+                for error in usage_mutated["errors"]
+            ))
+            permit_usage_path.write_bytes(original_permit_usage)
+            self.assertTrue(
+                agent_task_phase_review.review_fake_repair_matrix(destination)[
+                    "passed"
+                ]
+            )
             shutdown = supervisor.close()
             self.assertEqual("clean_self_issued", shutdown["call_control"]["kind"])
             self.assertEqual("clean_self_issued", shutdown["broker"]["kind"])
+            finalization = agent_task_runtime.finalize_authorized_fake_campaign(
+                destination, control_plane_shutdown=shutdown
+            )
+            self.assertTrue(finalization["passed"])
+            campaign_review = agent_task_phase_review.review_fake_campaign(
+                destination
+            )
+            self.assertTrue(campaign_review["passed"], campaign_review["errors"])
+            campaign = json.loads(
+                (destination / "review" / "campaign.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(campaign["eligible"])
+            self.assertEqual(
+                set(("write-smoke", "repair-matrix")),
+                set(campaign["phase_candidates"]),
+            )
+            matrix_candidate_path = (
+                destination / "review" / "repair-matrix"
+                / "phase-candidate.json"
+            )
+            original_candidate = matrix_candidate_path.read_bytes()
+            candidate = json.loads(original_candidate)
+            candidate["calls"]["maximum"] = 31
+            matrix_candidate_path.write_text(
+                json.dumps(candidate, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            candidate_mutated = agent_task_phase_review.review_fake_campaign(
+                destination
+            )
+            self.assertFalse(candidate_mutated["passed"])
+            self.assertTrue(any(
+                "phase candidate does not reconstruct" in error
+                or "campaign manifest does not reconstruct" in error
+                for error in candidate_mutated["errors"]
+            ))
+            matrix_candidate_path.write_bytes(original_candidate)
+            journal_path = destination / "session" / "call-control.jsonl"
+            original_journal = journal_path.read_bytes()
+            journal_path.write_bytes(original_journal + b"\n")
+            closure_mutated = agent_task_phase_review.review_fake_campaign(
+                destination
+            )
+            self.assertFalse(closure_mutated["passed"])
+            self.assertTrue(any(
+                "phase candidate does not reconstruct" in error
+                or "campaign manifest does not reconstruct" in error
+                for error in closure_mutated["errors"]
+            ))
+            journal_path.write_bytes(original_journal)
+            self.assertTrue(
+                agent_task_phase_review.review_fake_campaign(destination)["passed"]
+            )
+            stop_record = destination / "session" / "supervisor-stop.json"
+            stop_record.write_text(
+                json.dumps({
+                    "schema": agent_task_schema.SUPERVISOR_STOP_SCHEMA,
+                    "candidate_eligible": False,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            abnormal = agent_task_phase_review.review_fake_campaign(destination)
+            self.assertFalse(abnormal["passed"])
+            self.assertIn(
+                "supervisor stop record makes the campaign ineligible",
+                abnormal["errors"],
+            )
+            stop_record.unlink()
 
     def test_preassembled_matrix_does_not_repeat_refused_authorization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

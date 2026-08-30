@@ -37,6 +37,15 @@
     "cross-harness-agent-task-comparison/v0.1": {
       "subjects": ["claude", "codex", "deepseek", "hermes", "pi"]
     },
+    "cross-harness-agent-task-phase-candidate/v0.1": {
+      "phases": ["write-smoke", "repair-matrix"],
+      "required_store_binding": ["run_id", "run_store_tree_sha256", "record_json_sha256", "integrity_json_sha256"],
+      "required_closure_binding": ["journal_closure", "registry_closure", "control_plane_shutdown"]
+    },
+    "cross-harness-agent-task-campaign/v0.1": {
+      "phases": ["write-smoke", "repair-matrix"],
+      "required": ["execution_plan_sha256", "phase_candidates", "journal_closure", "registry_closure", "control_plane_shutdown", "eligible"]
+    },
     "cross-harness-agent-task-run/v0.1": {
       "required": ["schema", "subject", "task_sha256", "input_archive_sha256", "store_nonce", "base_attempt", "provider", "workspace", "effects_archive", "verdict"]
     }

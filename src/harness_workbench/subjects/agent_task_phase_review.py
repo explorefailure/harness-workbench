@@ -11,8 +11,19 @@ from typing import Any
 from harness_workbench import canon
 from harness_workbench.capture import run_bounded
 
-from agent_task_schema import SUBJECTS, bytes_sha256, canonical_sha256, validate_run
-from agent_task_validate import scan_credentials
+from agent_task_schema import (
+    CAMPAIGN_SCHEMA,
+    PHASE_CANDIDATE_SCHEMA,
+    SUBJECTS,
+    bytes_sha256,
+    canonical_sha256,
+    validate_run,
+)
+from agent_task_validate import (
+    compare_exact_five_matrix,
+    scan_credentials,
+    validate_retained_run,
+)
 
 
 PHASES = ("write-smoke", "repair-matrix")
@@ -50,6 +61,15 @@ EXPECTED_REVIEW_FILES = {
     "offline-review.json",
     "permit-usage.json",
     "phase-checkpoint.json",
+    "phase-candidate.json",
+}
+EXPECTED_MATRIX_REVIEW_FILES = {
+    "cleanup-receipts.json",
+    "comparison.json",
+    "credential-scan.json",
+    "offline-review.json",
+    "permit-usage.json",
+    "phase-candidate.json",
 }
 
 
@@ -101,6 +121,29 @@ def _argument(argv: Any, name: str) -> Any:
         index = argv.index(name)
         return argv[index + 1]
     except (ValueError, IndexError):
+        return None
+
+
+def _store_evidence(store: Path, errors: list[str]) -> dict[str, str] | None:
+    record = store / "record.json"
+    integrity = store / "integrity.json"
+    if (
+        record.is_symlink()
+        or not record.is_file()
+        or integrity.is_symlink()
+        or not integrity.is_file()
+    ):
+        errors.append(f"{store.name}: record or integrity file is unavailable")
+        return None
+    try:
+        return {
+            "run_id": store.name,
+            "run_store_tree_sha256": canon.digest_tree(str(store)),
+            "record_json_sha256": canon.digest_file(str(record)),
+            "integrity_json_sha256": canon.digest_file(str(integrity)),
+        }
+    except OSError as error:
+        errors.append(f"{store.name}: cannot digest store evidence: {error}")
         return None
 
 
@@ -285,6 +328,7 @@ def review_fake_smoke_checkpoint(
             "errors": ["live destination is an alias"],
             "subjects": [],
             "stores": 0,
+            "store_evidence": {},
             "credential_rescan": {
                 "passed": False, "findings": ["alias prevents safe rescan"],
             },
@@ -428,6 +472,7 @@ def review_fake_smoke_checkpoint(
             errors.append("checkpoint durable prefixes are invalid")
 
     observed_subjects: set[str] = set()
+    stores_by_subject: dict[str, dict[str, str]] = {}
     environment = _environment()
     for store in stores:
         if store.is_symlink() or not store.is_dir():
@@ -448,6 +493,9 @@ def review_fake_smoke_checkpoint(
             observed_subjects.add(subject)
             if checkpoint_stores.get(subject) != canon.digest_tree(str(store)):
                 errors.append(f"{store.name}: checkpoint store digest disagrees")
+            evidence = _store_evidence(store, errors)
+            if evidence is not None:
+                stores_by_subject[subject] = evidence
         completed = run_bounded(
             [
                 sys.executable, "-m", "harness_workbench", "--root",
@@ -485,5 +533,617 @@ def review_fake_smoke_checkpoint(
         "errors": errors,
         "subjects": sorted(observed_subjects),
         "stores": len(stores),
+        "store_evidence": dict(sorted(stores_by_subject.items())),
         "credential_rescan": rescanned,
+    }
+
+
+def review_fake_repair_matrix(
+    destination: Path,
+    *,
+    configured_credentials: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Reconstruct and validate the retained three-draw matrix offline."""
+    errors: list[str] = []
+    if destination.is_symlink():
+        return {
+            "schema": "agent-task-fake-matrix-offline-review/v0.1",
+            "passed": False,
+            "errors": ["live destination is an alias"],
+            "subjects": [],
+            "stores": 0,
+            "store_evidence": {},
+            "credential_rescan": {
+                "passed": False, "findings": ["alias prevents safe rescan"],
+            },
+        }
+    destination = destination.resolve(strict=True)
+    aliases = [path for path in destination.rglob("*") if path.is_symlink()]
+    if aliases:
+        errors.append("retained evidence contains an alias")
+    records = destination / "records" / "repair-matrix"
+    review_root = destination / "review" / "repair-matrix"
+    if records.is_symlink() or not records.is_dir():
+        errors.append("repair-matrix records root is not a real directory")
+        stores: list[Path] = []
+    else:
+        stores = sorted(records.iterdir())
+    if len(stores) != len(SUBJECTS):
+        errors.append("repair-matrix records root is not exact-five")
+    if any(path.is_symlink() or not path.is_dir() for path in stores):
+        errors.append("repair-matrix records root contains a partial store")
+    if review_root.is_symlink() or not review_root.is_dir():
+        errors.append("repair-matrix review root is not a real directory")
+        review_names: set[str] = set()
+    else:
+        review_names = {path.name for path in review_root.iterdir()}
+    required_review = {
+        "cleanup-receipts.json", "comparison.json", "credential-scan.json",
+        "permit-usage.json",
+    }
+    if (
+        not review_names.issubset(EXPECTED_MATRIX_REVIEW_FILES)
+        or not required_review.issubset(review_names)
+    ):
+        errors.append("repair-matrix review file set is incomplete or unexpected")
+
+    comparison = _load_json(review_root / "comparison.json", errors)
+    usage = _load_json(review_root / "permit-usage.json", errors)
+    cleanup = _load_json(review_root / "cleanup-receipts.json", errors)
+    retained_scan = _load_json(review_root / "credential-scan.json", errors)
+    bundle_manifest = _load_json(
+        destination / "bundle" / "bundle-manifest.json", errors
+    )
+    execution_outer = _load_json(
+        destination / "bundle" / "execution-plan.json", errors
+    )
+    task = _load_json(destination / "bundle" / "task.json", errors)
+    archive_path = destination / "bundle" / "workspace.zip"
+    try:
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise ValueError("not a regular file")
+        workspace_archive = archive_path.read_bytes()
+    except (OSError, ValueError) as error:
+        errors.append(f"cannot read workspace.zip: {error}")
+        workspace_archive = b""
+    execution_plan = (
+        execution_outer.get("execution_plan")
+        if type(execution_outer) is dict else None
+    )
+    if bundle_manifest is not None:
+        files = bundle_manifest.get("files")
+        if (
+            bundle_manifest.get("schema")
+            != "agent-task-live-bundle-manifest/v0.1"
+            or type(files) is not dict
+            or set(files) != {
+                "task.json", "workspace.zip", "fake-provider-plan.json",
+                "execution-plan.json",
+            }
+        ):
+            errors.append("retained bundle manifest is invalid")
+        else:
+            for name, expected in files.items():
+                path = destination / "bundle" / name
+                if (
+                    path.is_symlink() or not path.is_file()
+                    or bytes_sha256(path.read_bytes()) != expected
+                ):
+                    errors.append(f"retained bundle file digest disagrees: {name}")
+        _review_pre_call_specs(destination, bundle_manifest, errors)
+    if (
+        type(execution_plan) is not dict
+        or canonical_sha256(execution_plan)
+        != execution_outer.get("execution_plan_sha256")
+        or execution_outer.get("execution_plan_sha256")
+        != (bundle_manifest or {}).get("execution_plan_sha256")
+    ):
+        errors.append("retained execution plan digest disagrees")
+
+    if comparison is not None:
+        subjects = comparison.get("subjects")
+        if (
+            comparison.get("schema")
+            != "cross-harness-agent-task-comparison/v0.1"
+            or comparison.get("phase") != "repair-matrix"
+            or comparison.get("draws_per_subject") != 3
+            or comparison.get("passed") is not True
+            or type(subjects) is not dict
+            or set(subjects) != set(SUBJECTS)
+            or any(
+                row.get("passed") is not True
+                or type(row.get("draws")) is not list
+                or len(row["draws"]) != 3
+                or any(draw.get("passed") is not True for draw in row["draws"])
+                for row in subjects.values()
+                if type(row) is dict
+            )
+            or any(type(row) is not dict for row in subjects.values())
+        ):
+            errors.append("retained matrix comparison is not exact-five by three")
+    if usage is not None:
+        snapshots = usage.get("snapshots")
+        if (
+            usage.get("schema") != "agent-task-matrix-permit-usage/v0.1"
+            or type(snapshots) is not list
+            or len(snapshots) != 15
+        ):
+            errors.append("retained matrix permit usage is not exact-fifteen")
+        else:
+            names: set[str] = set()
+            for row in snapshots:
+                if type(row) is not dict or set(row) != {
+                    "path", "sha256", "document_sha256",
+                }:
+                    errors.append("retained matrix permit usage row is malformed")
+                    continue
+                name = row["path"]
+                path = destination / "session" / "permit-usage" / str(name)
+                if (
+                    type(name) is not str or name != Path(name).name
+                    or not name.startswith("permit-") or name in names
+                    or path.is_symlink() or not path.is_file()
+                ):
+                    errors.append("retained matrix permit usage path is invalid")
+                    continue
+                names.add(name)
+                raw = path.read_bytes()
+                try:
+                    document = json.loads(raw)
+                except (ValueError, json.JSONDecodeError):
+                    document = None
+                if (
+                    bytes_sha256(raw) != row["sha256"]
+                    or canonical_sha256(document) != row["document_sha256"]
+                ):
+                    errors.append(f"matrix permit usage digest disagrees: {name}")
+    if cleanup is not None:
+        receipts = cleanup.get("receipts")
+        if (
+            cleanup.get("schema") != "agent-task-matrix-cleanup/v0.1"
+            or type(receipts) is not list or len(receipts) != 15
+            or any(type(row) is not dict for row in receipts)
+            or any(
+                row.get("phase") != "repair-matrix"
+                or row.get("kind") != "clean_self_issued"
+                or row.get("group_alive_after_cleanup") is not False
+                for row in receipts if type(row) is dict
+            )
+            or len({row.get("registration_id") for row in receipts}) != 15
+        ):
+            errors.append("retained matrix cleanup is not exact-fifteen clean")
+    if retained_scan is not None and retained_scan.get("passed") is not True:
+        errors.append("retained matrix credential scan did not pass")
+
+    environment = _environment()
+    observed_subjects: set[str] = set()
+    observed_runs: list[dict[str, Any]] = []
+    stores_by_subject: dict[str, dict[str, str]] = {}
+    for store in stores:
+        if store.is_symlink() or not store.is_dir():
+            continue
+        attempts_path = store / "attempts.jsonl"
+        try:
+            attempts = [
+                json.loads(line)
+                for line in attempts_path.read_text(encoding="utf-8").splitlines()
+            ]
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            errors.append(f"{store.name}: attempts are unreadable: {error}")
+            attempts = []
+        if len(attempts) != 3 or any(
+            row.get("n") != draw
+            or row.get("exit") != 0
+            or row.get("caused_by") != [
+                {"feature": "sample", "i": draw},
+                {"feature": "retry", "i": 0},
+            ]
+            for draw, row in enumerate(attempts)
+        ):
+            errors.append(f"{store.name}: attempts are not exact three-draw success")
+        outputs = [
+            store / "steps" / child.name / "attempts" / str(draw) / "stdout.bin"
+            for child in (store / "steps").iterdir()
+            for draw in range(3)
+        ] if (store / "steps").is_dir() else []
+        if len(outputs) != 3:
+            errors.append(f"{store.name}: sealed matrix outputs are not exact-three")
+            episodes: list[dict[str, Any]] = []
+        else:
+            episodes = []
+            for output in outputs:
+                try:
+                    episode = validate_run(json.loads(output.read_text(encoding="utf-8")))
+                    episodes.append(episode)
+                except (OSError, ValueError, json.JSONDecodeError) as error:
+                    errors.append(f"{store.name}: sealed episode is invalid: {error}")
+        subjects = {episode.get("subject") for episode in episodes}
+        subject = next(iter(subjects)) if len(subjects) == 1 else None
+        if subject is None or subject not in SUBJECTS:
+            errors.append(f"{store.name}: sealed episode subject is not singular")
+        elif subject in observed_subjects:
+            errors.append(f"{store.name}: duplicate retained subject {subject}")
+        else:
+            observed_subjects.add(subject)
+            evidence = _store_evidence(store, errors)
+            if evidence is not None:
+                stores_by_subject[subject] = evidence
+            if (
+                type(execution_plan) is not dict
+                or any(
+                    episode.get("store_nonce")
+                    != execution_plan.get("store_nonces", {}).get(
+                        "repair-matrix", {}
+                    ).get(subject)
+                    for episode in episodes
+                )
+            ):
+                errors.append(f"{store.name}: matrix store nonce disagrees")
+        if type(task) is dict and workspace_archive:
+            for draw, episode in enumerate(episodes):
+                validation = validate_retained_run(
+                    episode, task=task, workspace_archive=workspace_archive
+                )
+                if not validation["passed"]:
+                    errors.extend(
+                        f"{store.name} draw {draw}: {error}"
+                        for error in validation["errors"]
+                    )
+        observed_runs.extend(episodes)
+        completed = run_bounded(
+            [
+                sys.executable, "-m", "harness_workbench", "--root",
+                str(records), "verify", store.name,
+            ],
+            cwd=destination / "bundle", env=environment, timeout=15,
+            stdout_limit=1024 * 1024, stderr_limit=1024 * 1024,
+            termination_grace=1.0, forward_signals=False,
+        )
+        if (
+            completed.returncode != 0
+            or completed.termination_reason is not None
+            or completed.stdout_overflow or completed.stderr_overflow
+            or completed.group_alive_after_cleanup
+            or b"conforms: yes" not in completed.stdout
+        ):
+            errors.append(f"{store.name}: hwb verify failed")
+    if observed_subjects != set(SUBJECTS):
+        errors.append("sealed matrix store subjects are not exact-five")
+    if type(task) is dict and workspace_archive:
+        replayed = compare_exact_five_matrix(
+            observed_runs, task=task, workspace_archive=workspace_archive
+        )
+        if comparison is not None and replayed != comparison:
+            errors.append("retained matrix comparison does not independently replay")
+    rescanned = (
+        {"passed": False, "findings": ["alias prevents safe rescan"]}
+        if aliases else scan_credentials(destination, configured_credentials)
+    )
+    if not rescanned["passed"]:
+        errors.append("offline matrix credential rescan failed")
+    return {
+        "schema": "agent-task-fake-matrix-offline-review/v0.1",
+        "passed": not errors,
+        "errors": errors,
+        "subjects": sorted(observed_subjects),
+        "stores": len(stores),
+        "store_evidence": dict(sorted(stores_by_subject.items())),
+        "comparison_sha256": (
+            canonical_sha256(comparison) if comparison is not None else None
+        ),
+        "usage_sha256": canonical_sha256(usage) if usage is not None else None,
+        "cleanup_sha256": canonical_sha256(cleanup) if cleanup is not None else None,
+        "credential_rescan": rescanned,
+    }
+
+
+def _load_jsonl(path: Path, errors: list[str]) -> list[dict[str, Any]]:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("not a regular file")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        rows = [json.loads(line) for line in lines]
+        if not rows or any(type(row) is not dict for row in rows):
+            raise ValueError("not a nonempty object stream")
+        return rows
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        errors.append(f"cannot read {path.name}: {error}")
+        return []
+
+
+def _closure(path: Path, errors: list[str]) -> dict[str, Any]:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("not a regular file")
+        raw = path.read_bytes()
+        return {"bytes": len(raw), "sha256": bytes_sha256(raw)}
+    except (OSError, ValueError) as error:
+        errors.append(f"cannot close {path.name}: {error}")
+        return {"bytes": 0, "sha256": None}
+
+
+def _review_control_plane_closure(
+    destination: Path,
+    shutdown: Any,
+    errors: list[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    session = destination / "session"
+    journal_path = session / "call-control.jsonl"
+    registry_path = session / "process-registry.jsonl"
+    stop_record = session / "supervisor-stop.json"
+    if stop_record.exists() or stop_record.is_symlink():
+        errors.append("supervisor stop record makes the campaign ineligible")
+    journal = _load_jsonl(journal_path, errors)
+    registry = _load_jsonl(registry_path, errors)
+    journal_closure = _closure(journal_path, errors)
+    registry_closure = _closure(registry_path, errors)
+    expected_shutdown = {
+        "broker": {
+            "schema": "agent-task-process-registry/v0.1",
+            "event": "broker_stopped",
+            "kind": "clean_self_issued",
+        },
+        "call_control": {"kind": "clean_self_issued"},
+    }
+    if shutdown != expected_shutdown:
+        errors.append("control-plane shutdown receipts are not exact and clean")
+    if any(
+        row.get("kind") == "abnormal_supervisor_witnessed"
+        or row.get("event") == "control_plane_termination"
+        for row in registry
+    ):
+        errors.append("process registry contains abnormal supervisor witnessing")
+    if any(row.get("event") == "hard_stop" for row in journal):
+        errors.append("call-control journal contains a hard stop")
+    terminal = journal[-1] if journal else {}
+    if terminal != {
+        "schema": "agent-task-call-control/v0.1",
+        "event": "service_stopped",
+        "kind": "clean_self_issued",
+        "state": "ready",
+        "allocated_calls": 20,
+    }:
+        errors.append("call-control journal has no exact clean terminal closure")
+    allocated = [row for row in journal if row.get("event") == "permit_allocated"]
+    released = [row for row in journal if row.get("event") == "provider_released"]
+    completed = [row for row in journal if row.get("event") == "permit_completed"]
+    if (
+        [row.get("call_id") for row in allocated] != list(range(1, 21))
+        or [row.get("call_id") for row in released] != list(range(1, 21))
+        or [row.get("call_id") for row in completed] != list(range(1, 21))
+        or any(
+            row.get("result") != "success"
+            or row.get("cleanup_proved") is not True
+            or row.get("next_state") != "ready"
+            for row in completed
+        )
+    ):
+        errors.append("call-control journal is not twenty closed permit lifecycles")
+    registered = [row for row in registry if row.get("event") == "registered"]
+    cleanup = [row for row in registry if row.get("event") == "cleanup"]
+    registered_ids = [row.get("registration_id") for row in registered]
+    cleanup_ids = [row.get("registration_id") for row in cleanup]
+    if (
+        len(registered_ids) != 20
+        or len(set(registered_ids)) != 20
+        or len(cleanup_ids) != 20
+        or set(cleanup_ids) != set(registered_ids)
+        or any(
+            type(row.get("pid")) is not int
+            or row.get("pgid") != row.get("pid")
+            or row.get("phase") not in PHASES
+            or type(row.get("platform_start_identity")) is not str
+            or type(row.get("launcher_executable_identity")) is not str
+            or type(row.get("executable_identity")) is not str
+            for row in registered
+        )
+        or any(
+            row.get("kind") != "clean_self_issued"
+            or row.get("returncode") != 0
+            or row.get("termination_reason") is not None
+            or row.get("group_alive_after_cleanup") is not False
+            for row in cleanup
+        )
+    ):
+        errors.append("process registry is not twenty clean registered closures")
+    expected_registry_tail = [
+        expected_shutdown["broker"],
+        {
+            "schema": "agent-task-process-registry/v0.1",
+            "event": "control_plane_shutdown",
+            "kind": "clean_self_issued",
+            "control_plane_child": "broker",
+            "returncode": 0,
+        },
+        {
+            "schema": "agent-task-process-registry/v0.1",
+            "event": "control_plane_shutdown",
+            "kind": "clean_self_issued",
+            "control_plane_child": "call_control",
+            "returncode": 0,
+        },
+    ]
+    if registry[-3:] != expected_registry_tail:
+        errors.append("process registry has no exact clean control-plane tail")
+    return journal_closure, registry_closure
+
+
+def _expected_phase_candidate(
+    destination: Path,
+    *,
+    phase: str,
+    execution_plan: dict[str, Any],
+    bundle_manifest: dict[str, Any],
+    phase_review: dict[str, Any],
+    journal_closure: dict[str, Any],
+    registry_closure: dict[str, Any],
+    shutdown: dict[str, Any],
+    smoke_checkpoint: dict[str, Any],
+) -> dict[str, Any]:
+    review_root = destination / "review" / phase
+    cleanup_path = (
+        review_root / "cleanup-receipts.json"
+        if phase == "repair-matrix"
+        else review_root / "phase-checkpoint.json"
+    )
+    return {
+        "schema": PHASE_CANDIDATE_SCHEMA,
+        "phase": phase,
+        "eligible": True,
+        "execution_plan_sha256": canonical_sha256(execution_plan),
+        "bundle_manifest_file_sha256": bytes_sha256(
+            (destination / "bundle" / "bundle-manifest.json").read_bytes()
+        ),
+        "task_sha256": execution_plan["inputs"]["task_sha256"],
+        "workspace_archive_sha256": execution_plan["inputs"][
+            "workspace_archive_sha256"
+        ],
+        "apparatus_map_sha256": bundle_manifest["apparatus_map_sha256"],
+        "validator_program_sha256": bundle_manifest["validator_program_sha256"],
+        "comparator_program_sha256": bundle_manifest[
+            "comparator_program_sha256"
+        ],
+        "provider_pins_sha256": canonical_sha256(
+            execution_plan["provider_pins"]
+        ),
+        "stores": phase_review["store_evidence"],
+        "comparison_report_sha256": canonical_sha256(json.loads(
+            (review_root / "comparison.json").read_text(encoding="utf-8")
+        )),
+        "usage_evidence_sha256": canonical_sha256(json.loads(
+            (review_root / "permit-usage.json").read_text(encoding="utf-8")
+        )),
+        "credential_scan_file_sha256": bytes_sha256(
+            (review_root / "credential-scan.json").read_bytes()
+        ),
+        "cleanup_evidence_file_sha256": bytes_sha256(cleanup_path.read_bytes()),
+        "offline_review_file_sha256": bytes_sha256(
+            (review_root / "offline-review.json").read_bytes()
+        ),
+        "smoke_checkpoint_sha256": canonical_sha256(smoke_checkpoint),
+        "journal_closure": journal_closure,
+        "registry_closure": registry_closure,
+        "control_plane_shutdown": shutdown,
+        "calls": {
+            "nominal": 5 if phase == "write-smoke" else 15,
+            "maximum": 13 if phase == "write-smoke" else 30,
+        },
+    }
+
+
+def review_fake_campaign(
+    destination: Path,
+    *,
+    candidate_documents: dict[str, dict[str, Any]] | None = None,
+    campaign_document: dict[str, Any] | None = None,
+    configured_credentials: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Independently reconstruct final candidates and the clean campaign."""
+    errors: list[str] = []
+    if destination.is_symlink():
+        return {
+            "schema": "agent-task-fake-campaign-offline-review/v0.1",
+            "passed": False,
+            "errors": ["live destination is an alias"],
+        }
+    destination = destination.resolve(strict=True)
+    if candidate_documents is None:
+        candidate_documents = {
+            phase: _load_json(
+                destination / "review" / phase / "phase-candidate.json", errors
+            )
+            for phase in PHASES
+        }
+    if campaign_document is None:
+        campaign_document = _load_json(
+            destination / "review" / "campaign.json", errors
+        )
+    if (
+        type(candidate_documents) is not dict
+        or set(candidate_documents) != set(PHASES)
+        or any(type(value) is not dict for value in candidate_documents.values())
+        or type(campaign_document) is not dict
+    ):
+        errors.append("final candidate document set is incomplete")
+        return {
+            "schema": "agent-task-fake-campaign-offline-review/v0.1",
+            "passed": False,
+            "errors": errors,
+        }
+    shutdown = campaign_document.get("control_plane_shutdown")
+    journal_closure, registry_closure = _review_control_plane_closure(
+        destination, shutdown, errors
+    )
+    smoke_review = review_fake_smoke_checkpoint(
+        destination, configured_credentials=configured_credentials
+    )
+    matrix_review = review_fake_repair_matrix(
+        destination, configured_credentials=configured_credentials
+    )
+    if not smoke_review["passed"]:
+        errors.extend(f"smoke review: {error}" for error in smoke_review["errors"])
+    if not matrix_review["passed"]:
+        errors.extend(f"matrix review: {error}" for error in matrix_review["errors"])
+    execution_outer = _load_json(
+        destination / "bundle" / "execution-plan.json", errors
+    )
+    bundle_manifest = _load_json(
+        destination / "bundle" / "bundle-manifest.json", errors
+    )
+    smoke_checkpoint = _load_json(
+        destination / "review" / "write-smoke" / "phase-checkpoint.json", errors
+    )
+    if (
+        execution_outer is None
+        or type(execution_outer.get("execution_plan")) is not dict
+        or bundle_manifest is None
+        or smoke_checkpoint is None
+    ):
+        errors.append("campaign source evidence is incomplete")
+    else:
+        try:
+            execution_plan = execution_outer["execution_plan"]
+            expected_candidates = {
+                phase: _expected_phase_candidate(
+                    destination, phase=phase, execution_plan=execution_plan,
+                    bundle_manifest=bundle_manifest,
+                    phase_review=(
+                        smoke_review if phase == "write-smoke" else matrix_review
+                    ),
+                    journal_closure=journal_closure,
+                    registry_closure=registry_closure,
+                    shutdown=shutdown,
+                    smoke_checkpoint=smoke_checkpoint,
+                )
+                for phase in PHASES
+            }
+            for phase in PHASES:
+                if candidate_documents[phase] != expected_candidates[phase]:
+                    errors.append(f"{phase} phase candidate does not reconstruct")
+            expected_campaign = {
+                "schema": CAMPAIGN_SCHEMA,
+                "eligible": True,
+                "execution_plan_sha256": canonical_sha256(execution_plan),
+                "phase_candidates": {
+                    phase: {
+                        "path": f"{phase}/phase-candidate.json",
+                        "sha256": canonical_sha256(candidate_documents[phase]),
+                    }
+                    for phase in PHASES
+                },
+                "smoke_checkpoint_sha256": canonical_sha256(smoke_checkpoint),
+                "journal_closure": journal_closure,
+                "registry_closure": registry_closure,
+                "control_plane_shutdown": shutdown,
+            }
+            if campaign_document != expected_campaign:
+                errors.append("campaign manifest does not reconstruct")
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            errors.append(f"campaign reconstruction failed closed: {error}")
+    return {
+        "schema": "agent-task-fake-campaign-offline-review/v0.1",
+        "passed": not errors,
+        "errors": errors,
+        "journal_closure": journal_closure,
+        "registry_closure": registry_closure,
     }

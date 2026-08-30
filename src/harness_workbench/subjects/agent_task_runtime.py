@@ -24,20 +24,32 @@ from agent_task_archives import (
     validate_archive,
 )
 from agent_task_authorization import AuthorizationExpectation, validate_live_topology
-from agent_task_broker import SpawnBroker, build_phase_checkpoint, validate_prefix
+from agent_task_broker import (
+    SpawnBroker,
+    build_phase_checkpoint,
+    durable_prefix,
+    validate_prefix,
+)
 from agent_task_coordinator import AuthorizedAttemptCoordinator, PreparedAttempt
 from agent_task_control import CallControl, Permit
 from agent_task_services import BrokerClient, CallControlClient
 from agent_task_routes import normalize_fake_route
-from agent_task_phase_review import review_fake_smoke_checkpoint
+from agent_task_phase_review import (
+    review_fake_campaign,
+    review_fake_repair_matrix,
+    review_fake_smoke_checkpoint,
+)
 from agent_task_providers import FakeProviderTransport, ProviderTransport
 from agent_task_schema import (
+    CAMPAIGN_SCHEMA,
+    PHASE_CANDIDATE_SCHEMA,
     RUN_SCHEMA,
     SUBJECTS,
     WORKSPACE_SCHEMA,
     bytes_sha256,
     canonical_bytes,
     canonical_sha256,
+    validate_run,
     validate_task,
 )
 from agent_task_specs import assemble_pre_call_specs
@@ -1253,6 +1265,14 @@ def run_authorized_fake_repair_matrix_phase(
         "receipts": matrix_cleanup,
     })
     validate_live_topology(destination, phase=phase)
+    offline_review = review_fake_repair_matrix(
+        destination, configured_credentials=credential_values(os.environ)
+    )
+    if not offline_review["passed"]:
+        coordinator.control.latch_stop("authorized_matrix_offline_review_failed")
+        raise ValueError("authorized matrix offline review failed")
+    offline_review_path = review_root / "offline-review.json"
+    _write_json_exclusive(offline_review_path, offline_review)
     return {
         "schema": "agent-task-authorized-fake-repair-matrix/v0.1",
         "passed": True,
@@ -1263,6 +1283,205 @@ def run_authorized_fake_repair_matrix_phase(
         "usage_sha256": canonical_sha256(usage_evidence),
         "credential_scan_sha256": bytes_sha256(credential_path.read_bytes()),
         "cleanup_sha256": bytes_sha256(cleanup_path.read_bytes()),
+        "offline_review_sha256": bytes_sha256(offline_review_path.read_bytes()),
         "bundle_manifest_sha256": bytes_sha256(bundle_manifest_path.read_bytes()),
         "boundary": boundary,
+    }
+
+
+def _final_store_evidence(destination: Path, phase: str) -> dict[str, Any]:
+    records = destination / "records" / phase
+    expected_draws = 1 if phase == "write-smoke" else 3
+    stores = list(records.iterdir())
+    if len(stores) != len(SUBJECTS):
+        raise ValueError(f"{phase} finalization requires exact-five stores")
+    result: dict[str, Any] = {}
+    for store in stores:
+        if store.is_symlink() or not store.is_dir():
+            raise ValueError(f"{phase} finalization found a partial store")
+        outputs = sorted(store.glob("steps/*/attempts/*/stdout.bin"))
+        if len(outputs) != expected_draws:
+            raise ValueError(f"{phase} finalization found an incomplete store")
+        subjects = {
+            validate_run(json.loads(path.read_text(encoding="utf-8")))["subject"]
+            for path in outputs
+        }
+        if len(subjects) != 1:
+            raise ValueError(f"{phase} finalization found a mixed-subject store")
+        subject = next(iter(subjects))
+        if subject not in SUBJECTS or subject in result:
+            raise ValueError(f"{phase} finalization subject set is not exact-five")
+        record = store / "record.json"
+        integrity = store / "integrity.json"
+        if (
+            record.is_symlink() or not record.is_file()
+            or integrity.is_symlink() or not integrity.is_file()
+        ):
+            raise ValueError(f"{phase} finalization store metadata is incomplete")
+        result[subject] = {
+            "run_id": store.name,
+            "run_store_tree_sha256": canon.digest_tree(str(store)),
+            "record_json_sha256": canon.digest_file(str(record)),
+            "integrity_json_sha256": canon.digest_file(str(integrity)),
+        }
+    if set(result) != set(SUBJECTS):
+        raise ValueError(f"{phase} finalization subject set is not exact-five")
+    return dict(sorted(result.items()))
+
+
+def _final_phase_candidate(
+    destination: Path,
+    *,
+    phase: str,
+    execution_plan: dict[str, Any],
+    bundle_manifest: dict[str, Any],
+    journal_closure: dict[str, Any],
+    registry_closure: dict[str, Any],
+    shutdown: dict[str, Any],
+    smoke_checkpoint: dict[str, Any],
+) -> dict[str, Any]:
+    review_root = destination / "review" / phase
+    cleanup_path = (
+        review_root / "cleanup-receipts.json"
+        if phase == "repair-matrix"
+        else review_root / "phase-checkpoint.json"
+    )
+    return {
+        "schema": PHASE_CANDIDATE_SCHEMA,
+        "phase": phase,
+        "eligible": True,
+        "execution_plan_sha256": canonical_sha256(execution_plan),
+        "bundle_manifest_file_sha256": bytes_sha256(
+            (destination / "bundle" / "bundle-manifest.json").read_bytes()
+        ),
+        "task_sha256": execution_plan["inputs"]["task_sha256"],
+        "workspace_archive_sha256": execution_plan["inputs"][
+            "workspace_archive_sha256"
+        ],
+        "apparatus_map_sha256": bundle_manifest["apparatus_map_sha256"],
+        "validator_program_sha256": bundle_manifest["validator_program_sha256"],
+        "comparator_program_sha256": bundle_manifest[
+            "comparator_program_sha256"
+        ],
+        "provider_pins_sha256": canonical_sha256(
+            execution_plan["provider_pins"]
+        ),
+        "stores": _final_store_evidence(destination, phase),
+        "comparison_report_sha256": canonical_sha256(json.loads(
+            (review_root / "comparison.json").read_text(encoding="utf-8")
+        )),
+        "usage_evidence_sha256": canonical_sha256(json.loads(
+            (review_root / "permit-usage.json").read_text(encoding="utf-8")
+        )),
+        "credential_scan_file_sha256": bytes_sha256(
+            (review_root / "credential-scan.json").read_bytes()
+        ),
+        "cleanup_evidence_file_sha256": bytes_sha256(cleanup_path.read_bytes()),
+        "offline_review_file_sha256": bytes_sha256(
+            (review_root / "offline-review.json").read_bytes()
+        ),
+        "smoke_checkpoint_sha256": canonical_sha256(smoke_checkpoint),
+        "journal_closure": journal_closure,
+        "registry_closure": registry_closure,
+        "control_plane_shutdown": shutdown,
+        "calls": {
+            "nominal": 5 if phase == "write-smoke" else 15,
+            "maximum": 13 if phase == "write-smoke" else 30,
+        },
+    }
+
+
+def finalize_authorized_fake_campaign(
+    destination: Path,
+    *,
+    control_plane_shutdown: dict[str, Any],
+) -> dict[str, Any]:
+    """Emit final candidates only after independently accepted clean closure."""
+    if destination.is_symlink():
+        raise ValueError("fake campaign destination must not be an alias")
+    destination = destination.resolve(strict=True)
+    candidate_paths = {
+        phase: destination / "review" / phase / "phase-candidate.json"
+        for phase in ("write-smoke", "repair-matrix")
+    }
+    campaign_path = destination / "review" / "campaign.json"
+    if campaign_path.exists() or campaign_path.is_symlink() or any(
+        path.exists() or path.is_symlink() for path in candidate_paths.values()
+    ):
+        raise FileExistsError("fake campaign finalization is immutable and single-use")
+    execution_outer = json.loads(
+        (destination / "bundle" / "execution-plan.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    execution_plan = execution_outer["execution_plan"]
+    if canonical_sha256(execution_plan) != execution_outer.get(
+        "execution_plan_sha256"
+    ):
+        raise ValueError("final execution plan digest disagrees")
+    bundle_manifest = json.loads(
+        (destination / "bundle" / "bundle-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    smoke_checkpoint = json.loads(
+        (destination / "review" / "write-smoke" / "phase-checkpoint.json")
+        .read_text(encoding="utf-8")
+    )
+    journal_closure = durable_prefix(
+        destination / "session" / "call-control.jsonl"
+    )
+    registry_closure = durable_prefix(
+        destination / "session" / "process-registry.jsonl"
+    )
+    candidates = {
+        phase: _final_phase_candidate(
+            destination, phase=phase, execution_plan=execution_plan,
+            bundle_manifest=bundle_manifest,
+            journal_closure=journal_closure,
+            registry_closure=registry_closure,
+            shutdown=control_plane_shutdown,
+            smoke_checkpoint=smoke_checkpoint,
+        )
+        for phase in ("write-smoke", "repair-matrix")
+    }
+    campaign = {
+        "schema": CAMPAIGN_SCHEMA,
+        "eligible": True,
+        "execution_plan_sha256": canonical_sha256(execution_plan),
+        "phase_candidates": {
+            phase: {
+                "path": f"{phase}/phase-candidate.json",
+                "sha256": canonical_sha256(candidates[phase]),
+            }
+            for phase in ("write-smoke", "repair-matrix")
+        },
+        "smoke_checkpoint_sha256": canonical_sha256(smoke_checkpoint),
+        "journal_closure": journal_closure,
+        "registry_closure": registry_closure,
+        "control_plane_shutdown": control_plane_shutdown,
+    }
+    independent = review_fake_campaign(
+        destination,
+        candidate_documents=candidates,
+        campaign_document=campaign,
+        configured_credentials=credential_values(os.environ),
+    )
+    if not independent["passed"]:
+        raise ValueError(
+            "fake campaign finalization failed independent review: "
+            + "; ".join(independent["errors"])
+        )
+    for phase, path in candidate_paths.items():
+        _write_json_exclusive(path, candidates[phase])
+    _write_json_exclusive(campaign_path, campaign)
+    return {
+        "schema": "agent-task-authorized-fake-campaign-finalization/v0.1",
+        "passed": True,
+        "phase_candidate_sha256": {
+            phase: canonical_sha256(candidate)
+            for phase, candidate in candidates.items()
+        },
+        "campaign_sha256": canonical_sha256(campaign),
+        "independent_review": independent,
     }

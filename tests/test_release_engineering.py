@@ -1548,7 +1548,9 @@ class TestReleaseSurfaces(unittest.TestCase):
     # INTERNAL_MODULES this is the decision, not the discovery.
     #
     # The routing rules below read `src/harness_workbench/` only, while
-    # `[tool.setuptools.packages.find]` names `where = ["src"]` with no filter
+    # `[tool.setuptools.packages.find]` names `where = ["src"]` and disables
+    # namespace discovery so the opt-in `subjects/` data tree is not silently
+    # reclassified as an importable package. It otherwise has no filter
     # -- so `src/harness_extra/` was found by the build, shipped in the wheel,
     # and classified by nothing. That is outside the letter of the manifest,
     # whose prose scopes itself to one package, but straight through its
@@ -1574,11 +1576,16 @@ class TestReleaseSurfaces(unittest.TestCase):
             find.get("where"),
             "package discovery no longer roots at src/; this check reads src/",
         )
+        self.assertIs(
+            False,
+            find.get("namespaces"),
+            "namespace discovery would reclassify the shipped subject data tree",
+        )
         # An include/exclude filter would change what "found under src/ ships"
         # means, and this check may not assume the answer it was written for.
         self.assertEqual(
             [],
-            sorted(set(find) - {"where"}),
+            sorted(set(find) - {"where", "namespaces"}),
             "packages.find grew a filter; re-derive what actually ships before "
             "trusting the set below",
         )

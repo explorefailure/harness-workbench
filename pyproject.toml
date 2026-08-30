@@ -110,3 +110,7 @@ version = { attr = "harness_workbench.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# `subjects/` is an opt-in data tree, not an importable namespace package.
+# Keeping namespace discovery off routes its executable Python launchers through
+# the package-data rules above, which preserve their declared source modes.
+namespaces = false

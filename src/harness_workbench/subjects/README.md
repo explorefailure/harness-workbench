@@ -187,9 +187,18 @@ independently validates all 15 episodes, runs `hwb verify` on every store, and
 retains a separate comparison, 15 permit-usage snapshots, cleanup receipts, and
 credential scan. Boundary usage at a stop threshold hard-stops before a matrix
 permit, and refusal on any draw cannot cause another authorization callback.
-Final phase candidates, the campaign manifest, clean control-plane finalization,
-independent offline matrix review, and a real-provider execution entry point
-remain absent.
+An independent offline matrix reviewer then reopens all five stores, recomputes
+the store-tree, `record.json`, and `integrity.json` digests, validates all 15
+sealed episodes and permit snapshots, replays the exact-five comparison, reruns
+`hwb verify`, checks every cleanup receipt, and repeats the configured credential
+scan. Retained output, usage, cleanup, store, or comparison mutation is rejected
+without another provider permit. After both authenticated services shut down
+cleanly, a separate finalizer requires exactly 20 closed permit lifecycles,
+20 clean registered process-group closures, no hard stop or abnormal supervisor
+witness, and exact terminal journal/registry rows. Only then does it emit two
+digest-bound phase candidates and the campaign that binds both; independent
+offline replay rejects candidate, journal, registry, or shutdown drift. A
+real-provider execution entry point remains absent.
 Before returning success, a separate offline smoke reviewer reopens all five
 stores, reruns `hwb verify`, binds each sealed episode subject to its checkpoint
 tree digest, rechecks the exact comparison, permit-usage and cleanup sets,
