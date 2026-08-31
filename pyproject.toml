@@ -49,7 +49,7 @@ dependencies = []
 # only the release path is pinned. `RELEASING.md` writes these versions
 # literally and a test asserts the two lists agree.
 release = [
-    "build==1.5.0",
+    "build==1.6.0",
     "setuptools==83.0.0",
     "twine==7.0.0",
 ]
