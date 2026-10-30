@@ -1,0 +1,21 @@
+{
+  "schema": "hermes-hwb-config/v0.1",
+  "pin": "pin.json",
+  "fixture": "coding_fixture",
+  "task": "task.md",
+  "inputs": [
+    "adapter_config.json",
+    "adapter.py",
+    "normalizer.py",
+    "runtime_identity.py",
+    "scripted_provider.py",
+    "pin.json",
+    "task.md",
+    "coding_fixture/slugger.py",
+    "coding_fixture/test_slugger.py",
+    "gateway_cleanup.py"
+  ],
+  "provider": {
+    "mode": "scripted"
+  }
+}

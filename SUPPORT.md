@@ -40,3 +40,11 @@ See [the OpenCode guide](docs/opencode-builder.md). Support is limited to the
 pinned runtime, isolated CLI JSON capture, reference repair and explicit local
 OpenAI-compatible endpoint configuration. Verify exact-candidate platform checks;
 pinned downloads alone do not establish cross-platform runtime compatibility.
+
+## Hermes builder integration candidate
+
+See [the Hermes guide](docs/hermes-builder.md). Support targets the pinned source
+runtime, isolated stream-json workflow, reference repair and explicit local
+endpoint configuration. Require exact-candidate hosted results. Native CLI
+result strings have an upstream 5000-character cap; no uncapped payload or
+universal workload correctness guarantee is implied.

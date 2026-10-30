@@ -570,3 +570,5 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 Use `hwb-pi init ./my-pi-workspace` for an owned Pi adapter and offline coding-repair example. See [the builder guide](docs/pi-builder.md) for installation, runtime pins, custom workloads, evidence interpretation and limits. The broader Pi experiments remain research fixtures.
 
 Use `hwb-opencode init ./my-opencode-workspace` for the owned OpenCode builder integration. The [OpenCode builder guide](docs/opencode-builder.md) covers the pinned runtime, scripted repair, local models and independent outcome checks. This integration is an unreleased candidate.
+
+Use `hwb-hermes init ./my-hermes-workspace` for an owned Hermes integration. The [Hermes builder guide](docs/hermes-builder.md) covers the pinned source runtime, native JSON stream, scripted control, local models and independent repair checks. This integration is an unreleased candidate.
