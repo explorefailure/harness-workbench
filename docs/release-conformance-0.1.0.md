@@ -1,4 +1,4 @@
-# Harness Workbench 0.1.0 release conformance record
+# Explore Failure - Harness Workbench 0.1.0 release conformance record
 
 > **Prepared candidate record — NOT RELEASED.** This is the repository-owned
 > pre-release record for an intended R2 public release. It records historical

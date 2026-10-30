@@ -1,4 +1,4 @@
-# Support for Harness Workbench
+# Support for Explore Failure - Harness Workbench
 
 Harness Workbench is an actively developed, solo-maintained open-source
 project. Help is provided on a best-effort basis; there is no guaranteed
