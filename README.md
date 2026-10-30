@@ -1,6 +1,6 @@
-# Harness Workbench
+# Explore Failure - Harness Workbench
 
-**Harness Workbench is a test bench for your own software or AI harness—and for
+**Explore Failure - Harness Workbench** is a test bench for your own software or AI harness—and for
 the features you add to it.**
 
 Bring a real workload and connect the harness behavior you want to test,

@@ -1,4 +1,4 @@
-# Contributing to Harness Workbench
+# Contributing to Explore Failure - Harness Workbench
 
 Harness Workbench is actively developed and maintained by one person. Focused
 bug fixes, documentation improvements, and tests are welcome for best-effort
