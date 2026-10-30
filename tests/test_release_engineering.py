@@ -1509,7 +1509,10 @@ class TestReleaseSurfaces(unittest.TestCase):
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",
         "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
-        "sweep", "_pi_cli",
+        "sweep", "_pi_cli", "_opencode_cli",
+        "opencode_builder.adapter", "opencode_builder.normalizer",
+        "opencode_builder.scripted_provider", "opencode_builder.install_runtime",
+        "opencode_builder.coding_fixture.slugger", "opencode_builder.coding_fixture.test_slugger",
         # Owned builder data is launched by path, not a Python library API.
         "pi_builder.adapter", "pi_builder.normalizer",
         "pi_builder.coding_runner", "pi_builder.coding_oracle",

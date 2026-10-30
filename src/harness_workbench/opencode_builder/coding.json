@@ -1,0 +1,33 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "confirmation",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {
+      "name": "freeze"
+    },
+    {
+      "name": "receipt"
+    }
+  ],
+  "step_timeout_ms": 90000,
+  "steps": [
+    {
+      "id": "opencode-coding-repair",
+      "argv": [
+        "./run_demo.sh"
+      ],
+      "inputs": [
+        "adapter_config.json",
+        "adapter.py",
+        "normalizer.py",
+        "scripted_provider.py",
+        "pin.json",
+        "task.md",
+        "coding_fixture/slugger.py",
+        "coding_fixture/test_slugger.py",
+        "run_demo.sh"
+      ]
+    }
+  ]
+}
