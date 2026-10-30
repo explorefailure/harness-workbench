@@ -43,6 +43,7 @@ jobs:
             mkdir "$RUNNER_TEMP/pi-runtime"
             cp src/harness_workbench/pi_builder/runtime/package*.json "$RUNNER_TEMP/pi-runtime/"
             npm ci --prefix "$RUNNER_TEMP/pi-runtime" --ignore-scripts
+            npm audit --prefix "$RUNNER_TEMP/pi-runtime" --audit-level=low
           fi
           echo "$RUNNER_TEMP/pi-runtime/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Test builder workflow with real Pi tools

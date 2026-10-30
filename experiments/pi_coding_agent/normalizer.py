@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 import hashlib
 import json
+import math
 from typing import Any
 
 
@@ -370,3 +371,42 @@ def _summary(
 
 def normalize_jsonl(raw: str, *, system_messages: bool = False) -> dict[str, Any]:
     return summarize(parse_jsonl(raw), system_messages=system_messages)
+
+
+def comparison_tool_executions(capture: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """A version-scoped oracle view; native records and digests stay unchanged.
+
+    Pi 1.4.0 adds elapsed time to structured bash output. Only that measured
+    duration is masked here, after checking the raw-result/summary link. No
+    status, structured exit code, output, truncation flag or effect is masked.
+    """
+    errors: list[str] = []
+    try:
+        pi = capture["pi"]
+        executions = [dict(item) for item in pi["summary"]["projection"]["tool_executions"]]
+        if capture.get("runtime", {}).get("pi_version") != "1.4.0":
+            return executions, errors
+        events = parse_jsonl(pi["stdout_jsonl"])
+        endings = [e for e in events if e["type"] == "tool_execution_end"]
+        raw_tools = {e["toolCallId"]: e for e in endings}
+        if len(raw_tools) != len(endings) or len(endings) != len(executions):
+            raise ValueError("raw tool cardinality disagrees with summary")
+        for item in executions:
+            event = raw_tools[item["tool_call_id"]]
+            raw = event["result"]
+            if event["toolName"] != item["tool_name"]:
+                raise ValueError("raw tool identity disagrees with summary")
+            if canonical_digest(raw) != item["result_sha256"]:
+                raise ValueError("raw result digest disagrees with summary")
+            if event["isError"] is not item["is_error"]:
+                raise ValueError("raw reported status disagrees with summary")
+            if item["tool_name"] == "bash" and "structuredContent" in raw:
+                content = raw["structuredContent"]
+                seconds = content["wall_time_seconds"]
+                if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+                    raise ValueError("invalid bash wall time")
+                stable = {**raw, "structuredContent": {**content, "wall_time_seconds": 0}}
+                item["result_sha256"] = canonical_digest(stable)
+        return executions, errors
+    except (KeyError, TypeError, ValueError) as error:
+        return [], [f"Pi comparison evidence invalid: {error}"]

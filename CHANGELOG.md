@@ -7,6 +7,13 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Port the four Pi result-rewrite/branch scenarios to Pi 1.4.0 while retaining
+  raw-result hashes, final reported status, native embedded error status and
+  independent durable-effect checks. Add explicit duration-only comparison masks
+  and regression cases that reject fabricated results and missing controls.
+- Override optional Pi runtime undici to 8.12.3 and rebind its lock identity;
+  fresh-install audit reports zero vulnerabilities as of 2026-10-30.
+
 - Add the `hwb-pi` builder CLI: materialize an owned workspace, check exact
   runtime identity, run the deterministic repair example and capture custom
   workload specs without promoting the experimental cross-harness envelope.

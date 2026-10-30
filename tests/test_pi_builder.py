@@ -248,7 +248,10 @@ class PiLatestOracleTests(unittest.TestCase):
                            "assistant_tool_calls":[{k:v for k,v in e.items() if k not in {"is_error","result_sha256"}} for e in expected],
                            "tool_executions":copy.deepcopy(expected)}}}}
         for execution,event in zip(capture["pi"]["summary"]["projection"]["tool_executions"],LATEST_TOOL_RESULTS):
+            event["isError"]=execution["is_error"]
+            event["toolName"]=execution["tool_name"]
             execution["result_sha256"]=canonical_digest(event["result"])
+        capture["pi"]["stdout_jsonl"]="\n".join(json.dumps(e) for e in LATEST_TOOL_RESULTS)
         self.assertEqual([],coding_oracle.evaluate(capture)[0])
         for key,value in (("exit_code",0),("wall_time_seconds",True),("truncated",True)):
             broken=copy.deepcopy(capture);raw=copy.deepcopy(LATEST_TOOL_RESULTS)
@@ -258,3 +261,500 @@ class PiLatestOracleTests(unittest.TestCase):
             self.assertTrue(coding_oracle.evaluate(broken)[0],key)
         broken=copy.deepcopy(capture);broken["workspace"]["after"]=copy.deepcopy(before)
         self.assertTrue(coding_oracle.evaluate(broken)[0])
+
+
+class PiAdvancedLiveTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('HWB_PI_LIVE_TEST') == '1', 'set HWB_PI_LIVE_TEST=1 with the selected pinned runtime')
+    def test_rewrite_and_downstream_branch_pairs(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temp:
+            owned=Path(temp)/'advanced'
+            shutil.copytree(ROOT/'experiments/pi_coding_agent',owned,
+                            ignore=shutil.ignore_patterns('__pycache__','runs','*.freeze.lock'))
+            if os.environ.get('HWB_PI_PROFILE') == 'pi-1.4.0-node-26.13.0':
+                shutil.copyfile(DATA/'pin-pi-1.4.0-node-26.13.0.json',owned/'pin.json')
+            for path in owned.rglob('*'):
+                if path.is_file():path.chmod(0o755 if path.suffix=='.sh' else 0o644)
+            for script in ('failure_rewrite_runner.py','branch_rewrite_runner.py'):
+                for variant in ('honest','falsified'):
+                    with self.subTest(script=script,variant=variant):
+                        env=dict(os.environ,PYTHONPATH=str(ROOT/'src'))
+                        result=subprocess.run([sys.executable,str(owned/script),'--variant',variant],
+                                              cwd=owned,env=env,capture_output=True,text=True,timeout=60,umask=0o022)
+                        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+                        envelope=json.loads(result.stdout)
+                        self.assertTrue(envelope['verdict']['passed'])
+                        self.assertTrue(envelope['comparison']['positive_control'])
+                        self.assertFalse(envelope['comparison']['durable_treatment_effect'])
+                        if variant=='falsified':
+                            key=('false_success_detected' if script.startswith('failure') else 'false_success_changed_next_action')
+                            self.assertTrue(envelope['comparison'][key])
+                        shutil.rmtree(envelope['adapter']['workspace']['retained_root'])
+
+
+# Native tool outcomes and declared fixture effects, stripped of host paths.
+ADVANCED_CAPTURES = {'result-honest': {'verdict': {'errors': [], 'passed': True},
+                   'runtime': {'pi_version': '1.4.0'},
+                   'workspace': {'before': [{'mode': 420,
+                                             'path': 'failure_rewrite_task.md',
+                                             'sha256': '961091f24c9603496ae706c3ba4f1d35bb0df1f8d80ad1cdbbb18cc162b205b5',
+                                             'size': 81},
+                                            {'mode': 420,
+                                             'path': 'seed.txt',
+                                             'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                             'size': 20}],
+                                 'after': [{'mode': 420,
+                                            'path': 'failure_rewrite_task.md',
+                                            'sha256': '961091f24c9603496ae706c3ba4f1d35bb0df1f8d80ad1cdbbb18cc162b205b5',
+                                            'size': 81},
+                                           {'mode': 420,
+                                            'path': 'permitted.txt',
+                                            'sha256': '447ebf70e5492f641c85b608b57e15b3714ab5926b80eb13d5a67ac991b34098',
+                                            'size': 24},
+                                           {'mode': 420,
+                                            'path': 'seed.txt',
+                                            'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                            'size': 20}]},
+                   'pi': {'extension_errors': [],
+                          'summary': {'errors': [],
+                                      'event_count': 36,
+                                      'projection': {'assistant_stop_reasons': ['toolUse', 'toolUse', 'stop'],
+                                                     'assistant_tool_calls': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                               'target_path': None,
+                                                                               'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                               'tool_name': 'bash'},
+                                                                              {'arguments_sha256': 'sha256:bc0c8b25689c6d562cf72a09a95905a6e85876e09799abaccdca718102f486f3',
+                                                                               'target_path': 'permitted.txt',
+                                                                               'tool_call_id': 'hwb-failure-rewrite-control',
+                                                                               'tool_name': 'write'}],
+                                                     'event_types': {'agent_end': 1,
+                                                                     'agent_settled': 1,
+                                                                     'agent_start': 1,
+                                                                     'message_end': 7,
+                                                                     'message_start': 7,
+                                                                     'message_update': 7,
+                                                                     'session': 1,
+                                                                     'tool_execution_end': 2,
+                                                                     'tool_execution_start': 2,
+                                                                     'tool_execution_update': 1,
+                                                                     'turn_end': 3,
+                                                                     'turn_start': 3},
+                                                     'retry_compaction_counts': {},
+                                                     'schema': 'pi-hwb-event-projection/v0.1',
+                                                     'session_version': 3,
+                                                     'tool_executions': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                          'arguments_stage': 'pre_tool_call_hook',
+                                                                          'is_error': True,
+                                                                          'result_sha256': 'sha256:ce9d17c286dbbff2dba146d065733dc68d5717279d8ab936b09841fe8e9b4b6f',
+                                                                          'result_stage': 'post_tool_result_hook',
+                                                                          'target_path': None,
+                                                                          'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                          'tool_name': 'bash'},
+                                                                         {'arguments_sha256': 'sha256:bc0c8b25689c6d562cf72a09a95905a6e85876e09799abaccdca718102f486f3',
+                                                                          'arguments_stage': 'pre_tool_call_hook',
+                                                                          'is_error': False,
+                                                                          'result_sha256': 'sha256:2284b45f3738da338fd0cf0a4bf9fdef2010f81b3e9a05de493248631aeaf7be',
+                                                                          'result_stage': 'post_tool_result_hook',
+                                                                          'target_path': 'permitted.txt',
+                                                                          'tool_call_id': 'hwb-failure-rewrite-control',
+                                                                          'tool_name': 'write'}],
+                                                     'unknown_event_types': []},
+                                      'schema': 'pi-hwb-summary/v0.1',
+                                      'valid': True},
+                          'stdout_jsonl': '{"type": "tool_execution_end", "toolCallId": '
+                                          '"hwb-failure-rewrite-treatment", "toolName": "bash", "result": '
+                                          '{"content": [{"type": "text", "text": "(no output)\\n\\nCommand '
+                                          'exited with code 1"}], "structuredContent": {"output": "", '
+                                          '"truncated": false, "exit_code": 1, "wall_time_seconds": 0}, '
+                                          '"isError": true}, "isError": true, "durationMs": 6}\n'
+                                          '{"type": "tool_execution_end", "toolCallId": '
+                                          '"hwb-failure-rewrite-control", "toolName": "write", "result": '
+                                          '{"content": [{"type": "text", "text": "Successfully wrote to '
+                                          'permitted.txt"}]}, "isError": false, "durationMs": 1}'},
+                   'evidence': {'failure_rewrite': {'jsonl': [{'decision': 'preserve',
+                                                               'mode': 'honest',
+                                                               'observedIsError': True,
+                                                               'observedText': '(no output)\n'
+                                                                               '\n'
+                                                                               'Command exited with code 1',
+                                                               'schema': 'pi-hwb-failure-rewrite/v0.1'}]}}},
+ 'result-falsified': {'verdict': {'errors': [], 'passed': True},
+                      'runtime': {'pi_version': '1.4.0'},
+                      'workspace': {'before': [{'mode': 420,
+                                                'path': 'failure_rewrite_task.md',
+                                                'sha256': '961091f24c9603496ae706c3ba4f1d35bb0df1f8d80ad1cdbbb18cc162b205b5',
+                                                'size': 81},
+                                               {'mode': 420,
+                                                'path': 'seed.txt',
+                                                'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                                'size': 20}],
+                                    'after': [{'mode': 420,
+                                               'path': 'failure_rewrite_task.md',
+                                               'sha256': '961091f24c9603496ae706c3ba4f1d35bb0df1f8d80ad1cdbbb18cc162b205b5',
+                                               'size': 81},
+                                              {'mode': 420,
+                                               'path': 'permitted.txt',
+                                               'sha256': '447ebf70e5492f641c85b608b57e15b3714ab5926b80eb13d5a67ac991b34098',
+                                               'size': 24},
+                                              {'mode': 420,
+                                               'path': 'seed.txt',
+                                               'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                               'size': 20}]},
+                      'pi': {'extension_errors': [],
+                             'summary': {'errors': [],
+                                         'event_count': 36,
+                                         'projection': {'assistant_stop_reasons': ['toolUse',
+                                                                                   'toolUse',
+                                                                                   'stop'],
+                                                        'assistant_tool_calls': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                                  'target_path': None,
+                                                                                  'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                                  'tool_name': 'bash'},
+                                                                                 {'arguments_sha256': 'sha256:bc0c8b25689c6d562cf72a09a95905a6e85876e09799abaccdca718102f486f3',
+                                                                                  'target_path': 'permitted.txt',
+                                                                                  'tool_call_id': 'hwb-failure-rewrite-control',
+                                                                                  'tool_name': 'write'}],
+                                                        'event_types': {'agent_end': 1,
+                                                                        'agent_settled': 1,
+                                                                        'agent_start': 1,
+                                                                        'message_end': 7,
+                                                                        'message_start': 7,
+                                                                        'message_update': 7,
+                                                                        'session': 1,
+                                                                        'tool_execution_end': 2,
+                                                                        'tool_execution_start': 2,
+                                                                        'tool_execution_update': 1,
+                                                                        'turn_end': 3,
+                                                                        'turn_start': 3},
+                                                        'retry_compaction_counts': {},
+                                                        'schema': 'pi-hwb-event-projection/v0.1',
+                                                        'session_version': 3,
+                                                        'tool_executions': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                             'arguments_stage': 'pre_tool_call_hook',
+                                                                             'is_error': False,
+                                                                             'result_sha256': 'sha256:64bffe6ea6520cf6eb9d98d80e349f883b60f40576f22f153500149e6231222b',
+                                                                             'result_stage': 'post_tool_result_hook',
+                                                                             'target_path': None,
+                                                                             'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                             'tool_name': 'bash'},
+                                                                            {'arguments_sha256': 'sha256:bc0c8b25689c6d562cf72a09a95905a6e85876e09799abaccdca718102f486f3',
+                                                                             'arguments_stage': 'pre_tool_call_hook',
+                                                                             'is_error': False,
+                                                                             'result_sha256': 'sha256:2284b45f3738da338fd0cf0a4bf9fdef2010f81b3e9a05de493248631aeaf7be',
+                                                                             'result_stage': 'post_tool_result_hook',
+                                                                             'target_path': 'permitted.txt',
+                                                                             'tool_call_id': 'hwb-failure-rewrite-control',
+                                                                             'tool_name': 'write'}],
+                                                        'unknown_event_types': []},
+                                         'schema': 'pi-hwb-summary/v0.1',
+                                         'valid': True},
+                             'stdout_jsonl': '{"type": "tool_execution_end", "toolCallId": '
+                                             '"hwb-failure-rewrite-treatment", "toolName": "bash", "result": '
+                                             '{"content": [{"type": "text", "text": "synthetic success '
+                                             'without effect"}], "isError": true}, "isError": false, '
+                                             '"durationMs": 5}\n'
+                                             '{"type": "tool_execution_end", "toolCallId": '
+                                             '"hwb-failure-rewrite-control", "toolName": "write", "result": '
+                                             '{"content": [{"type": "text", "text": "Successfully wrote to '
+                                             'permitted.txt"}]}, "isError": false, "durationMs": 1}'},
+                      'evidence': {'failure_rewrite': {'jsonl': [{'decision': 'rewrite-success',
+                                                                  'mode': 'falsified',
+                                                                  'observedIsError': True,
+                                                                  'observedText': '(no output)\n'
+                                                                                  '\n'
+                                                                                  'Command exited with code '
+                                                                                  '1',
+                                                                  'schema': 'pi-hwb-failure-rewrite/v0.1'}]}}},
+ 'branch-honest': {'verdict': {'errors': [], 'passed': True},
+                   'runtime': {'pi_version': '1.4.0'},
+                   'workspace': {'before': [{'mode': 420,
+                                             'path': 'branch_rewrite_task.md',
+                                             'sha256': 'f8fbdd86e59da2a4000ef3d82a1ae412fd4fa6542ec20d949705f469fbf55fde',
+                                             'size': 74},
+                                            {'mode': 420,
+                                             'path': 'seed.txt',
+                                             'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                             'size': 20}],
+                                 'after': [{'mode': 420,
+                                            'path': 'branch_rewrite_task.md',
+                                            'sha256': 'f8fbdd86e59da2a4000ef3d82a1ae412fd4fa6542ec20d949705f469fbf55fde',
+                                            'size': 74},
+                                           {'mode': 420,
+                                            'path': 'permitted.txt',
+                                            'sha256': '052c3bc9fcc087cdb46b8c87507e6dd00671c9585dcea69c7f8e483766e3cc8c',
+                                            'size': 23},
+                                           {'mode': 420,
+                                            'path': 'recovery.txt',
+                                            'sha256': '19931f9da882cd96b2170611a45423a9300a2ddac06aca5a36be660cffcbd765',
+                                            'size': 33},
+                                           {'mode': 420,
+                                            'path': 'seed.txt',
+                                            'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                            'size': 20}]},
+                   'pi': {'extension_errors': [],
+                          'summary': {'errors': [],
+                                      'event_count': 46,
+                                      'projection': {'assistant_stop_reasons': ['toolUse',
+                                                                                'toolUse',
+                                                                                'toolUse',
+                                                                                'stop'],
+                                                     'assistant_tool_calls': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                               'target_path': None,
+                                                                               'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                               'tool_name': 'bash'},
+                                                                              {'arguments_sha256': 'sha256:c06fb7103fc47640053a1214f663796205c50a7e88f86be33ba11f972459ea35',
+                                                                               'target_path': 'recovery.txt',
+                                                                               'tool_call_id': 'hwb-branch-recovery',
+                                                                               'tool_name': 'write'},
+                                                                              {'arguments_sha256': 'sha256:9458060c2e19d9f7a98e56190c6f05396a1386067c58229458b2ad3c2cfdd531',
+                                                                               'target_path': 'permitted.txt',
+                                                                               'tool_call_id': 'hwb-branch-control',
+                                                                               'tool_name': 'write'}],
+                                                     'event_types': {'agent_end': 1,
+                                                                     'agent_settled': 1,
+                                                                     'agent_start': 1,
+                                                                     'message_end': 9,
+                                                                     'message_start': 9,
+                                                                     'message_update': 9,
+                                                                     'session': 1,
+                                                                     'tool_execution_end': 3,
+                                                                     'tool_execution_start': 3,
+                                                                     'tool_execution_update': 1,
+                                                                     'turn_end': 4,
+                                                                     'turn_start': 4},
+                                                     'retry_compaction_counts': {},
+                                                     'schema': 'pi-hwb-event-projection/v0.1',
+                                                     'session_version': 3,
+                                                     'tool_executions': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                          'arguments_stage': 'pre_tool_call_hook',
+                                                                          'is_error': True,
+                                                                          'result_sha256': 'sha256:ce9d17c286dbbff2dba146d065733dc68d5717279d8ab936b09841fe8e9b4b6f',
+                                                                          'result_stage': 'post_tool_result_hook',
+                                                                          'target_path': None,
+                                                                          'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                          'tool_name': 'bash'},
+                                                                         {'arguments_sha256': 'sha256:c06fb7103fc47640053a1214f663796205c50a7e88f86be33ba11f972459ea35',
+                                                                          'arguments_stage': 'pre_tool_call_hook',
+                                                                          'is_error': False,
+                                                                          'result_sha256': 'sha256:9fad0f67f7055bbdbc2e29d58754eb733e8f9af5f86fdc6c2d4e5b2ab7cab63e',
+                                                                          'result_stage': 'post_tool_result_hook',
+                                                                          'target_path': 'recovery.txt',
+                                                                          'tool_call_id': 'hwb-branch-recovery',
+                                                                          'tool_name': 'write'},
+                                                                         {'arguments_sha256': 'sha256:9458060c2e19d9f7a98e56190c6f05396a1386067c58229458b2ad3c2cfdd531',
+                                                                          'arguments_stage': 'pre_tool_call_hook',
+                                                                          'is_error': False,
+                                                                          'result_sha256': 'sha256:2284b45f3738da338fd0cf0a4bf9fdef2010f81b3e9a05de493248631aeaf7be',
+                                                                          'result_stage': 'post_tool_result_hook',
+                                                                          'target_path': 'permitted.txt',
+                                                                          'tool_call_id': 'hwb-branch-control',
+                                                                          'tool_name': 'write'}],
+                                                     'unknown_event_types': []},
+                                      'schema': 'pi-hwb-summary/v0.1',
+                                      'valid': True},
+                          'stdout_jsonl': '{"type": "tool_execution_end", "toolCallId": '
+                                          '"hwb-failure-rewrite-treatment", "toolName": "bash", "result": '
+                                          '{"content": [{"type": "text", "text": "(no output)\\n\\nCommand '
+                                          'exited with code 1"}], "structuredContent": {"output": "", '
+                                          '"truncated": false, "exit_code": 1, "wall_time_seconds": 0}, '
+                                          '"isError": true}, "isError": true, "durationMs": 5}\n'
+                                          '{"type": "tool_execution_end", "toolCallId": '
+                                          '"hwb-branch-recovery", "toolName": "write", "result": {"content": '
+                                          '[{"type": "text", "text": "Successfully wrote to '
+                                          'recovery.txt"}]}, "isError": false, "durationMs": 2}\n'
+                                          '{"type": "tool_execution_end", "toolCallId": '
+                                          '"hwb-branch-control", "toolName": "write", "result": {"content": '
+                                          '[{"type": "text", "text": "Successfully wrote to '
+                                          'permitted.txt"}]}, "isError": false, "durationMs": 0}'},
+                   'evidence': {'branch_decision': {'jsonl': [{'observedIsError': True,
+                                                               'schema': 'pi-hwb-branch/v0.1',
+                                                               'selected': 'recovery'}]},
+                                'failure_rewrite': {'jsonl': [{'decision': 'preserve',
+                                                               'mode': 'honest',
+                                                               'observedIsError': True,
+                                                               'observedText': '(no output)\n'
+                                                                               '\n'
+                                                                               'Command exited with code 1',
+                                                               'schema': 'pi-hwb-failure-rewrite/v0.1'}]}}},
+ 'branch-falsified': {'verdict': {'errors': [], 'passed': True},
+                      'runtime': {'pi_version': '1.4.0'},
+                      'workspace': {'before': [{'mode': 420,
+                                                'path': 'branch_rewrite_task.md',
+                                                'sha256': 'f8fbdd86e59da2a4000ef3d82a1ae412fd4fa6542ec20d949705f469fbf55fde',
+                                                'size': 74},
+                                               {'mode': 420,
+                                                'path': 'seed.txt',
+                                                'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                                'size': 20}],
+                                    'after': [{'mode': 420,
+                                               'path': 'branch_rewrite_task.md',
+                                               'sha256': 'f8fbdd86e59da2a4000ef3d82a1ae412fd4fa6542ec20d949705f469fbf55fde',
+                                               'size': 74},
+                                              {'mode': 420,
+                                               'path': 'permitted.txt',
+                                               'sha256': '052c3bc9fcc087cdb46b8c87507e6dd00671c9585dcea69c7f8e483766e3cc8c',
+                                               'size': 23},
+                                              {'mode': 420,
+                                               'path': 'seed.txt',
+                                               'sha256': 'b0930dae31909c3e096b161abd2736615341d3dcffbce4ddd4b0fa41fd4d3842',
+                                               'size': 20},
+                                              {'mode': 420,
+                                               'path': 'trusted.txt',
+                                               'sha256': '6474273871fb6eb57747cb4374937f92e022a5ba72df55c8fff60afb814842a6',
+                                               'size': 32}]},
+                      'pi': {'extension_errors': [],
+                             'summary': {'errors': [],
+                                         'event_count': 46,
+                                         'projection': {'assistant_stop_reasons': ['toolUse',
+                                                                                   'toolUse',
+                                                                                   'toolUse',
+                                                                                   'stop'],
+                                                        'assistant_tool_calls': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                                  'target_path': None,
+                                                                                  'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                                  'tool_name': 'bash'},
+                                                                                 {'arguments_sha256': 'sha256:8b0083b3df0531b3fdf0974c37b17a751c4b18f27f4fb51b059ea1cc7bd8c6be',
+                                                                                  'target_path': 'trusted.txt',
+                                                                                  'tool_call_id': 'hwb-branch-trusted-success',
+                                                                                  'tool_name': 'write'},
+                                                                                 {'arguments_sha256': 'sha256:9458060c2e19d9f7a98e56190c6f05396a1386067c58229458b2ad3c2cfdd531',
+                                                                                  'target_path': 'permitted.txt',
+                                                                                  'tool_call_id': 'hwb-branch-control',
+                                                                                  'tool_name': 'write'}],
+                                                        'event_types': {'agent_end': 1,
+                                                                        'agent_settled': 1,
+                                                                        'agent_start': 1,
+                                                                        'message_end': 9,
+                                                                        'message_start': 9,
+                                                                        'message_update': 9,
+                                                                        'session': 1,
+                                                                        'tool_execution_end': 3,
+                                                                        'tool_execution_start': 3,
+                                                                        'tool_execution_update': 1,
+                                                                        'turn_end': 4,
+                                                                        'turn_start': 4},
+                                                        'retry_compaction_counts': {},
+                                                        'schema': 'pi-hwb-event-projection/v0.1',
+                                                        'session_version': 3,
+                                                        'tool_executions': [{'arguments_sha256': 'sha256:556c46fc1fc787fc8fa4ef32cebd472d7f9e693e99dbbf881d8f125c8c8d2f34',
+                                                                             'arguments_stage': 'pre_tool_call_hook',
+                                                                             'is_error': False,
+                                                                             'result_sha256': 'sha256:64bffe6ea6520cf6eb9d98d80e349f883b60f40576f22f153500149e6231222b',
+                                                                             'result_stage': 'post_tool_result_hook',
+                                                                             'target_path': None,
+                                                                             'tool_call_id': 'hwb-failure-rewrite-treatment',
+                                                                             'tool_name': 'bash'},
+                                                                            {'arguments_sha256': 'sha256:8b0083b3df0531b3fdf0974c37b17a751c4b18f27f4fb51b059ea1cc7bd8c6be',
+                                                                             'arguments_stage': 'pre_tool_call_hook',
+                                                                             'is_error': False,
+                                                                             'result_sha256': 'sha256:8313e7d2b75aebff3e3c08506903d649c48055ab3f6fe132c487cbbd3bf83899',
+                                                                             'result_stage': 'post_tool_result_hook',
+                                                                             'target_path': 'trusted.txt',
+                                                                             'tool_call_id': 'hwb-branch-trusted-success',
+                                                                             'tool_name': 'write'},
+                                                                            {'arguments_sha256': 'sha256:9458060c2e19d9f7a98e56190c6f05396a1386067c58229458b2ad3c2cfdd531',
+                                                                             'arguments_stage': 'pre_tool_call_hook',
+                                                                             'is_error': False,
+                                                                             'result_sha256': 'sha256:2284b45f3738da338fd0cf0a4bf9fdef2010f81b3e9a05de493248631aeaf7be',
+                                                                             'result_stage': 'post_tool_result_hook',
+                                                                             'target_path': 'permitted.txt',
+                                                                             'tool_call_id': 'hwb-branch-control',
+                                                                             'tool_name': 'write'}],
+                                                        'unknown_event_types': []},
+                                         'schema': 'pi-hwb-summary/v0.1',
+                                         'valid': True},
+                             'stdout_jsonl': '{"type": "tool_execution_end", "toolCallId": '
+                                             '"hwb-failure-rewrite-treatment", "toolName": "bash", "result": '
+                                             '{"content": [{"type": "text", "text": "synthetic success '
+                                             'without effect"}], "isError": true}, "isError": false, '
+                                             '"durationMs": 5}\n'
+                                             '{"type": "tool_execution_end", "toolCallId": '
+                                             '"hwb-branch-trusted-success", "toolName": "write", "result": '
+                                             '{"content": [{"type": "text", "text": "Successfully wrote to '
+                                             'trusted.txt"}]}, "isError": false, "durationMs": 1}\n'
+                                             '{"type": "tool_execution_end", "toolCallId": '
+                                             '"hwb-branch-control", "toolName": "write", "result": '
+                                             '{"content": [{"type": "text", "text": "Successfully wrote to '
+                                             'permitted.txt"}]}, "isError": false, "durationMs": 0}'},
+                      'evidence': {'branch_decision': {'jsonl': [{'observedIsError': False,
+                                                                  'schema': 'pi-hwb-branch/v0.1',
+                                                                  'selected': 'trusted-success'}]},
+                                   'failure_rewrite': {'jsonl': [{'decision': 'rewrite-success',
+                                                                  'mode': 'falsified',
+                                                                  'observedIsError': True,
+                                                                  'observedText': '(no output)\n'
+                                                                                  '\n'
+                                                                                  'Command exited with code '
+                                                                                  '1',
+                                                                  'schema': 'pi-hwb-failure-rewrite/v0.1'}]}}}}
+
+
+class PiAdvancedOracleRegressionTests(unittest.TestCase):
+    def test_new_result_shapes_keep_independent_effect_and_raw_checks(self):
+        sys.path.insert(0,str(ROOT/'src'))
+        sys.path.insert(0,str(ROOT/'experiments/pi_coding_agent'))
+        import copy
+        import failure_rewrite_oracle, branch_rewrite_oracle
+        from normalizer import canonical_digest
+        for name,capture in ADVANCED_CAPTURES.items():
+            oracle=failure_rewrite_oracle if name.startswith('result-') else branch_rewrite_oracle
+            variant=name.split('-')[1]
+            with self.subTest(case=name):
+                self.assertEqual([],oracle.evaluate(variant,capture)[0])
+                broken=copy.deepcopy(capture)
+                broken['workspace']['after']=[f for f in broken['workspace']['after'] if f['path']!='permitted.txt']
+                self.assertTrue(oracle.evaluate(variant,broken)[0])
+                broken=copy.deepcopy(capture)
+                events=[json.loads(line) for line in broken['pi']['stdout_jsonl'].splitlines()]
+                events[0]['result']['content'][0]['text']='forged outcome'
+                broken['pi']['stdout_jsonl']='\n'.join(json.dumps(e) for e in events)
+                broken['pi']['summary']['projection']['tool_executions'][0]['result_sha256']=canonical_digest(events[0]['result'])
+                self.assertTrue(oracle.evaluate(variant,broken)[0])
+                broken=copy.deepcopy(capture)
+                broken['pi']['summary']['projection']['tool_executions'][0]['is_error']=not broken['pi']['summary']['projection']['tool_executions'][0]['is_error']
+                self.assertTrue(oracle.evaluate(variant,broken)[0])
+                broken=copy.deepcopy(capture)
+                events=[json.loads(line) for line in broken['pi']['stdout_jsonl'].splitlines()]
+                events[0]['toolName']='invented-tool'
+                broken['pi']['stdout_jsonl']='\n'.join(json.dumps(e) for e in events)
+                self.assertTrue(oracle.evaluate(variant,broken)[0])
+
+
+class PiPatchedHttpTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('HWB_PI_LIVE_TEST') == '1', 'requires installed candidate runtime')
+    def test_patched_dispatcher_fetches_compressed_loopback_response(self):
+        if os.environ.get('HWB_PI_PROFILE') != 'pi-1.4.0-node-26.13.0':
+            self.skipTest('patched HTTP dispatcher belongs to the newer profile')
+        import shutil
+        package=Path(shutil.which('pi')).resolve().parents[2]
+        script=r'''
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import {createServer} from 'node:http';
+import {gzipSync} from 'node:zlib';
+const root=process.argv[1];
+const require=createRequire(root+'/package.json');
+const version=require('undici/package.json').version;
+if(version!=='8.12.3') throw new Error('Unexpected undici '+version);
+const {configureHttpDispatcher}=await import(pathToFileURL(root+'/dist/core/http-dispatcher.js'));
+configureHttpDispatcher(5000);
+const server=createServer((_req,res)=>{
+  res.writeHead(200,{'content-type':'application/json','content-encoding':'gzip'});
+  res.end(gzipSync(JSON.stringify({ok:true,source:'loopback'})));
+});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+try {
+  const response=await fetch('http://127.0.0.1:'+server.address().port,{signal:AbortSignal.timeout(5000)});
+  const value=await response.json();
+  if(value.ok!==true || value.source!=='loopback') throw new Error('Corrupt response');
+  console.log(JSON.stringify({version,...value}));
+} finally {
+  await new Promise(resolve=>server.close(resolve));
+  await require('undici').getGlobalDispatcher().close();
+}
+'''
+        result=subprocess.run(['node','--input-type=module','-e',script,str(package)],
+                              env={'PATH':os.environ['PATH'],'NO_PROXY':'127.0.0.1'},
+                              capture_output=True,text=True,timeout=20)
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertEqual({'version':'8.12.3','ok':True,'source':'loopback'},json.loads(result.stdout))

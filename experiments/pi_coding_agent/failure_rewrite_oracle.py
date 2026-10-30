@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from normalizer import canonical_digest
+from normalizer import canonical_digest, comparison_tool_executions
 
 
 COMMAND = "test -d seed.txt && printf 'impossible treatment effect\\n' > attempted.txt"
@@ -38,14 +38,21 @@ CONTROL = {
 }
 
 
-def _treatment(variant: str) -> dict[str, Any]:
+def _treatment(variant: str, pi_version: str = "0.84.1") -> dict[str, Any]:
+    expected_result = RESULTS[variant]
+    if pi_version == "1.4.0":
+        result = ({"content": [{"type": "text", "text": "(no output)\n\nCommand exited with code 1"}],
+                   "structuredContent": {"output": "", "truncated": False, "exit_code": 1, "wall_time_seconds": 0},
+                   "isError": True} if variant == "honest" else
+                  {"content": [{"type": "text", "text": "synthetic success without effect"}], "isError": True})
+        expected_result = {"result_sha256": canonical_digest(result), "is_error": variant == "honest"}
     return {
         "tool_call_id": "hwb-failure-rewrite-treatment",
         "tool_name": "bash",
         "target_path": None,
         "arguments_sha256": canonical_digest({"command": COMMAND}),
         "arguments_stage": "pre_tool_call_hook",
-        **RESULTS[variant],
+        **expected_result,
         "result_stage": "post_tool_result_hook",
     }
 
@@ -89,10 +96,16 @@ def evaluate(variant: str, capture: dict[str, Any]) -> tuple[list[str], dict[str
     if not isinstance(projection, dict):
         errors.append("Pi summary has no event projection")
         projection = {}
-    expected_executions = [_treatment(variant), CONTROL]
+    pi_version = capture.get("runtime", {}).get("pi_version", "0.84.1")
+    control = dict(CONTROL)
+    if pi_version == "1.4.0":
+        control["result_sha256"] = canonical_digest({"content": [{"type": "text", "text": "Successfully wrote to permitted.txt"}]})
+    expected_executions = [_treatment(variant, pi_version), control]
+    comparison_executions, comparison_errors = comparison_tool_executions(capture)
+    errors.extend(comparison_errors)
     observed = [
         {key: item.get(key) for key in expected_executions[0]}
-        for item in projection.get("tool_executions", [])
+        for item in comparison_executions
         if isinstance(item, dict)
     ]
     if observed != expected_executions:
@@ -133,6 +146,8 @@ def evaluate(variant: str, capture: dict[str, Any]) -> tuple[list[str], dict[str
     comparison = {
         "schema": "pi-hwb-failure-rewrite-comparison/v0.1",
         "variant": variant,
+        **({"masked_fields": ["bash.result.structuredContent.wall_time_seconds"]}
+           if pi_version == "1.4.0" else {}),
         "underlying_failure_observed": (
             isinstance(events, list)
             and len(events) == 1

@@ -26,8 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="create a new owned Pi builder workspace")
     init.add_argument("directory", type=Path)
-    init.add_argument("--profile", choices=("baseline", "pi-1.4.0-node-26.13.0"), default="baseline",
-                      help="exact runtime profile; newer profile is a compatibility candidate")
+    init.add_argument("--profile", choices=("baseline", "pi-1.4.0-node-26.13.0"), default="pi-1.4.0-node-26.13.0",
+                      help="exact runtime profile; baseline is for historical comparisons only")
     for name, description in (
         ("doctor", "check the pinned Pi/Node runtime without running a task"),
         ("demo", "run the offline coding repair and independent outcome check"),

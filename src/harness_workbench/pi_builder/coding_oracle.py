@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from typing import Any
-import json
-import math
 
-from normalizer import canonical_digest
+from normalizer import canonical_digest, comparison_tool_executions
 
 
 INITIAL_SOURCE = (
@@ -231,25 +229,12 @@ def evaluate(capture: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             if isinstance(item, dict)
         ]
         if pi_version == "1.4.0":
-            try:
-                raw_events = [json.loads(line) for line in pi["stdout_jsonl"].splitlines()]
-                raw_tools = {event["toolCallId"]: event["result"] for event in raw_events
-                             if event.get("type") == "tool_execution_end"}
-                for item in observed_executions:
-                    raw = raw_tools[item["tool_call_id"]]
-                    if canonical_digest(raw) != item["result_sha256"]:
-                        raise ValueError("raw result digest disagrees with summary")
-                    if item["tool_name"] == "bash":
-                        content = raw["structuredContent"]
-                        seconds = content["wall_time_seconds"]
-                        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
-                            raise ValueError("invalid bash wall time")
-                        # Preserve raw bytes/digests; only this explicit oracle
-                        # comparison masks the measured execution duration.
-                        stable = {**raw, "structuredContent": {**content, "wall_time_seconds": 0}}
-                        item["result_sha256"] = canonical_digest(stable)
-            except (KeyError, TypeError, ValueError) as error:
-                errors.append(f"Pi 1.4.0 raw result evidence invalid: {error}")
+            comparison_executions, comparison_errors = comparison_tool_executions(capture)
+            errors.extend(comparison_errors)
+            observed_executions = [
+                {key: item.get(key) for key in expected[0]}
+                for item in comparison_executions
+            ]
         if observed_executions != expected:
             errors.append("Pi tool executions do not prove red, repair, then green")
 
