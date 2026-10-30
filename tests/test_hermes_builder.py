@@ -107,7 +107,7 @@ class HermesBuilderTests(unittest.TestCase):
 
     def test_environment_drops_accounts_and_unrelated_configuration(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {'API_NEW_PROVIDER_KEY': 'do-not-pass', 'HERMES_HOME': '/outside', 'PYTHONPATH': '/outside', 'TERMINAL_ENV': 'ssh'}):
-            root = Path(temp); env = identity.environment(root)
+            root = Path(temp).resolve(); env = identity.environment(root)
             self.assertNotIn('API_NEW_PROVIDER_KEY', env)
             self.assertNotIn('PYTHONPATH', env)
             self.assertEqual(str(root / 'hermes-home'), env['HERMES_HOME'])
