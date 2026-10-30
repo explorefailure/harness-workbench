@@ -255,6 +255,7 @@ command fails the suite until this record routes it.
 | Surface group | Exact surfaces | EF-RS-REL route |
 |---|---|---|
 | Front door | `README.md` | T1: `C-HWB-01` through `C-HWB-12`; purpose, ceiling, evidence state, limits, and routes |
+| Hermes builder candidate | `docs/hermes-builder.md`; `.github/workflows/hermes-builder.yml` | Unreleased owned integration; native-stream, runtime and platform claims require candidate-specific evidence. |
 | OpenCode builder candidate | `docs/opencode-builder.md`; `.github/workflows/opencode-builder.yml` | Unreleased owned integration; runtime/platform and live-model claims require candidate-specific evidence. |
 | Pi builder candidate | `docs/pi-builder.md`; `.github/workflows/pi-builder.yml` | Unreleased CLI integration; exact runtime and platform claims require fresh candidate evidence. Existing release evidence does not cover it. |
 | Reference and guides | `docs/adapter-envelope-promotion-review.md`; `docs/adapter-primitive-extraction.md`; `docs/campaign-manifests.md`; `docs/experiment-writeups.md`; `docs/measuring-your-own-code.md`; `docs/measuring.md`; `docs/the-record.md`; `docs/the-spec.md`; `docs/writing-a-feature.md` | T1: primarily `C-HWB-02` through `C-HWB-08`; the experiment template constrains interpretation and code-promotion claims rather than adding a performance claim. The extraction and envelope-review memos record internal code-promotion decisions and make no claim about any third-party harness's behaviour |

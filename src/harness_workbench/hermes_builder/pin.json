@@ -1,0 +1,11 @@
+{
+  "schema": "hermes-hwb-pin/v0.1",
+  "version": "0.22.5",
+  "release_tag": "v0.22.5",
+  "source_commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "tag_object": "56b6a31fededdf7364e1a0a79548d144e7fd81a3",
+  "uv_lock_sha256": "f1609519f30dac8886b03e60693e36fa75e033fa3e7259c8c8befe8fb6e34460",
+  "source_tree_sha256": "c4d748182b042dee308fec6bb16d78ed8fd05dd9466ce85e3843f29e357d8be8",
+  "python_version": "3.14.4",
+  "uv_version": "0.12.21"
+}

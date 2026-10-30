@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add `hwb-hermes` owned builder commands, a verified optional Hermes 0.22.5
+  source/runtime installer, native stream-json evidence, scripted real-tool repair
+  and independent outcome checks. Support explicit local OpenAI-compatible
+  endpoints without inheriting accounts or promoting the universal envelope.
+
 - Synchronize the partial-effect timeout test with the child’s flushed ready
   signal so slow interpreter startup cannot masquerade as lost durable effects.
   Keep the production timeout behavior and evidence assertions unchanged.
