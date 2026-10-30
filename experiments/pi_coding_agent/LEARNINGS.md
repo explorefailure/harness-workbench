@@ -565,3 +565,36 @@ The next harness should deliberately test this candidate stack:
 The main architectural lesson is restraint: Pi gives us a tested reference
 shape. Claude, ChatGPT, or Hermes must supply the second observation before the
 shape becomes a Workbench abstraction.
+
+
+## E12 — Pi 1.4.0 native results and patched runtime
+
+**Question.** Can the original failure-rewrite and downstream-branch experiments
+retain their causal and effect checks after Pi changes its native result shape?
+
+**Setup.** Preserve the 0.84.1 baseline. Add exact 1.4.0 expectations for native
+write responses and structured bash results, link raw tool records to summary
+digests and final reported status, and mask only finite nonnegative bash wall
+time. Use the same deterministic providers, fixtures and independent effects.
+The optional npm runtime overrides undici to 8.12.3 and binds the regenerated
+lock in the installation pin; Pi itself remains unchanged.
+
+**Result.** Local targeted runs pass all nine scenarios on Node 22.22.3,
+22.23.4, 24.22.2 and 26.13.0 with Pi 1.4.0. The patched install's npm audit
+reported zero vulnerabilities on 2026-10-30. Final hosted candidate evidence
+must still be checked before publication.
+
+**Learned.** A false-success rewrite may leave isError:true inside the retained
+native result while the final event and provider-facing status are false.
+These are different observation surfaces, not a reason to discard either flag.
+The effect oracle must still reject a successful report without its declared
+effect, and the branch oracle must verify the resulting next action.
+
+**Code consequence.** Share the raw-link and duration-only comparison view
+across repair and rewrite oracles; keep native digests unchanged. Add negative
+fixtures for fabricated raw results, mismatched final status and missing positive
+controls, plus real paired tests in the builder CI matrix.
+
+**Limits.** These are deterministic scenarios under named runtime versions, not
+blanket certification of Pi extensions, live models, network security or sandbox
+containment. A zero advisory count is a dated check of this lock.

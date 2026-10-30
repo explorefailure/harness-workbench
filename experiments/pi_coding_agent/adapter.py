@@ -82,9 +82,15 @@ def package_tree_digest(root: Path) -> tuple[int, str]:
 
 def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
     launcher = pi_path.resolve(strict=True)
-    if launcher.name != "cli.js" or launcher.parent.name != "dist":
-        raise AdapterError(f"Pi launcher has unexpected installed shape: {launcher}")
-    package_root = launcher.parent.parent
+    bundled = pin.get("schema") == "pi-hwb-pin/v0.2"
+    if bundled:
+        if launcher.name != "cli.js" or launcher.parent.name != "bundle" or launcher.parent.parent.name != "dist":
+            raise AdapterError(f"Pi bundled launcher has unexpected installed shape: {launcher}")
+        package_root = launcher.parents[2]
+    else:
+        if launcher.name != "cli.js" or launcher.parent.name != "dist":
+            raise AdapterError(f"Pi launcher has unexpected installed shape: {launcher}")
+        package_root = launcher.parent.parent
     package_json_path = package_root / "package.json"
     shrinkwrap_path = package_root / "npm-shrinkwrap.json"
     package = json.loads(package_json_path.read_text(encoding="utf-8"))
@@ -98,7 +104,8 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         "package_name": package["name"],
         "package_version": package["version"],
         "package_json_sha256": digest_file(package_json_path),
-        "npm_shrinkwrap_sha256": digest_file(shrinkwrap_path),
+        **({"installation_lock_sha256": digest_file(package_root.parents[2] / "package-lock.json")}
+           if bundled else {"npm_shrinkwrap_sha256": digest_file(shrinkwrap_path)}),
         "launcher_sha256": digest_file(launcher),
     }
     file_count, tree_digest = package_tree_digest(package_root)
@@ -107,7 +114,8 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
 
     expected = {
         "package_json_sha256": pin["package_json_sha256"],
-        "npm_shrinkwrap_sha256": pin["npm_shrinkwrap_sha256"],
+        **({"installation_lock_sha256": pin["installation_lock_sha256"]}
+           if bundled else {"npm_shrinkwrap_sha256": pin["npm_shrinkwrap_sha256"]}),
         "launcher_sha256": pin["launcher_sha256"],
         "package_tree_sha256": pin["package_tree_sha256"],
     }
@@ -308,6 +316,37 @@ def parse_extension_errors(
     return records
 
 
+def check_runtime(config_path: Path, pi_name: str = "pi") -> dict[str, Any]:
+    """Check the declared runtime without executing the workload."""
+    config_path = config_path.resolve()
+    base = config_path.parent
+    config = load_config(config_path)
+    pin_path = _regular_relative(base, config.get("pin"), "pin")
+    pin = json.loads(pin_path.read_text(encoding="utf-8"))
+    pi_resolved = shutil.which(pi_name)
+    if pi_resolved is None:
+        raise AdapterError("Pi executable not found")
+    pi_path = Path(pi_resolved)
+    try:
+        # Reject altered Pi code before invoking even its version command.
+        install_identity = verify_pi_install(pi_path, pin)
+        pi_version = command_output([str(pi_path), "--version"], cwd=base)
+        node_version = command_output(["node", "--version"], cwd=base).removeprefix("v")
+    except (OSError, ValueError, KeyError) as error:
+        raise AdapterError(str(error)) from error
+    if pi_version != pin["version"]:
+        raise AdapterError(
+            f"Pi version {pi_version!r} does not match {pin['version']!r}"
+        )
+    if node_version != pin["node_version"]:
+        raise AdapterError(
+            f"Node version {node_version!r} does not match {pin['node_version']!r}"
+        )
+
+    return {"pi_path": str(pi_path), "pi_version": pi_version,
+            "node_version": node_version, "install_identity": install_identity}
+
+
 def capture(
     config_path: Path,
     *,
@@ -347,24 +386,11 @@ def capture(
         )
     input_digests = {name: digest_file(path) for name, path in inputs.items()}
     pin = json.loads(pin_path.read_text(encoding="utf-8"))
-    pi_resolved = shutil.which(pi_name)
-    if pi_resolved is None:
-        raise AdapterError("Pi executable not found")
-    pi_path = Path(pi_resolved)
-    try:
-        pi_version = command_output([str(pi_path), "--version"], cwd=base)
-        node_version = command_output(["node", "--version"], cwd=base).removeprefix("v")
-        install_identity = verify_pi_install(pi_path, pin)
-    except (OSError, ValueError, KeyError) as error:
-        raise AdapterError(str(error)) from error
-    if pi_version != pin["version"]:
-        raise AdapterError(
-            f"Pi version {pi_version!r} does not match {pin['version']!r}"
-        )
-    if node_version != pin["node_version"]:
-        raise AdapterError(
-            f"Node version {node_version!r} does not match {pin['node_version']!r}"
-        )
+    runtime = check_runtime(config_path, pi_name)
+    pi_path = Path(runtime["pi_path"])
+    pi_version = runtime["pi_version"]
+    node_version = runtime["node_version"]
+    install_identity = runtime["install_identity"]
 
     retained_root = Path(
         tempfile.mkdtemp(prefix="hwb-pi-adapter-", dir=workspace_parent)
@@ -491,7 +517,9 @@ def capture(
         if stdout_capture["text"] is None:
             raise StreamError("stdout is not valid UTF-8")
         stdout_text = stdout_capture["text"]
-        summary = normalize_jsonl(stdout_text)
+        summary = (normalize_jsonl(stdout_text, system_messages=True)
+                   if pin.get("schema") == "pi-hwb-pin/v0.2" and pi_version == "1.4.0"
+                   else normalize_jsonl(stdout_text))
     except StreamError as error:
         normalization_error = str(error)
     if not process.stderr_overflow:
@@ -596,6 +624,7 @@ def capture(
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     result.add_argument("config", type=Path)
+    result.add_argument("--check-only", action="store_true", help="verify runtime without running the workload")
     result.add_argument("--pi", default="pi")
     result.add_argument("--timeout", type=float, default=20.0)
     result.add_argument("--workspace-parent")
@@ -612,6 +641,10 @@ def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 11):
         return failure_envelope("Python 3.11 or newer is required")
     try:
+        if args.check_only:
+            print(json.dumps({"schema": "pi-hwb-runtime-check/v0.1", "runtime":
+                              check_runtime(args.config, args.pi)}, sort_keys=True))
+            return 0
         envelope = capture(
             args.config,
             pi_name=args.pi,

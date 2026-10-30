@@ -564,3 +564,7 @@ uploaded; building an archive is not by itself a release.
 ## Licence
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## Pi builder integration (unreleased candidate)
+
+Use `hwb-pi init ./my-pi-workspace` for an owned Pi adapter and offline coding-repair example. See [the builder guide](docs/pi-builder.md) for installation, runtime pins, custom workloads, evidence interpretation and limits. The broader Pi experiments remain research fixtures.

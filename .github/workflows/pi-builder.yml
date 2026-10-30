@@ -1,0 +1,53 @@
+name: Pi builder compatibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  builder:
+    name: Pi builder / ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.profile }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.14']
+        profile: [baseline, pi-1.4.0-node-26.13.0]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Select runtime
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          if [ "$PROFILE" = baseline ]; then
+            echo 'PI_NODE=22.22.3' >> "$GITHUB_ENV"
+          else
+            echo 'PI_NODE=26.13.0' >> "$GITHUB_ENV"
+          fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: ${{ env.PI_NODE }}
+      - name: Install optional pinned Pi
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          if [ "$PROFILE" = baseline ]; then
+            npm install --prefix "$RUNNER_TEMP/pi-runtime" --ignore-scripts @earendil-works/pi-coding-agent@0.84.1
+          else
+            mkdir "$RUNNER_TEMP/pi-runtime"
+            cp src/harness_workbench/pi_builder/runtime/package*.json "$RUNNER_TEMP/pi-runtime/"
+            npm ci --prefix "$RUNNER_TEMP/pi-runtime" --ignore-scripts
+            npm audit --prefix "$RUNNER_TEMP/pi-runtime" --audit-level=low
+          fi
+          echo "$RUNNER_TEMP/pi-runtime/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Test builder workflow with real Pi tools
+        env:
+          HWB_PI_LIVE_TEST: '1'
+          HWB_PI_PROFILE: ${{ matrix.profile }}
+        run: python -m unittest discover -s tests -p test_pi_builder.py -v

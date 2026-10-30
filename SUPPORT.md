@@ -22,3 +22,14 @@ answered when capacity permits but are not compatibility commitments.
 Do not report vulnerabilities, exploit details, secrets, or proof-of-concept
 code in a public issue. Use the private route and fallback procedure in
 [SECURITY.md](SECURITY.md).
+
+## Pi builder integration candidate
+
+The unreleased builder workflow is documented in [the Pi guide](docs/pi-builder.md).
+Support scope is the patched default profile, commands and evidence contract in
+that guide. The old baseline is a historical comparison, not the recommended
+runtime. Research-only oracles are not a general compatibility promise.
+Upstream protocol drift should fail visibly rather than silently relaxing the
+checks. Report the selected profile and exact Pi/Node versions with integration
+bugs. CI configuration alone is not evidence of a platform pass; require successful
+checks on the exact release candidate, including the patched runtime audit.
