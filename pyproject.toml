@@ -62,6 +62,7 @@ Issues = "https://github.com/explorefailure/harness-workbench/issues"
 [project.scripts]
 hwb = "harness_workbench.cli:main"
 hwb-pi = "harness_workbench._pi_cli:main"
+hwb-opencode = "harness_workbench._opencode_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -77,6 +78,12 @@ include-package-data = true
 # imported -- `hwb subjects init` copies it into a directory the user owns,
 # where each spec's `inputs` digest covers the exact adapter bytes that ran.
 harness_workbench = [
+    "opencode_builder/*.py",
+    "opencode_builder/*.json",
+    "opencode_builder/*.sh",
+    "opencode_builder/*.md",
+    "opencode_builder/.gitignore",
+    "opencode_builder/coding_fixture/*.py",
     "pi_builder/*.py",
     "pi_builder/*.json",
     "pi_builder/*.ts",

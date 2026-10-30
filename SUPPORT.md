@@ -33,3 +33,10 @@ Upstream protocol drift should fail visibly rather than silently relaxing the
 checks. Report the selected profile and exact Pi/Node versions with integration
 bugs. CI configuration alone is not evidence of a platform pass; require successful
 checks on the exact release candidate, including the patched runtime audit.
+
+## OpenCode builder integration candidate
+
+See [the OpenCode guide](docs/opencode-builder.md). Support is limited to the
+pinned runtime, isolated CLI JSON capture, reference repair and explicit local
+OpenAI-compatible endpoint configuration. Verify exact-candidate platform checks;
+pinned downloads alone do not establish cross-platform runtime compatibility.
