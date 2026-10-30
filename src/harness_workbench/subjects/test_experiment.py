@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import selectors
 from pathlib import Path
 import socket
 import subprocess
@@ -2333,18 +2334,41 @@ class CommonTests(unittest.TestCase):
     def test_timeout_preserves_partial_effect_without_terminal_claim(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            result = run_bounded(
-                [
-                    sys.executable,
-                    "-c",
-                    "from pathlib import Path; import time; "
-                    "Path('partial.txt').write_text('partial'); "
-                    "print('started', flush=True); time.sleep(10)",
-                ],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=0.1,
-            )
+            real_popen = subprocess.Popen
+
+            def start_ready_child(*args, **kwargs):
+                # This test measures timeout AFTER a partial effect, not Python
+                # startup speed. Popen may return long before a loaded macOS
+                # runner schedules the interpreter. Wait for the child's flushed
+                # ready signal without consuming it, before run_bounded creates
+                # its deadline. The production wall-clock bound is unchanged.
+                process = real_popen(*args, **kwargs)
+                try:
+                    with selectors.DefaultSelector() as ready:
+                        ready.register(process.stdout, selectors.EVENT_READ)
+                        self.assertTrue(ready.select(timeout=10), "child never became ready")
+                    self.assertEqual((root / "partial.txt").read_text(), "partial")
+                    return process
+                except BaseException:
+                    process.kill()
+                    process.communicate(timeout=5)
+                    raise
+
+            with mock.patch.object(capture_module.subprocess, "Popen", side_effect=start_ready_child):
+                result = run_bounded(
+                    [
+                        sys.executable,
+                        "-c",
+                        # Deliberately exceed the capture timeout during startup:
+                        # the test must depend on readiness, not a faster machine.
+                        "import time; time.sleep(0.2); from pathlib import Path; "
+                        "Path('partial.txt').write_text('partial'); "
+                        "print('started', flush=True); time.sleep(10)",
+                    ],
+                    cwd=root,
+                    env=os.environ.copy(),
+                    timeout=0.1,
+                )
             self.assertEqual((root / "partial.txt").read_text(), "partial")
         self.assertEqual(result.termination_reason, "timeout")
         self.assertNotEqual(result.returncode, 0)

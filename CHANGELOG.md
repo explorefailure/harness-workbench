@@ -7,6 +7,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Synchronize the partial-effect timeout test with the child’s flushed ready
+  signal so slow interpreter startup cannot masquerade as lost durable effects.
+  Keep the production timeout behavior and evidence assertions unchanged.
+
 - Add the owned `hwb-opencode` builder workflow with a checksum-pinned optional
   OpenCode 1.19.5 runtime, isolated state, bounded JSON-event capture, a scripted
   native-tool repair and independent before/after outcome checks. Support explicit
