@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import Any
+import json
+import math
 
 from normalizer import canonical_digest
 
@@ -18,7 +20,7 @@ REPAIRED_SOURCE = (
     '    words = re.findall(r"[a-z0-9]+", text.casefold())\n'
     '    return "-".join(words)'
 )
-TEST_COMMAND = "python3 -m unittest -q >/dev/null 2>&1"
+TEST_COMMAND = "python3 -B -m unittest -q >/dev/null 2>&1"
 
 EXPECTED_BEFORE = {
     "coding_task.md": {
@@ -47,7 +49,7 @@ EXPECTED_AFTER = {
 }
 
 
-def expected_tool_evidence() -> list[dict[str, Any]]:
+def expected_tool_evidence(pi_version: str = "0.84.1") -> list[dict[str, Any]]:
     steps = [
         (
             "hwb-coding-read-implementation",
@@ -90,7 +92,7 @@ def expected_tool_evidence() -> list[dict[str, Any]]:
             "sha256:9c434ac41c33b1a01c402d5ad9a925bf229ed921fbc4fadb1928b58671984aa1",
         ),
     ]
-    return [
+    result = [
         {
             "tool_call_id": call_id,
             "tool_name": tool_name,
@@ -101,6 +103,17 @@ def expected_tool_evidence() -> list[dict[str, Any]]:
         }
         for call_id, tool_name, arguments, is_error, result_sha256 in steps
     ]
+    if pi_version == "1.4.0":
+        # Reviewed 1.4.0 result shapes: read adds structuredContent; bash
+        # adds structured exit/output/truncation/time and explicit isError.
+        for index, digest in {
+            0: "a4c7d71c1696f82369975afe23327e683f9982c1da79c8fd1ee78a19ef6bbbda",
+            1: "edbf4b72671c1ce951c52ad067b616e3d951b7ca42d4f0f96a91283301d0f578",
+            2: "ce9d17c286dbbff2dba146d065733dc68d5717279d8ab936b09841fe8e9b4b6f",
+            4: "c5521494cda4f3379d17fda6d80e6d9b45b9e4d1c9617dd0f04c657071869025",
+        }.items():
+            result[index]["result_sha256"] = "sha256:" + digest
+    return result
 
 
 def expected_manifests() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -176,7 +189,8 @@ def evaluate(capture: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     summary = pi.get("summary") if isinstance(pi, dict) else None
     projection = summary.get("projection") if isinstance(summary, dict) else None
     executions: list[dict[str, Any]] = []
-    expected = expected_tool_evidence()
+    pi_version = capture.get("runtime", {}).get("pi_version", "0.84.1")
+    expected = expected_tool_evidence(pi_version)
     if not isinstance(summary, dict) or summary.get("valid") is not True:
         errors.append("Pi summary is not valid")
     if not isinstance(projection, dict):
@@ -216,6 +230,26 @@ def evaluate(capture: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             for item in executions
             if isinstance(item, dict)
         ]
+        if pi_version == "1.4.0":
+            try:
+                raw_events = [json.loads(line) for line in pi["stdout_jsonl"].splitlines()]
+                raw_tools = {event["toolCallId"]: event["result"] for event in raw_events
+                             if event.get("type") == "tool_execution_end"}
+                for item in observed_executions:
+                    raw = raw_tools[item["tool_call_id"]]
+                    if canonical_digest(raw) != item["result_sha256"]:
+                        raise ValueError("raw result digest disagrees with summary")
+                    if item["tool_name"] == "bash":
+                        content = raw["structuredContent"]
+                        seconds = content["wall_time_seconds"]
+                        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+                            raise ValueError("invalid bash wall time")
+                        # Preserve raw bytes/digests; only this explicit oracle
+                        # comparison masks the measured execution duration.
+                        stable = {**raw, "structuredContent": {**content, "wall_time_seconds": 0}}
+                        item["result_sha256"] = canonical_digest(stable)
+            except (KeyError, TypeError, ValueError) as error:
+                errors.append(f"Pi 1.4.0 raw result evidence invalid: {error}")
         if observed_executions != expected:
             errors.append("Pi tool executions do not prove red, repair, then green")
 
@@ -243,5 +277,7 @@ def evaluate(capture: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             for path in ("coding_task.md", "test_slugger.py")
         ),
         "event_projection": projection,
+        **({"masked_fields": ["bash.result.structuredContent.wall_time_seconds"]}
+           if pi_version == "1.4.0" else {}),
     }
     return errors, comparison

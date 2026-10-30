@@ -1509,7 +1509,11 @@ class TestReleaseSurfaces(unittest.TestCase):
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",
         "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
-        "sweep",
+        "sweep", "_pi_cli",
+        # Owned builder data is launched by path, not a Python library API.
+        "pi_builder.adapter", "pi_builder.normalizer",
+        "pi_builder.coding_runner", "pi_builder.coding_oracle",
+        "pi_builder.coding_fixture.slugger", "pi_builder.coding_fixture.test_slugger",
         # The builtin feature tree. `builtin/` carries no `__init__.py`, but a
         # namespace package nested inside a regular one is importable anyway
         # and every file here ships in the wheel, so these are as reachable as

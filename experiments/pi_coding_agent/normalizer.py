@@ -90,7 +90,7 @@ def _target_path(tool_name: str, arguments: dict[str, Any]) -> str | None:
     return None
 
 
-def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(events: list[dict[str, Any]], *, system_messages: bool = False) -> dict[str, Any]:
     errors: list[str] = []
     if not events:
         errors.append("event stream is empty")
@@ -166,7 +166,14 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             identity = _message_identity(event.get("message"))
             if not turn_active or message_identity is not None:
                 errors.append(f"{where}: message_start is outside a clear active turn")
-            if identity[0] not in {"user", "assistant", "toolResult"}:
+            allowed_roles = {"user", "assistant", "toolResult"}
+            if system_messages:
+                allowed_roles.add("system")
+            if identity[0] == "system" and system_messages:
+                message = event.get("message", {})
+                if not isinstance(message.get("content"), str) or not isinstance(message.get("sections"), dict):
+                    errors.append(f"{where}: system message payload is malformed")
+            if identity[0] not in allowed_roles:
                 errors.append(f"{where}: message_start has an invalid message role")
             if identity[0] == "toolResult" and (
                 not isinstance(identity[1], str) or not isinstance(identity[2], str)
@@ -361,5 +368,5 @@ def _summary(
     }
 
 
-def normalize_jsonl(raw: str) -> dict[str, Any]:
-    return summarize(parse_jsonl(raw))
+def normalize_jsonl(raw: str, *, system_messages: bool = False) -> dict[str, Any]:
+    return summarize(parse_jsonl(raw), system_messages=system_messages)

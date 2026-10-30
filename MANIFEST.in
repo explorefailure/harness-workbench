@@ -47,3 +47,9 @@ prune examples/interrupts
 prune examples/flaky/interrupts
 prune examples/attaching/interrupts
 prune examples/effect-boundary/interrupts
+
+# Pi builder parity and protocol tests share the original research fixtures.
+recursive-include experiments/pi_coding_agent *.py *.json *.ts *.md *.sh *.txt
+prune experiments/pi_coding_agent/runs
+prune experiments/pi_coding_agent/__pycache__
+global-exclude *.freeze.lock

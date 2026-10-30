@@ -7,6 +7,17 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add the `hwb-pi` builder CLI: materialize an owned workspace, check exact
+  runtime identity, run the deterministic repair example and capture custom
+  workload specs without promoting the experimental cross-harness envelope.
+- Add a locked optional Pi 1.4.0 / Node 26.13.0 compatibility candidate alongside
+  the original Pi 0.84.1 / Node 22.22.3 baseline. Handle the bundled launcher,
+  installation lock, system-message events and new structured repair results.
+  Retain raw results; mask only validated bash elapsed time in the repair oracle.
+- Make the repair fixture independent of Python bytecode generation and normalize
+  shipped demo modes. Add builder/protocol/outcome regression tests and a
+  Linux/macOS workflow. Hosted results and candidate publication remain pending.
+
 - Add a retained, plan-only-by-default `review_candidate.py` workflow that
   independently rehashes a certification candidate and its exact bound source,
   reruns five sealed-store verifications, the exact-five comparator, complete
