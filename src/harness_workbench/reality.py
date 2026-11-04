@@ -26,6 +26,8 @@ BLIND_SPOTS = (
     "Network, host-wide filesystem, child processes outside the owned group, and model quality beyond this job are unobserved.",
     "A pass applies only to the recorded Pi, model, runtime, prompt, fixture, and sensors.",
 )
+MODEL_DIGEST_CONTRACT = "recorded_digest_not_pinned_reproduction"
+EDITABLE_RECIPE_FILE = "model_selection.json"
 
 
 class RealityError(ValueError):
@@ -55,6 +57,89 @@ def _spec() -> dict[str, Any]:
     return value
 
 
+def _required_inputs(specification: dict[str, Any]) -> list[str]:
+    return sorted({
+        name
+        for step in specification.get("steps", [])
+        for name in step.get("inputs", [])
+        if name != RECIPE_NAME
+    })
+
+
+def _file_digests(root: Path, names: list[str]) -> dict[str, str]:
+    return {name: digest_file(root / name) for name in names}
+
+
+def _validate_recipe(destination: Path) -> Path:
+    """Validate the fixed Recipe envelope before any command is executed.
+
+    Recipes are intentionally editable configuration, not immutable
+    reproductions.  Only ``model_selection.json`` is editable; all executable,
+    task, fixture, and spec bytes remain bound to the manifest created by us.
+    Every effective input is subsequently preserved/digested by the ordinary
+    Workbench record.
+    """
+    manifest_path = destination / RECIPE_NAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise RealityError(f"could not read Recipe: {error}") from error
+    required_manifest = {
+        "schema", "check", "spec", "subject", "workload", "model_profile",
+        "model_digest_contract", "editable_files", "bound_file_digests",
+        "canonical_fixture_digests", "rerun",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required_manifest:
+        raise RealityError("Recipe manifest is incomplete or has unknown fields")
+    expected_values = {
+        "schema": RECIPE_SCHEMA, "check": CHECK, "spec": SPEC_NAME,
+        "subject": "pi", "workload": "repair", "model_profile": "local-ollama",
+        "model_digest_contract": MODEL_DIGEST_CONTRACT,
+        "editable_files": [EDITABLE_RECIPE_FILE],
+    }
+    for key, expected in expected_values.items():
+        if manifest.get(key) != expected:
+            raise RealityError(f"Recipe field {key!r} must be {expected!r}")
+
+    spec_path = destination / SPEC_NAME
+    try:
+        specification = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise RealityError(f"Recipe spec is missing or malformed: {error}") from error
+    if specification != _spec():
+        raise RealityError("Recipe spec differs from the packaged Reality Check")
+    required_files = _required_inputs(specification)
+    expected_bound = manifest.get("bound_file_digests")
+    if not isinstance(expected_bound, dict):
+        raise RealityError("Recipe bound_file_digests must be an object")
+    bound_names = sorted(name for name in required_files if name != EDITABLE_RECIPE_FILE)
+    if set(expected_bound) != set(bound_names):
+        raise RealityError("Recipe bound-file inventory is incomplete or inconsistent")
+    for name in required_files:
+        path = destination / name
+        if path.is_symlink() or not path.is_file():
+            raise RealityError(f"Recipe required file is missing or unsafe: {name}")
+        if name != EDITABLE_RECIPE_FILE and digest_file(path) != expected_bound[name]:
+            raise RealityError(f"Recipe bound file was edited: {name}")
+
+    try:
+        selection = json.loads((destination / EDITABLE_RECIPE_FILE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise RealityError(f"editable model selection is malformed: {error}") from error
+    profiles = selection.get("profiles") if isinstance(selection, dict) else None
+    local = profiles.get("local-ollama") if isinstance(profiles, dict) else None
+    if selection.get("active") != "local-ollama" or not isinstance(local, dict):
+        raise RealityError("Recipe must keep the local-ollama profile active")
+    if local.get("digest_contract") != MODEL_DIGEST_CONTRACT:
+        raise RealityError("local-ollama must declare the recorded-only digest contract")
+    if local.get("verify_digest") is not True:
+        raise RealityError("local-ollama must record the live Ollama digest")
+    models = local.get("models")
+    if not isinstance(models, dict) or not isinstance(models.get("pi"), str) or not models["pi"]:
+        raise RealityError("local-ollama must name a Pi model")
+    return spec_path
+
+
 def prepare_recipe(destination: Path) -> tuple[Path, bool]:
     """Create the thin manifest/spec over the existing subject tree."""
     manifest_path = destination / RECIPE_NAME
@@ -63,13 +148,7 @@ def prepare_recipe(destination: Path) -> tuple[Path, bool]:
             raise RealityError(
                 f"recipe directory exists without {RECIPE_NAME}: {destination}"
             )
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            raise RealityError(f"could not read Recipe: {error}") from error
-        if manifest.get("schema") != RECIPE_SCHEMA or manifest.get("check") != CHECK:
-            raise RealityError(f"Recipe does not describe {CHECK}: {destination}")
-        return destination / SPEC_NAME, False
+        return _validate_recipe(destination), False
 
     destination.mkdir(parents=True)
     subject_tree.materialize(str(destination))
@@ -78,7 +157,13 @@ def prepare_recipe(destination: Path) -> tuple[Path, bool]:
     if "local-ollama" not in selection.get("profiles", {}):
         raise RealityError("shipped subject tree has no local-ollama model profile")
     selection["active"] = "local-ollama"
+    local = selection["profiles"]["local-ollama"]
+    local["identity_strength"] = "recorded_local_content_digest"
+    local["digest_contract"] = MODEL_DIGEST_CONTRACT
     _write_json(selection_path, selection)
+    _write_json(destination / SPEC_NAME, _spec())
+    required_files = _required_inputs(_spec())
+    bound_names = [name for name in required_files if name != EDITABLE_RECIPE_FILE]
     _write_json(manifest_path, {
         "schema": RECIPE_SCHEMA,
         "check": CHECK,
@@ -86,11 +171,13 @@ def prepare_recipe(destination: Path) -> tuple[Path, bool]:
         "subject": "pi",
         "workload": "repair",
         "model_profile": "local-ollama",
+        "model_digest_contract": MODEL_DIGEST_CONTRACT,
+        "editable_files": [EDITABLE_RECIPE_FILE],
+        "bound_file_digests": _file_digests(destination, bound_names),
         "canonical_fixture_digests": _canonical_digests(),
         "rerun": f"hwb try {CHECK} --recipe {destination}",
     })
-    _write_json(destination / SPEC_NAME, _spec())
-    return destination / SPEC_NAME, True
+    return _validate_recipe(destination), True
 
 
 def _attempt_document(run_dir: Path) -> dict[str, Any]:
@@ -141,11 +228,28 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
                       "model_profile": "unobserved", "pi_version": "unobserved"},
         }
 
-    adapter = document.get("adapter") if isinstance(document.get("adapter"), dict) else {}
-    outcome = adapter.get("outcome") if isinstance(adapter.get("outcome"), dict) else {}
-    oracle = adapter.get("oracle_evidence") if isinstance(adapter.get("oracle_evidence"), dict) else {}
-    initial = oracle.get("initial_test") if isinstance(oracle.get("initial_test"), dict) else {}
-    final = oracle.get("final_test") if isinstance(oracle.get("final_test"), dict) else {}
+    adapter = document.get("adapter")
+    malformed: list[str] = []
+    if not isinstance(adapter, dict):
+        adapter = {}
+        malformed.append("adapter evidence is missing or malformed")
+    outcome = adapter.get("outcome")
+    if not isinstance(outcome, dict) or not isinstance(outcome.get("passed"), bool) or not isinstance(outcome.get("errors"), list):
+        outcome = {}
+        malformed.append("independent repair outcome is missing or malformed")
+    oracle = adapter.get("oracle_evidence")
+    if not isinstance(oracle, dict):
+        oracle = {}
+        malformed.append("oracle evidence is missing or malformed")
+    initial = oracle.get("initial_test")
+    final = oracle.get("final_test")
+    for label, value in (("initial", initial), ("final", final)):
+        if (not isinstance(value, dict)
+                or not isinstance(value.get("returncode"), int)
+                or "termination_reason" not in value):
+            malformed.append(f"{label} required-test evidence is missing or malformed")
+    initial = initial if isinstance(initial, dict) else {}
+    final = final if isinstance(final, dict) else {}
     baseline_failed = initial.get("returncode") == 1 and initial.get("termination_reason") is None
     final_passed = final.get("returncode") == 0 and final.get("termination_reason") is None
     facts.extend([
@@ -153,9 +257,24 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
         {"fact": "required_test_passed_after_attempt", "observed": final_passed},
     ])
 
-    workspace = adapter.get("workspace") if isinstance(adapter.get("workspace"), dict) else {}
-    before = workspace.get("before") if isinstance(workspace.get("before"), list) else []
-    after = workspace.get("after") if isinstance(workspace.get("after"), list) else []
+    workspace = adapter.get("workspace")
+    if not isinstance(workspace, dict):
+        workspace = {}
+        malformed.append("workspace evidence is missing or malformed")
+    before = workspace.get("before")
+    after = workspace.get("after")
+    valid_inventory = all(
+        isinstance(items, list) and all(
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("sha256"), str)
+            for item in items
+        ) for items in (before, after)
+    )
+    if not valid_inventory:
+        malformed.append("workspace inventories are missing or malformed")
+    before = before if isinstance(before, list) else []
+    after = after if isinstance(after, list) else []
     before_map = {item.get("path"): item for item in before if isinstance(item, dict)}
     after_map = {item.get("path"): item for item in after if isinstance(item, dict)}
     changed = sorted(
@@ -165,15 +284,23 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     allowed_changes = changed == ["slugger.py"]
     facts.append({"fact": "only_permitted_files_changed", "observed": allowed_changes})
 
-    adapter_verdict = adapter.get("verdict") if isinstance(adapter.get("verdict"), dict) else {}
-    measured = adapter_verdict.get("passed") is True
+    adapter_verdict = adapter.get("verdict")
+    measured = (
+        isinstance(adapter_verdict, dict)
+        and adapter_verdict.get("passed") is True
+        and isinstance(adapter_verdict.get("errors"), list)
+    )
+    if not isinstance(adapter_verdict, dict) or not isinstance(adapter_verdict.get("passed"), bool):
+        malformed.append("adapter measurement is missing or malformed")
     independent_outcome = outcome.get("passed") is True
     facts.extend([
         {"fact": "adapter_measurement_valid", "observed": measured},
         {"fact": "independent_repair_oracle_passed", "observed": independent_outcome},
         {"fact": "model_completion_claim_used_as_verdict", "observed": False},
     ])
-    required = integrity_ok and template_ok and baseline_failed and final_passed and allowed_changes
+    required = (integrity_ok and template_ok and not malformed and baseline_failed
+                and final_passed and allowed_changes and measured)
+    errors.extend(malformed)
     if not baseline_failed:
         errors.append("independent baseline test did not prove the fixture was red")
     if not final_passed:
@@ -185,11 +312,11 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     if not independent_outcome:
         errors.extend(str(item) for item in outcome.get("errors", []) if isinstance(item, str))
 
-    if not integrity_ok or not measured:
+    if not integrity_ok or not template_ok or malformed or not measured or not baseline_failed:
         verdict = "invalid"
     elif required and independent_outcome:
         verdict = "pass"
-    elif baseline_failed or final_passed:
+    elif final_passed:
         verdict = "partial"
     else:
         verdict = "fail"
@@ -214,6 +341,10 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
         raise RealityError(f"unknown Reality Check: {check}")
     destination = (Path(recipe_dir).expanduser() if recipe_dir else _default_recipe()).resolve()
     spec_path, created = prepare_recipe(destination)
+    specification_value = json.loads(spec_path.read_text(encoding="utf-8"))
+    effective_digests = _file_digests(
+        destination, _required_inputs(specification_value) + [RECIPE_NAME, SPEC_NAME]
+    )
     try:
         specification = specmod.load(str(spec_path))
         loaded = features.resolve(specification)
@@ -229,6 +360,9 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
         "record": str(run_dir),
         "recipe": str(destination),
         "recipe_created": created,
+        "recipe_contract": "editable configuration; only model_selection.json may change",
+        "effective_recipe_digests": effective_digests,
+        "model_digest_contract": MODEL_DIGEST_CONTRACT,
         "blind_spots": list(BLIND_SPOTS),
         "rerun": f"hwb try {CHECK} --recipe {destination}",
     }
@@ -258,6 +392,8 @@ def print_result(result: dict[str, Any]) -> None:
             print(f"  - {error}")
     print(f"\nSealed record: {result['record']}")
     print(f"Recipe: {result['recipe']}")
+    print(f"Recipe integrity: {result['recipe_contract']}")
+    print("Model digest: live digest recorded; historical pin not enforced")
     print(f"Rerun: {result['rerun']}")
     print("\nExplicit blind spots")
     for item in result["blind_spots"]:

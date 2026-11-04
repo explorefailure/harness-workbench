@@ -120,26 +120,57 @@ not a harness error.
 
 ### Try the first local-AI Reality Check
 
-The first user-facing check asks the pinned Pi coding agent and the pinned
-local Ollama model to repair a disposable Python fixture:
+The first user-facing check asks the version-and-executable-pinned Pi coding
+agent and a locally installed Ollama model to repair a disposable Python
+fixture:
 
 ```console
 $ hwb try coding/python-bug-fix
 ```
 
 It requires the Pi and Node identities declared by the shipped subject tree,
-resolves the Recipe's local Ollama model, and records its live content digest.
+resolves the Recipe's local Ollama model, and records the live content digest.
+That model digest is **recorded, not enforced against the historical value in
+`pin.json`**: a result identifies the bytes Ollama reported for that run, but
+does not claim byte-identical model reproduction. The adapter owner must make
+any future pin-enforcement change; this command does not silently refresh or
+reinterpret that pin.
 The command creates an ordinary Recipe
 under `.hwb/recipes/coding-python-bug-fix`, executes an ordinary Workbench spec,
 and preserves the normal sealed run under `runs/`. Pass/fail is derived from
 external red-before and green-after test runs, an exact changed-file policy,
 the unchanged fixture template, and record integrity—not from the model's
-completion claim. The printed Recipe command reruns the same configuration.
+completion claim.
+
+Verdicts have deliberately narrow meanings:
+
+- `pass`: every required independent fact is established.
+- `partial`: trustworthy evidence shows a green repair, but another required
+  success condition (for example the exact changed-file policy) failed.
+- `fail`: trustworthy evidence measured an unsuccessful repair.
+- `invalid`: the record, baseline, template, adapter measurement, or required
+  evidence is unusable or untrustworthy.
+
+Recipes are intentionally editable configuration, not immutable
+reproductions. Only `model_selection.json` may be edited. The spec, executable
+adapter path, task, tests, and fixture are bound to digests in `recipe.json`;
+missing, malformed, or changed bound files are rejected before execution. The
+normal sealed record digests the exact effective Recipe inputs, so rerun means
+"run this saved configuration again," not "guarantee identical bytes or
+behavior." The terminal prints that contract and the saved Recipe path.
 
 This is a bounded result for one fixture and setup. It is not a model-quality
 score, compatibility claim, containment boundary, or certification. Workloads
 and callbacks remain trusted code; the terminal result lists unobserved
 surfaces explicitly.
+
+The sensitivity test uses a deterministic native subject process through the
+normal runner, capture, sealed record, and final verifier. Its simulated
+adapter protocol claims success while the required final test remains red;
+the result is `fail`, the claim remains inspectable in `stdout.bin`, and the
+same path with a green final test passes. This proves verdict sensitivity
+without claiming that CI observed a live model, Ollama, network behavior, or
+Pi child-session behavior.
 
 ### See it test something
 
