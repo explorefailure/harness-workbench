@@ -128,6 +128,15 @@ fixture:
 $ hwb try coding/python-bug-fix
 ```
 
+An installed absolute entrypoint works without activating its virtual
+environment. The console entrypoint selects its own `sys.executable`; Reality
+Check orchestration passes that value to its dedicated subject launcher as the
+declared `HWB_PYTHON` environment input. The launcher quotes and executes that
+exact path instead of resolving `python3` from `PATH`. The portable Recipe does
+not store a machine-specific interpreter path, while the sealed record retains
+the effective `HWB_PYTHON` value and the launcher/spec/input digests that used
+it.
+
 It requires the Pi and Node identities declared by the shipped subject tree,
 resolves the Recipe's local Ollama model, and records the live content digest.
 That model digest is **recorded, not enforced against the historical value in
@@ -164,8 +173,12 @@ score, compatibility claim, containment boundary, or certification. Workloads
 and callbacks remain trusted code; the terminal result lists unobserved
 surfaces explicitly.
 
-The sensitivity test uses a deterministic native subject process through the
-normal runner, capture, sealed record, and final verifier. Its simulated
+The sensitivity test uses one stable deterministic native subject script
+through the normal runner, capture, sealed record, and final verifier. The
+simulated adapter protocol is a separate declared input, and red and green
+conditions use independent specification directories and freeze baselines, so
+changing the declared condition is not misreported as unexplained script
+drift. The test rejects any returning `[freeze] DRIFT` diagnostic. Its simulated
 adapter protocol claims success while the required final test remains red;
 the result is `fail`, the claim remains inspectable in `stdout.bin`, and the
 same path with a green final test passes. This proves verdict sensitivity

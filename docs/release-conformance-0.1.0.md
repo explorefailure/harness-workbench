@@ -117,13 +117,27 @@ one editable file, `model_selection.json`; every other required Recipe file is
 manifest-bound, while the normal run record captures the exact effective
 input digests. Therefore a rerun does not claim byte-identical model behavior.
 
-The known-red integration proof runs a deterministic native subject process
-through ordinary Workbench execution, output capture, record sealing, and the
-final verifier. A simulated protocol document retains a positive model claim
+The installed command does not require virtual-environment activation. The
+invoked `hwb` process takes its runtime identity from `sys.executable` and
+passes it as the declared `HWB_PYTHON` environment input to the Reality
+Check-only subject launcher. That launcher executes the quoted path directly;
+it does not consult `PATH` for Python. The Recipe stays portable because it
+does not persist the machine path. The ordinary sealed record retains the
+effective declared environment value, the effective spec, and the digests of
+the launcher and all other declared inputs. The generic certified adapter
+launcher remains unchanged.
+
+The known-red integration proof runs one stable deterministic native subject
+script through ordinary Workbench execution, output capture, record sealing,
+and the final verifier. Its simulated protocol document is a separate declared
+input, and red and green controls use independent specification directories
+and freeze baselines. The test captures diagnostics and fails if unexplained
+`[freeze] DRIFT` returns. A simulated protocol document retains a positive model claim
 while reporting a failing final required test; the detector returns `fail`.
 Changing only that injected fact to a passing final test yields `pass`. This
-tests the local protocol and verdict boundary, not a live model, Ollama,
-network, or Pi child-session. Hosted platform and CodeQL checks, exact release
+tests a native process, normal capture/sealing, and the local protocol/verdict
+boundary. The adapter protocol is simulated; a live model, Ollama, network,
+and Pi child-session behavior remain unobserved. Hosted platform and CodeQL checks, exact release
 commit checks, tag/downloaded-asset checks, and public release publication all
 remain pending.
 

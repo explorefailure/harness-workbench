@@ -1,5 +1,8 @@
 import copy
+import contextlib
+import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -89,6 +92,30 @@ class RealityCheckTests(unittest.TestCase):
             same, created_again = reality.prepare_recipe(destination)
             self.assertEqual(spec, same)
             self.assertFalse(created_again)
+
+    def test_reality_check_passes_invoking_python_as_declared_runtime(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            seen = {}
+
+            def execute(specification, loaded, runs_root, environment=None):
+                seen["python"] = environment.get("HWB_PYTHON")
+                seen["declared"] = specification.env
+                return {"run_id": "run-id"}
+
+            with mock.patch.object(reality.runner, "execute", side_effect=execute), \
+                 mock.patch.object(reality, "verify_run", return_value={
+                     "verdict": "pass", "facts": [], "changed_files": [],
+                     "errors": [], "setup": {},
+                 }):
+                reality.run_check(
+                    reality.CHECK,
+                    runs_root=str(root / "runs"),
+                    recipe_dir=str(root / "recipe"),
+                )
+            self.assertEqual(sys.executable, seen["python"])
+            self.assertEqual(["HWB_PYTHON"], seen["declared"])
+            self.assertNotIn("HWB_PYTHON", os.environ)
 
     def test_recipe_allows_only_recorded_editable_model_selection(self):
         with tempfile.TemporaryDirectory() as td:
@@ -192,14 +219,22 @@ class RealityCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             recipe = self.canonical_recipe(root)
-            fixture = root / "native_subject.py"
-            specification_path = root / "known-red.json"
+            native_source = (
+                "import json\n"
+                "from pathlib import Path\n"
+                "print(json.dumps(json.loads(Path('protocol.json').read_text()), "
+                "sort_keys=True))\n"
+            )
 
-            def execute(document):
-                fixture.write_text(
-                    "import json\nprint(json.dumps(" + repr(document) + ", sort_keys=True))\n",
-                    encoding="utf-8",
+            def execute(document, condition):
+                attempt = root / condition
+                attempt.mkdir()
+                fixture = attempt / "native_subject.py"
+                fixture.write_text(native_source, encoding="utf-8")
+                (attempt / "protocol.json").write_text(
+                    json.dumps(document), encoding="utf-8"
                 )
+                specification_path = attempt / "known-red.json"
                 specification_path.write_text(json.dumps({
                     "schema": "hwbspec/v0.1",
                     "features_root": "harness_workbench:builtin",
@@ -207,26 +242,33 @@ class RealityCheckTests(unittest.TestCase):
                     "steps": [{
                         "id": reality.STEP_ID,
                         "argv": [sys.executable, "native_subject.py"],
-                        "inputs": ["native_subject.py"],
+                        "inputs": ["native_subject.py", "protocol.json"],
                     }],
                 }), encoding="utf-8")
                 specification = specmod.load(str(specification_path))
                 record = runner.execute(specification, features.resolve(specification),
-                                        str(root / "runs"))
-                run_dir = root / "runs" / record["run_id"]
+                                        str(attempt / "runs"))
+                run_dir = attempt / "runs" / record["run_id"]
                 self.assertEqual(reality.interrupt.COMPLETE,
                                  reality.interrupt.inspect_state(str(run_dir))["state"])
                 self.assertTrue((run_dir / "steps" / reality.STEP_ID / "attempts" / "0" / "stdout.bin").is_file())
                 return reality.verify_run(run_dir, recipe)
 
-            known_red = execute(captured_document(claim=True, final=1, outcome=False))
-            self.assertEqual("fail", known_red["verdict"])
-            self.assertFalse({x["fact"]: x["observed"] for x in known_red["facts"]}
-                             ["required_test_passed_after_attempt"])
-            self.assertFalse({x["fact"]: x["observed"] for x in known_red["facts"]}
-                             ["model_completion_claim_used_as_verdict"])
-            green_control = execute(captured_document(claim=True, final=0, outcome=True))
-            self.assertEqual("pass", green_control["verdict"])
+            diagnostics = io.StringIO()
+            with contextlib.redirect_stderr(diagnostics):
+                known_red = execute(
+                    captured_document(claim=True, final=1, outcome=False), "red"
+                )
+                self.assertEqual("fail", known_red["verdict"])
+                self.assertFalse({x["fact"]: x["observed"] for x in known_red["facts"]}
+                                 ["required_test_passed_after_attempt"])
+                self.assertFalse({x["fact"]: x["observed"] for x in known_red["facts"]}
+                                 ["model_completion_claim_used_as_verdict"])
+                green_control = execute(
+                    captured_document(claim=True, final=0, outcome=True), "green"
+                )
+                self.assertEqual("pass", green_control["verdict"])
+            self.assertNotIn("[freeze] DRIFT", diagnostics.getvalue())
 
 
 if __name__ == "__main__":

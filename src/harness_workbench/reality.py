@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import sys
 from typing import Any
 
 from . import features, interrupt, runner, spec as specmod, subject_tree
@@ -53,6 +55,7 @@ def _spec() -> dict[str, Any]:
         / "reality_checks" / "coding_python_bug_fix.json"
     )
     value = json.loads(definition.read_text(encoding="utf-8"))
+    value["env"] = ["HWB_PYTHON"]
     value["steps"][0]["inputs"].append(RECIPE_NAME)
     return value
 
@@ -348,7 +351,16 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
     try:
         specification = specmod.load(str(spec_path))
         loaded = features.resolve(specification)
-        record = runner.execute(specification, loaded, runs_root)
+        # The console-script shebang selects this interpreter even when its
+        # virtual environment is not activated.  Carry that identity across
+        # the shell boundary explicitly; the spec declares it, so the normal
+        # record retains the effective value without baking a machine path
+        # into the portable Recipe.
+        environment = os.environ.copy()
+        environment["HWB_PYTHON"] = sys.executable
+        record = runner.execute(
+            specification, loaded, runs_root, environment=environment
+        )
     except (specmod.SpecError, features.FeatureError, runner.HarnessError, OSError) as error:
         raise RealityError(str(error)) from error
     run_dir = Path(runs_root).resolve() / record["run_id"]

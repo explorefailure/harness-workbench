@@ -10,9 +10,9 @@
   "steps": [
     {
       "id": "pi-python-bug-fix",
-      "argv": ["./run_subject.sh", "pi", "repair"],
+      "argv": ["./run_reality_subject.sh", "pi", "repair"],
       "inputs": [
-        "run_subject.sh",
+        "run_reality_subject.sh",
         "runner.py",
         "adapters.py",
         "oracles.py",
