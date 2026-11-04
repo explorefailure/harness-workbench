@@ -1507,7 +1507,7 @@ class TestReleaseSurfaces(unittest.TestCase):
     # because a new module needed no decision from anyone.
     INTERNAL_MODULES = frozenset({
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",
-        "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
+        "efficacy", "features", "fidelity", "interrupt", "reality", "replay", "runner",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
         "sweep",
         # The builtin feature tree. `builtin/` carries no `__init__.py`, but a

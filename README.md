@@ -118,6 +118,29 @@ default.
 the harness completes successfully. A non-zero workload exit is recorded data,
 not a harness error.
 
+### Try the first local-AI Reality Check
+
+The first user-facing check asks the pinned Pi coding agent and the pinned
+local Ollama model to repair a disposable Python fixture:
+
+```console
+$ hwb try coding/python-bug-fix
+```
+
+It requires the Pi and Node identities declared by the shipped subject tree,
+resolves the Recipe's local Ollama model, and records its live content digest.
+The command creates an ordinary Recipe
+under `.hwb/recipes/coding-python-bug-fix`, executes an ordinary Workbench spec,
+and preserves the normal sealed run under `runs/`. Pass/fail is derived from
+external red-before and green-after test runs, an exact changed-file policy,
+the unchanged fixture template, and record integrity—not from the model's
+completion claim. The printed Recipe command reruns the same configuration.
+
+This is a bounded result for one fixture and setup. It is not a model-quality
+score, compatibility claim, containment boundary, or certification. Workloads
+and callbacks remain trusted code; the terminal result lists unobserved
+surfaces explicitly.
+
 ### See it test something
 
 The deterministic [`examples/flaky/`](examples/flaky/) workload fails twice
