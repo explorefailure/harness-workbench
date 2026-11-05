@@ -283,6 +283,11 @@ def execute(request_path):
             # Empty fixtures are legitimate tasks that create new files.
             (staged / fixture_name).mkdir(parents=True, exist_ok=True)
             retained = scratch / 'native'; retained.mkdir()
+            # macOS commonly exposes the temporary directory through /var,
+            # which is a symlink to /private/var.  Give the adapter the
+            # canonical owned parent so its returned retained_root can be
+            # compared without mistaking that host alias for an escape.
+            retained = retained.resolve(strict=True)
             argv = [sys.executable, '-B', str(staged / 'adapter.py'),
                     str(staged / request['config']), '--timeout', str(timeout),
                     '--workspace-parent', str(retained)]
