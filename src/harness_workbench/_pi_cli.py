@@ -28,6 +28,17 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("directory", type=Path)
     init.add_argument("--profile", choices=("baseline", "pi-1.4.0-node-26.13.0"), default="pi-1.4.0-node-26.13.0",
                       help="exact runtime profile; baseline is for historical comparisons only")
+    configure = sub.add_parser('configure', help='write a NEW model-backed config using native Pi providers')
+    configure.add_argument('directory', type=Path)
+    configure.add_argument('--model', required=True)
+    configure.add_argument('--provider', help='built-in Pi provider name; otherwise a compatible endpoint')
+    configure.add_argument('--base-url')
+    configure.add_argument('--api-key-env', help='name of the explicitly selected credential environment variable')
+    configure.add_argument('--api', default='openai-completions')
+    configure.add_argument('--context-window', type=int, default=32768)
+    configure.add_argument('--max-tokens', type=int, default=4096)
+    configure.add_argument('--check', action='append', default=[], help='independent check argv as a JSON array; repeatable')
+    configure.add_argument('--config-name', default='model_adapter_config.json')
     for name, description in (
         ("doctor", "check the pinned Pi/Node runtime without running a task"),
         ("demo", "run the offline coding repair and independent outcome check"),
@@ -56,6 +67,46 @@ def main(argv: list[str] | None = None) -> int:
                 if path.is_file():
                     path.chmod(0o755 if path.suffix == ".sh" else 0o644)
             print(f"Created {destination}\nNext: hwb-pi doctor {destination}")
+            return 0
+
+        if args.command == 'configure':
+            import importlib.util
+            root = args.directory.resolve(strict=True)
+            if not root.is_dir() or Path(args.config_name).name != args.config_name or args.config_name in ('', '.', '..'):
+                raise ValueError('config-name must be a new filename inside an owned directory')
+            spec = importlib.util.spec_from_file_location('owned_pi_provider_config', root / 'provider_config.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            provider = {'mode': 'native' if args.provider else 'compatible', 'model': args.model}
+            if args.provider:
+                if args.api != 'openai-completions' or args.context_window != 32768 or args.max_tokens != 4096:
+                    raise ValueError('native providers use their catalog API/context limits')
+                provider['name'] = args.provider
+            else:
+                provider.update(api=args.api, context_window=args.context_window, max_tokens=args.max_tokens)
+            if args.base_url is not None:provider['base_url'] = args.base_url
+            if args.api_key_env is not None:provider['api_key_env'] = args.api_key_env
+            module.validate(provider)
+            config = json.loads((root / 'coding_adapter_config.json').read_text())
+            config['provider'] = provider
+            config['extensions'] = []
+            config['pi_arguments'] = ['--mode', 'json', '--no-session', '--no-extensions',
+                '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-approve',
+                '--offline', '--tools', 'read,edit,bash']
+            config['network_mode'] = 'explicit model/provider requests; automatic Pi network activity disabled'
+            config['inputs'] = [p for p in config['inputs'] if p not in ('coding_adapter_config.json', 'coding_provider.ts')]
+            config['inputs'].extend([args.config_name, 'provider_config.py'])
+            if args.check:
+                spec = importlib.util.spec_from_file_location('owned_task_checks', root / 'task_checks.py')
+                checks_module = importlib.util.module_from_spec(spec);spec.loader.exec_module(checks_module)
+                config['checks'] = [{'id': 'check-' + str(i+1), 'argv': json.loads(raw)} for i, raw in enumerate(args.check)]
+                checks_module.validate(config['checks'])
+                config['inputs'].append('task_checks.py')
+            destination = root / args.config_name
+            with destination.open('x') as file:
+                file.write(json.dumps(config, indent=2) + '\n')
+            destination.chmod(0o600)
+            print('Created ' + str(destination) + '\nNext: hwb-pi run ' + str(destination) + ' --pi YOUR_PINNED_PI_LAUNCHER')
             return 0
 
         target = args.target.resolve(strict=True)

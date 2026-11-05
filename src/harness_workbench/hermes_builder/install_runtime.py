@@ -28,6 +28,10 @@ def main():
             'https://github.com/NousResearch/hermes-agent.git', str(source)],
             check=True, env=env, timeout=180)
         identity = verify_source(source, pin, env)
+        extras = pin.get('extras', [])
+        if extras not in ([], ['anthropic']):raise ValueError('unsupported Hermes dependency extras profile')
+        extra_args = [arg for extra in extras for arg in ('--extra', extra)]
+        identity['optional_extras'] = extras
         # Installer network access is explicit. Runtime/doctor probes stay offline.
         install_env = dict(env)
         install_env.pop('UV_OFFLINE', None)
@@ -36,7 +40,7 @@ def main():
         install_env['UV_PYTHON_PREFERENCE'] = 'only-managed'
         # Hermes supports source editable installs, deliberately guards ordinary
         # wheel/sdist builds. Respect that contract; never override its guard.
-        subprocess.run([uv, 'sync', '--frozen', '--no-dev', '--python', pin['python_version']],
+        subprocess.run([uv, 'sync', '--frozen', '--no-dev', *extra_args, '--python', pin['python_version']],
             cwd=source, env=install_env, check=True, timeout=600)
         (target / 'installation.json').write_text(json.dumps(identity, indent=2) + '\n')
     print('Installed pinned Hermes source/runtime: ' + str(source))

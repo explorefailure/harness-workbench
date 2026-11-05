@@ -11,7 +11,9 @@
     "pin.json",
     "task.md",
     "coding_fixture/slugger.py",
-    "coding_fixture/test_slugger.py"
+    "coding_fixture/test_slugger.py",
+    "provider_auth.py",
+    "task_checks.py"
   ],
   "provider": {
     "mode": "scripted"

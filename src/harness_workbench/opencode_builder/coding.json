@@ -26,7 +26,9 @@
         "task.md",
         "coding_fixture/slugger.py",
         "coding_fixture/test_slugger.py",
-        "run_demo.sh"
+        "run_demo.sh",
+        "provider_auth.py",
+        "task_checks.py"
       ]
     }
   ]

@@ -13,7 +13,9 @@
     "task.md",
     "coding_fixture/slugger.py",
     "coding_fixture/test_slugger.py",
-    "gateway_cleanup.py"
+    "gateway_cleanup.py",
+    "provider_auth.py",
+    "task_checks.py"
   ],
   "provider": {
     "mode": "scripted"

@@ -28,7 +28,9 @@
         "coding_fixture/slugger.py",
         "coding_fixture/test_slugger.py",
         "run_demo.sh",
-        "gateway_cleanup.py"
+        "gateway_cleanup.py",
+        "provider_auth.py",
+        "task_checks.py"
       ]
     }
   ]

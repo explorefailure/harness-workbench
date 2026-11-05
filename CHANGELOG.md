@@ -7,6 +7,21 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Include the upstream-pinned Anthropic SDK extra in the owned Hermes runtime
+  and verify its dependency profile before execution. Pin sessions with --in
+  and test relative file operations and native working directories to prevent
+  parent Git discovery from moving a task out of its retained fixture.
+
+- Add local working support for native Pi model/provider configuration, named
+  API-key references across Pi/OpenCode/Hermes, selected native provider routes,
+  credential-redacted capture and independently bounded task checks with separate
+  results. Hosted accounts, other native protocols and fresh platform validation
+  remain unvalidated; no release is implied.
+
+- Document Pi, OpenCode and Hermes together with a builder onboarding guide,
+  current model/provider support, evidence-field map, custom-workload workflow,
+  remaining provider requirements and troubleshooting; link the individual guides from the main documentation.
+
 - Add `hwb-hermes` owned builder commands, a verified optional Hermes 0.22.5
   source/runtime installer, native stream-json evidence, scripted real-tool repair
   and independent outcome checks. Support explicit local OpenAI-compatible

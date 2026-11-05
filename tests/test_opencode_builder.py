@@ -29,7 +29,9 @@ def load(name, path):
 
 normalizer = load('opencode_normalizer', DATA / 'normalizer.py')
 provider = load('opencode_scripted', DATA / 'scripted_provider.py')
-with patch.dict(sys.modules, {'normalizer': normalizer, 'scripted_provider': provider}):
+auth = load('opencode_provider_auth', DATA / 'provider_auth.py')
+checks = load('opencode_task_checks', DATA / 'task_checks.py')
+with patch.dict(sys.modules, {'provider_auth': auth, 'task_checks': checks, 'normalizer': normalizer, 'scripted_provider': provider}):
     adapter = load('opencode_adapter', DATA / 'adapter.py')
 
 

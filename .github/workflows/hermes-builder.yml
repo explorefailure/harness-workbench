@@ -33,3 +33,13 @@ jobs:
         env:
           HWB_HERMES_LIVE_TEST: '1'
         run: python -m unittest discover -s tests -p test_hermes_builder.py -v
+      - name: Test authenticated provider connections and independent checks
+        env:
+          HWB_HERMES_PROVIDER_TEST: '1'
+          HWB_PROVIDER_HERMES: ${{ env.HWB_HERMES_RUNTIME }}
+        run: python -m unittest discover -s tests -p test_provider_connections.py -v
+      - name: Test native provider API protocols
+        env:
+          HWB_HERMES_NATIVE_PROTOCOL_TEST: '1'
+          HWB_PROVIDER_HERMES: ${{ env.HWB_HERMES_RUNTIME }}
+        run: python -m unittest discover -s tests -p test_provider_protocols.py -v

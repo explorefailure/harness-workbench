@@ -31,3 +31,13 @@ jobs:
         env:
           HWB_OPENCODE_LIVE_TEST: '1'
         run: python -m unittest discover -s tests -p test_opencode_builder.py -v
+      - name: Test authenticated provider connections and independent checks
+        env:
+          HWB_OPENCODE_PROVIDER_TEST: '1'
+          HWB_PROVIDER_OPENCODE: ${{ env.HWB_OPENCODE_BIN }}
+        run: python -m unittest discover -s tests -p test_provider_connections.py -v
+      - name: Test native provider API protocols
+        env:
+          HWB_OPENCODE_NATIVE_PROTOCOL_TEST: '1'
+          HWB_PROVIDER_OPENCODE: ${{ env.HWB_OPENCODE_BIN }}
+        run: python -m unittest discover -s tests -p test_provider_protocols.py -v

@@ -103,9 +103,9 @@ class ScriptedProvider:
             raise ValueError('unexpected tool-result sequence')
         test = shlex.quote(sys.executable) + ' -B -m unittest -v'
         plan = [
-            ('read_file', {'path': str(fixture / 'slugger.py')}),
+            ('read_file', {'path': 'slugger.py'}),
             ('terminal', {'command': test, 'workdir': str(fixture), 'timeout': 15}),
-            ('patch', {'path': str(fixture / 'slugger.py'),
+            ('patch', {'path': 'slugger.py',
                       'old_string': (fixture.parent / 'original.py').read_text(), 'new_string': REPAIRED}),
             ('terminal', {'command': test, 'workdir': str(fixture), 'timeout': 15}),
         ]

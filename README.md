@@ -510,6 +510,10 @@ option reference.
 |---|---|
 | [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) | **start here to use it** — attach your workload and your own features, then measure them |
 | [`examples/flaky/`](examples/flaky/) | a worked example, no model required |
+| [`docs/builder-adapters.md`](docs/builder-adapters.md) | Pi, OpenCode and Hermes: choose, install, run, inspect evidence and troubleshoot |
+| [`docs/pi-builder.md`](docs/pi-builder.md) | Pi setup, scripted provider, custom workloads and runtime identity |
+| [`docs/opencode-builder.md`](docs/opencode-builder.md) | OpenCode setup, local models and independent repair checks |
+| [`docs/hermes-builder.md`](docs/hermes-builder.md) | Hermes setup, native events, local models and owned gateway cleanup |
 | [`docs/the-spec.md`](docs/the-spec.md) | every spec field, the bounds, and the digest rule |
 | [`docs/the-record.md`](docs/the-record.md) | what a run directory contains and how to read it without `hwb` |
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
@@ -567,8 +571,18 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Builder integrations (unreleased candidates)
 
-Use `hwb-pi init ./my-pi-workspace` for an owned Pi adapter and offline coding-repair example. See [the builder guide](docs/pi-builder.md) for installation, runtime pins, custom workloads, evidence interpretation and limits. The broader Pi experiments remain research fixtures.
+Use Workbench with Pi, OpenCode or Hermes to run your tasks with a model you
+choose. The [builder adapter guide](docs/builder-adapters.md) explains current
+model/provider support, task configuration and evidence. The local working draft
+adds Pi provider selection, explicit API-key references and independent task
+checks for all three adapters. See the guide for tested paths and remaining
+hosted/platform validation. Scripted repairs are optional integration controls.
 
-Use `hwb-opencode init ./my-opencode-workspace` for the owned OpenCode builder integration. The [OpenCode builder guide](docs/opencode-builder.md) covers the pinned runtime, scripted repair, local models and independent outcome checks. This integration is an unreleased candidate.
+| Adapter | Start an owned workspace | Setup and reference |
+| --- | --- | --- |
+| Pi | `hwb-pi init ./my-pi-workspace` | [Pi guide](docs/pi-builder.md): pinned Node/Pi and an in-process scripted provider |
+| OpenCode | `hwb-opencode init ./my-opencode-workspace` | [OpenCode guide](docs/opencode-builder.md): pinned executable, scripted tools and local models |
+| Hermes | `hwb-hermes init ./my-hermes-workspace` | [Hermes guide](docs/hermes-builder.md): pinned source runtime, native events, local models and gateway cleanup |
 
-Use `hwb-hermes init ./my-hermes-workspace` for an owned Hermes integration. The [Hermes builder guide](docs/hermes-builder.md) covers the pinned source runtime, native JSON stream, scripted control, local models and independent repair checks. This integration is an unreleased candidate.
+These commands require a candidate checkout containing the integrations. Broader
+research experiments remain separate from these builder workflows.

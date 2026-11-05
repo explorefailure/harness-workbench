@@ -1,5 +1,12 @@
 # Releasing Harness Workbench
 
+> **Adapter follow-up, 2026-10-31:** [v0.1.0 was published on 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0).
+> The literal 0.1.0 promotion below is historical and must not be reused for the
+> current uncommitted adapter work. Select an unused version and update the
+> version/tag commands and conformance record before a new release gate. Current
+> local builds still report 0.1.0; they are development snapshots, not replacement
+> release assets. See [remaining adapter gates](docs/model-provider-plan.md#remaining-validation-and-documentation-gaps).
+
 This is the maintainer procedure for a GitHub release. A build on a laptop is
 not a release. A version is public only after its tag and GitHub release exist.
 The current candidate policy is:
@@ -121,13 +128,17 @@ release path is pinned. `pyproject.toml`'s `release` extra carries the same
 three versions and a test fails if the two lists disagree.
 
 Bumping that pin is a deliberate act with a visible consequence, not
-housekeeping. setuptools 84 stops copying the executable bit onto `.py` package
-data, so `subjects/hook.py` and `subjects/runner.py` ship non-executable and
-the artifact verifier fails naming both — the change reaches a reader as a
-failed gate rather than as a quietly different wheel. Only the wheel is
-affected: the normalized sdist is byte-identical across 83 and 84, because
-normalization reduces every member to the neutral modes and both versions copy
-the checkout's executable bit into the sdist unchanged.
+housekeeping. Historical builds with namespace discovery enabled lost executable
+bits on `subjects/hook.py` and `subjects/runner.py`, first observed under 84 and
+later reproduced under 83 with integral source timestamps. Module copying stripped
+the bits and a timestamp-dependent data recopy sometimes restored them. The
+package finder now sets `namespaces = false`: these helpers are data, while the
+importable root package has `__init__.py`. Explicit package-data globs still ship
+them. Do not repair wheel modes after building or weaken the artifact verifier.
+The clean-wheel regression builds both timestamp shapes without a build cache;
+`HWB_PACKAGE_BUILD_PYTHON` may select the provisioned backend interpreter. The
+release gate must still verify actual wheel/sdist contents and clean installs;
+the finder correction does not establish compatibility with every backend.
 
 The history scan runs against `$SOURCE_REPO` rather than whichever checkout is
 to hand. A full local clone happens to carry every branch, but that is a

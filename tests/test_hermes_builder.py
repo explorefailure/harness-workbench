@@ -28,7 +28,9 @@ normalizer = load('hermes_normalizer', DATA / 'normalizer.py')
 provider = load('hermes_scripted', DATA / 'scripted_provider.py')
 identity = load('hermes_identity', DATA / 'runtime_identity.py')
 cleanup = load('hermes_cleanup', DATA / 'gateway_cleanup.py')
-with patch.dict(sys.modules, {'normalizer': normalizer, 'scripted_provider': provider, 'runtime_identity': identity}):
+auth = load('hermes_provider_auth', DATA / 'provider_auth.py')
+checks = load('hermes_task_checks', DATA / 'task_checks.py')
+with patch.dict(sys.modules, {'provider_auth': auth, 'task_checks': checks, 'normalizer': normalizer, 'scripted_provider': provider, 'runtime_identity': identity}):
     adapter = load('hermes_adapter', DATA / 'adapter.py')
 
 
@@ -166,6 +168,15 @@ class HermesBuilderTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'commit mismatch'):identity.verify_source(source,pin,env)
 
 
+    @unittest.skipUnless(os.environ.get('HWB_HERMES_BASE_RUNTIME'), 'requires retained core-only Hermes runtime')
+    def test_core_only_runtime_is_rejected_before_native_workload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            dest=Path(temp)/'builder';self.command('init',dest)
+            result=self.command('doctor',dest,'--runtime',os.environ['HWB_HERMES_BASE_RUNTIME'])
+            self.assertEqual(2,result.returncode,result.stdout+result.stderr)
+            self.assertIn('runtime probe failed',json.loads(result.stdout)['error'])
+            self.assertFalse(list(dest.glob('.hwb-hermes-*/hermes-home/gateway.pid')))
+
     @unittest.skipUnless(os.environ.get('HWB_HERMES_LIVE_TEST') == '1', 'requires pinned Hermes runtime')
     def test_timeout_stops_its_owned_gateway(self):
         import time
@@ -199,10 +210,17 @@ class HermesBuilderTests(unittest.TestCase):
             runtime = os.environ['HWB_HERMES_RUNTIME']
             result = self.command('doctor', dest, '--runtime', runtime)
             self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+            doctor_record=json.loads(result.stdout)
+            self.assertEqual(['anthropic'],doctor_record['runtime']['optional_extras'])
+            self.assertEqual('0.87.0',doctor_record['runtime']['anthropic_sdk_version'])
             result = self.command('demo',dest,'--runtime',runtime)
             self.assertEqual(0,result.returncode,result.stdout[-5000:]+result.stderr)
             record=json.loads(result.stdout)
             self.assertTrue(record['gateway_cleanup']['result']['passed'])
+            launch=json.loads((Path(record['workspace']['retained_root'])/'launch.json').read_text())
+            query=launch['argv'][launch['argv'].index('--query')+1]
+            self.assertIn('Your task workspace is '+record['workspace']['retained_root']+'/fixture',query)
+            self.assertIn('do not search or modify sibling or ancestor directories',query)
             self.assertFalse(record['gateway_cleanup']['result'].get('alive_after_cleanup', False))
             self.assertTrue(record['outcome']['passed'])
             self.assertEqual([1,0],record['outcome']['native_terminal_exits'])

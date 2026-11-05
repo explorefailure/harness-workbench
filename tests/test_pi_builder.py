@@ -32,6 +32,8 @@ class PiBuilderTests(unittest.TestCase):
             link.symlink_to(Path(temp) / 'absent')
             self.assertEqual(2, self.command('init', link).returncode)
 
+    # Builder adapter/provider selection now evolves independently; historical
+    # experiment fixtures remain unchanged. Other original assets retain parity.
     def test_packaged_sources_match_experiment_and_all_assets_ship(self):
         patterns = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['setuptools']['package-data']['harness_workbench']
         for source in DATA.rglob('*'):
@@ -39,7 +41,7 @@ class PiBuilderTests(unittest.TestCase):
                 continue
             relative = source.relative_to(DATA)
             with self.subTest(file=str(relative)):
-                if source.name not in ('README.md', '.gitignore', 'pin-pi-1.4.0-node-26.13.0.json') and 'runtime' not in relative.parts:
+                if source.name not in ('README.md', '.gitignore', 'pin-pi-1.4.0-node-26.13.0.json', 'adapter.py', 'provider_config.py', 'task_checks.py', 'control_runtime.py', 'tool_call_control.mjs') and 'runtime' not in relative.parts:
                     self.assertEqual(source.read_bytes(), (ROOT / 'experiments/pi_coding_agent' / relative).read_bytes())
                 name = source.relative_to(DATA.parent).as_posix()
                 self.assertTrue(any(len(name.split('/')) == len(p.split('/')) and

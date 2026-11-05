@@ -471,13 +471,31 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
             t0 = time.monotonic()
             started = _utc()
             timed_out = False
+            context_process = None
             timeout_s = (spec.step_timeout_ms / 1000.0
                          if spec.step_timeout_ms else None)
             try:
-                proc = subprocess.run(step.argv, cwd=spec.dir,
-                                      capture_output=True, timeout=timeout_s)
-                exit_code = proc.returncode
-                out, err = proc.stdout, proc.stderr
+                if getattr(step, "attempt_context", None) == "hwb-attempt/v1":
+                    # Opt-in only: existing steps keep their execution contract.
+                    # Descendant supervision bounds outer-timeout error paths;
+                    # this is ownership tracking, never an OS sandbox.
+                    from pathlib import Path
+                    from .capture import run_bounded
+                    proc = run_bounded(step.argv, cwd=Path(spec.dir),
+                        env={**os.environ, "HWB_ATTEMPT_DIR": os.path.abspath(adir)},
+                        timeout=timeout_s or 3600, stdout_limit=8 * 1024 * 1024,
+                        stderr_limit=1024 * 1024, termination_grace=2,
+                        track_descendants=True)
+                    exit_code = proc.returncode
+                    timed_out = proc.timed_out
+                    out, err = proc.stdout, proc.stderr
+                    context_process = {k: v for k, v in vars(proc).items()
+                                       if k not in ("stdout", "stderr")}
+                else:
+                    proc = subprocess.run(step.argv, cwd=spec.dir,
+                                          capture_output=True, timeout=timeout_s)
+                    exit_code = proc.returncode
+                    out, err = proc.stdout, proc.stderr
             except subprocess.TimeoutExpired as e:
                 # A step that never returns is the likeliest hang in practice
                 # -- a model call is ordinary code that can block forever.
@@ -499,6 +517,8 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
                    "started": started,
                    "duration_ms": int((time.monotonic() - t0) * 1000),
                    "stdout_bytes": len(out), "stderr_bytes": len(err)}
+            if context_process is not None:
+                obs["attempt_context"] = {"schema": "hwb-attempt/v1", "process": context_process}
             if timed_out:
                 obs["timed_out"] = True
             caused_by = rec.frames()

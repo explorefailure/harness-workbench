@@ -164,15 +164,41 @@ def load_config(path: Path) -> dict[str, Any]:
         "pi_arguments",
         "network_mode",
         "capture_limits",
+        "provider",
+        "checks",
+        "controls",
     }
     unknown = sorted(set(config) - allowed)
     if unknown:
         raise AdapterError("unknown adapter config field(s): " + ", ".join(unknown))
+    if 'controls' in config:
+        from harness_workbench._adapter_controls import validate as validate_controls
+        try:
+            if config['controls'] is None:
+                raise ValueError('controls must be an object when present')
+            validate_controls(config['controls'], 'pi')
+        except ValueError as error:
+            raise AdapterError(str(error)) from error
     for key in ("inputs", "extensions", "pi_arguments"):
         if not isinstance(config.get(key), list) or not all(
             isinstance(item, str) and item for item in config[key]
         ):
             raise AdapterError(f"adapter config {key!r} must be a string list")
+    if 'provider' in config:
+        from provider_config import validate
+        try:
+            validate(config['provider'])
+        except ValueError as error:
+            raise AdapterError(str(error)) from error
+        if config['extensions']:
+            raise AdapterError('explicit provider mode does not load extensions')
+        conflicts = {'--provider', '--model', '--api-key', '--models', '--list-models'}
+        if any(arg.split('=')[0] in conflicts for arg in config['pi_arguments']):
+            raise AdapterError('provider/model/auth selection belongs in the provider field')
+    if 'checks' in config:
+        from task_checks import validate
+        try:validate(config['checks'])
+        except ValueError as error:raise AdapterError(str(error)) from error
     mode_values = [
         config["pi_arguments"][index + 1]
         for index, value in enumerate(config["pi_arguments"][:-1])
@@ -196,6 +222,13 @@ def load_config(path: Path) -> dict[str, Any]:
     for key, value in limits.items():
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise AdapterError(f"capture limit {key!r} must be a positive integer")
+    if config.get("controls", {}).get("values", {}).get("tool_call_extension") is not None:
+        _regular_relative(path.parent, "control_runtime.py", "control runtime helper")
+        from control_runtime import validate_profile
+        try:
+            validate_profile(config, path)
+        except ValueError as error:
+            raise AdapterError(str(error)) from error
     return config
 
 
@@ -232,7 +265,7 @@ def pi_environment(retained_root: Path, overrides: dict[str, str]) -> dict[str, 
     for every subject but one.
     """
     config_dir = retained_root / "pi-config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     return minimal_environment(
         retained_root,
         {
@@ -299,7 +332,7 @@ def parse_extension_errors(
     if stderr_text is None:
         return []
     known = {
-        str(path): path.relative_to(base).as_posix() for path in extension_paths
+        str(path): (path.relative_to(base).as_posix() if path.is_relative_to(base) else "<owned-control-wrapper>") for path in extension_paths
     }
     records: list[dict[str, str]] = []
     prefix = "Extension error ("
@@ -364,6 +397,9 @@ def capture(
     pin_path = _regular_relative(base, config.get("pin"), "pin")
     fixture_path = _directory_relative(base, config.get("fixture"), "fixture")
     task_path = _regular_relative(base, config.get("task"), "task")
+    control = config.get('controls', {}).get('values', {}).get('tool_call_extension')
+    if control is not None and (additional_extensions or evidence_files or environment):
+        raise AdapterError('tool_call_extension does not accept additional extension/evidence/environment overrides')
     input_values = [*config["inputs"], *additional_inputs]
     inputs = _unique_relative_inputs(base, input_values)
     if config_path.relative_to(base).as_posix() not in inputs:
@@ -379,6 +415,9 @@ def capture(
         *(path.relative_to(base).as_posix() for path in extension_paths),
         *_fixture_files(base, fixture_path),
     }
+    if 'provider' in config:
+        required_inputs.update({'adapter.py', 'normalizer.py', 'provider_config.py'})
+    if 'checks' in config:required_inputs.add('task_checks.py')
     missing_inputs = sorted(required_inputs - set(inputs))
     if missing_inputs:
         raise AdapterError(
@@ -400,6 +439,14 @@ def capture(
     shutil.copy2(task_path, workspace / task_path.name)
     before = manifest(workspace)
 
+    control_binding = None
+    if control is not None:
+        from control_runtime import render
+        wrapper, control_config, control_binding = render(config, base, retained_root)
+        extension_paths.append(wrapper)
+        evidence_files = ({'name':'tool_call_control', 'path':'control.trace.jsonl',
+                           'format':'jsonl','required':True,
+                           'environment_variable':'HWB_PI_CONTROL_TRACE'},)
     overrides = dict(environment or {})
     if not all(
         isinstance(name, str)
@@ -484,14 +531,33 @@ def capture(
             "environment_variable": environment_variable,
         }
 
+    provider_secrets = []
+    provider_env = {}
+    provider_name = None
+    if 'provider' in config:
+        if pi_version != '1.4.0':
+            raise AdapterError('explicit provider selection requires the Pi 1.4.0 profile')
+        from provider_config import prepare
+        try:
+            provider_name, provider_env, provider_secrets = prepare(config['provider'], retained_root / 'pi-config')
+        except ValueError as error:
+            raise AdapterError(str(error)) from error
+        if set(provider_env) & set(overrides):
+            raise AdapterError('caller environment conflicts with selected provider credential')
     pi_argv = [str(pi_path), *config["pi_arguments"]]
+    if provider_name:
+        pi_argv.extend(['--provider', provider_name, '--model', config['provider']['model']])
     for extension_path in extension_paths:
         pi_argv.extend(["-e", str(extension_path)])
     pi_argv.extend(["--print", "@" + task_path.name])
+    if control is not None:
+        overrides['HWB_PI_CONTROL_CONFIG'] = str(control_config)
+        provider_binding = digest_file(retained_root / 'pi-config' / 'models.json')
+    child_env = pi_environment(retained_root, {**overrides, **provider_env})
     process = run_bounded(
         pi_argv,
         cwd=workspace,
-        env=pi_environment(retained_root, overrides),
+        env=child_env,
         timeout=timeout,
         stdout_limit=config["capture_limits"]["stdout_bytes"],
         stderr_limit=config["capture_limits"]["stderr_bytes"],
@@ -506,10 +572,10 @@ def capture(
     # the primitive truncates at the limit and reports how much it discarded,
     # so a saturated run still yields the prefix that shows what went wrong.
     stdout_capture = capture_bytes(
-        process.stdout, source_bytes=process.stdout_source_bytes
+        process.stdout, source_bytes=process.stdout_source_bytes, redactions=provider_secrets
     )
     stderr_capture = capture_bytes(
-        process.stderr, source_bytes=process.stderr_source_bytes
+        process.stderr, source_bytes=process.stderr_source_bytes, redactions=provider_secrets
     )
     try:
         if process.stdout_overflow:
@@ -533,6 +599,7 @@ def capture(
             required=spec["required"],
             format_name=spec["format"],
             max_bytes=spec["max_bytes"],
+            redactions=provider_secrets,
         )
         # The adapter owns its wire names; the primitive owns the evidence.
         # `raw_sha256` is null for a file that was never created, where it used
@@ -559,14 +626,61 @@ def capture(
         if summary is not None
         else b""
     )
+    task_results = None
+    if 'checks' in config:
+        from task_checks import run
+        task_results = run(config['checks'], workspace, minimal_environment(retained_root / 'check-home', {'PYTHONDONTWRITEBYTECODE':'1'}), provider_secrets)
+    final_input_digests = {}
+    for name in inputs:
+        try:
+            final_input_digests[name] = digest_file(_regular_relative(base, name, 'input'))
+        except (OSError, ValueError):
+            final_input_digests[name] = None
+    if final_input_digests != input_digests:
+        errors.append('declared source inputs changed during capture')
+    control_metadata = {}
+    if "controls" in config:
+        from harness_workbench._adapter_controls import evidence as control_evidence
+        control_metadata["controls"] = control_evidence(config["controls"])
+    if control is not None:
+        from control_runtime import measure
+        measured = measure(control, evidence['tool_call_control'], summary, before, after,
+                           manifest(workspace), workspace)
+        control_metadata['controls'].update(measured)
+        control_metadata['controls']['rendered'] = {
+            'state':'rendered', 'profile':'pi-local-tool-call/v1', 'bound_files':control_binding}
+        if measured['effect']['errors']:
+            errors.extend('control: ' + e for e in measured['effect']['errors'])
+        for name, expected in control_binding.items():
+            try:
+                if digest_file(_regular_relative(retained_root, name, 'control artifact')) != expected:
+                    errors.append('rendered control artifact changed: ' + name)
+            except (OSError, ValueError):
+                errors.append('rendered control artifact missing/unsafe: ' + name)
+        try:
+            if digest_file(retained_root / 'pi-config' / 'models.json') != provider_binding:
+                errors.append('selected provider configuration changed')
+        except OSError:
+            errors.append('selected provider configuration missing')
+        if stdout_text and summary is not None:
+            for line in stdout_text.splitlines():
+                event = json.loads(line)
+                message = event.get('message', {})
+                if event.get('type') == 'message_end' and isinstance(message, dict) and message.get('role') == 'assistant':
+                    if message.get('model') != config['provider']['model'] or message.get('provider') != provider_name:
+                        errors.append('observed assistant provider/model differs from selected configuration')
     return {
+        **({'task_checks': task_results} if task_results is not None else {}),
         "schema": RUN_SCHEMA,
+        **control_metadata,
         "verdict": {"passed": not errors, "errors": errors},
         "configuration": {
+            **({"provider": config["provider"]} if "provider" in config else {}),
             "config": config_path.name,
-            "config_sha256": digest_file(config_path),
+            "config_sha256": input_digests[config_path.name],
             "input_digests": input_digests,
-            "extension_inputs": [path.relative_to(base).as_posix() for path in extension_paths],
+            "input_digests_after": final_input_digests,
+            "extension_inputs": [path.relative_to(base).as_posix() if path.is_relative_to(base) else "<owned-control-wrapper>" for path in extension_paths],
             "environment_names": sorted(overrides),
             "network_mode": config["network_mode"],
             "capture_limits": config["capture_limits"],
@@ -592,6 +706,7 @@ def capture(
             "retained_root": str(retained_root),
             "before": before,
             "after": after,
+            **({"after_checks": manifest(workspace)} if task_results is not None else {}),
         },
         "evidence": evidence,
         "pi": {
@@ -654,7 +769,7 @@ def main(argv: list[str] | None = None) -> int:
     except (AdapterError, OSError, KeyError, TypeError) as error:
         return failure_envelope(str(error))
     print(json.dumps(envelope, sort_keys=True, separators=(",", ":")))
-    return 0 if envelope["verdict"]["passed"] else 1
+    return 0 if envelope["verdict"]["passed"] and envelope.get("task_checks", {"passed": True})["passed"] and envelope.get("controls", {}).get("effect", {}).get("passed", True) else 1
 
 
 if __name__ == "__main__":

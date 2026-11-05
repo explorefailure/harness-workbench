@@ -80,7 +80,17 @@ def verify_runtime(source, pin, root, uv='uv'):
     version = probe([python, '-I', '-c', 'import sys; print(".".join(map(str,sys.version_info[:3])))'], root, env)
     if version != pin['python_version']:
         raise ValueError('Hermes Python version mismatch: ' + version)
-    dependency_check = probe([uv_path, 'sync', '--frozen', '--check', '--offline', '--no-dev', '--python', python], source, env, timeout=30)
+    extras = pin.get('extras', [])
+    if extras not in ([], ['anthropic']):
+        raise ValueError('unsupported Hermes dependency extras profile')
+    extra_args = [arg for extra in extras for arg in ('--extra', extra)]
+    dependency_check = probe([uv_path, 'sync', '--frozen', '--check', '--offline', '--no-dev', *extra_args, '--python', python], source, env, timeout=30)
+    identity['optional_extras'] = extras
+    if 'anthropic' in extras:
+        sdk_version = probe([python, '-I', '-c', 'import anthropic; print(anthropic.__version__)'], root, env)
+        if sdk_version != pin['anthropic_version']:
+            raise ValueError('Hermes Anthropic SDK version mismatch')
+        identity['anthropic_sdk_version'] = sdk_version
     version_text = probe([python, '-c', 'from hermes_cli._startup_fast import print_fast_version_info; print_fast_version_info(check_updates=False)'], source, env)
     if not version_text.startswith('Hermes Agent v' + pin['version'] + ' '):
         raise ValueError('Hermes version probe mismatch')

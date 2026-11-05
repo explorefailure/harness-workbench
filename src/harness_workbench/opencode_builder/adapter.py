@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import nullcontext
 from dataclasses import asdict
 import json
@@ -16,13 +17,24 @@ import tempfile
 from urllib.parse import urlsplit
 
 from harness_workbench.capture import (
-    capture_bytes, contained_path, digest_file, manifest, minimal_environment, run_bounded,
+    capture_bytes, contained_path, digest_file, manifest, minimal_environment, run_bounded, redact_bytes,
 )
+import provider_auth
+import task_checks
 from normalizer import summarize
 from scripted_provider import ScriptedProvider
 
 CONFIG_SCHEMA = 'opencode-hwb-config/v0.1'
 RUN_SCHEMA = 'opencode-hwb-run/v0.1'
+
+
+def control_runtime(base):
+    import importlib.util
+    path=regular(base, 'control_runtime.py')
+    spec=importlib.util.spec_from_file_location('hwb_opencode_control_runtime', path)
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def regular(root, name):
@@ -35,9 +47,25 @@ def regular(root, name):
 def load_config(path):
     config = json.loads(path.read_text())
     allowed = {'schema', 'pin', 'fixture', 'task', 'inputs', 'provider'}
-    if not isinstance(config, dict) or config.get('schema') != CONFIG_SCHEMA or set(config) != allowed:
+    required_fields = allowed.copy()
+    allowed.update({'checks', 'controls'})
+    if not isinstance(config, dict) or config.get('schema') != CONFIG_SCHEMA or not required_fields <= set(config) or set(config) - allowed:
         raise ValueError('config requires exactly: ' + ', '.join(sorted(allowed)))
+    if 'controls' in config:
+        from harness_workbench._adapter_controls import validate as validate_controls
+        if config['controls'] is None:
+            raise ValueError('controls must be an object when present')
+        validate_controls(config['controls'], 'opencode')
     root = path.parent
+    # Old scripted/local configs predate these helpers. Migrate only that
+    # complete legacy shape in memory; never rewrite the owner's config.
+    helpers = {'provider_auth.py', 'task_checks.py'}
+    if (isinstance(config['inputs'], list) and all(isinstance(n, str) for n in config['inputs'])
+            and not helpers.intersection(config['inputs']) and 'checks' not in config
+            and isinstance(config['provider'], dict)
+            and config['provider'].get('mode') in ('scripted', 'local')):
+        config['inputs'] = [*config['inputs'], *sorted(helpers)]
+        config['input_migration'] = sorted(helpers)
     inputs = config['inputs']
     if not isinstance(inputs, list) or not inputs or not all(isinstance(n, str) for n in inputs):
         raise ValueError('inputs must be a nonempty list of relative files')
@@ -48,7 +76,7 @@ def load_config(path):
     fixture = contained_path(root, config['fixture'])
     if not fixture.is_dir() or fixture.is_symlink():
         raise ValueError('fixture must be an owned directory')
-    required = {path.name, config['pin'], config['task'], 'adapter.py', 'normalizer.py', 'scripted_provider.py'}
+    required = {path.name, config['pin'], config['task'], 'adapter.py', 'normalizer.py', 'scripted_provider.py', 'provider_auth.py', 'task_checks.py'}
     for item in fixture.rglob('*'):
         if item.is_symlink() or not (item.is_file() or item.is_dir()):
             raise ValueError('fixture contains a link or special file')
@@ -57,23 +85,17 @@ def load_config(path):
     missing = required - set(inputs)
     if missing:
         raise ValueError('inputs must declare itself and all adapter/task/fixture files: ' + ', '.join(sorted(missing)))
-    provider = config['provider']
-    if not isinstance(provider, dict):
-        raise ValueError('provider must be an object')
-    if provider.get('mode') == 'scripted':
-        if set(provider) != {'mode'}:
-            raise ValueError('scripted provider accepts only mode')
-    elif provider.get('mode') == 'local':
-        if set(provider) != {'mode', 'base_url', 'model'}:
-            raise ValueError('local provider requires mode, base_url and model')
-        url = urlsplit(provider['base_url'])
-        if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.query or url.fragment:
-            raise ValueError('base_url must be an HTTP(S) endpoint without credentials, query or fragment')
-        model = provider['model']
-        if not isinstance(model, str) or not model.strip() or any(c.isspace() for c in model):
-            raise ValueError('model must be a nonempty model ID without whitespace')
-    else:
-        raise ValueError('provider mode must be scripted or local')
+    provider_auth.validate(config['provider'], {'anthropic', 'openai', 'google', 'openrouter'})
+    if 'checks' in config:
+        task_checks.validate(config['checks'])
+        if 'task_checks.py' not in inputs:
+            raise ValueError('inputs must declare task_checks.py for independent checks')
+    if config.get('controls', {}).get('values'):
+        from harness_workbench._opencode_controls import validate_config
+        validate_config(config, root)
+        if 'control_runtime.py' not in config['inputs']:
+            raise ValueError('controls require declared control_runtime.py input')
+        regular(root, 'control_runtime.py')
     return config
 
 
@@ -103,15 +125,18 @@ def environment(root):
     return minimal_environment(root, overrides, passthrough=('PATH', 'LANG', 'LC_ALL', 'SYSTEMROOT'))
 
 
-def process_record(result):
+def process_record(result, redactions=()):
     record = asdict(result)
-    record['stdout'] = capture_bytes(result.stdout, source_bytes=result.stdout_source_bytes)
-    record['stderr'] = capture_bytes(result.stderr, source_bytes=result.stderr_source_bytes)
+    record['stdout'] = capture_bytes(result.stdout, source_bytes=result.stdout_source_bytes, redactions=redactions)
+    record['stderr'] = capture_bytes(result.stderr, source_bytes=result.stderr_source_bytes, redactions=redactions)
     return record
 
 
 def clean_exit(result):
-    return result.returncode == 0 and result.termination_reason is None and not result.group_alive_after_cleanup
+    descendants_ok = not hasattr(result, 'descendant_cleanup') or (
+        isinstance(result.descendant_cleanup, dict) and result.descendant_cleanup.get('passed') is True)
+    return (result.returncode == 0 and result.termination_reason is None
+            and not result.group_alive_after_cleanup and descendants_ok)
 
 
 def doctor(config_path, launcher, root):
@@ -154,16 +179,17 @@ def runtime_config(provider, base_url):
         '$schema': 'https://opencode.ai/config.json', 'autoupdate': False,
         'share': 'disabled', 'snapshot': False,
         'enabled_providers': ['hwb'], 'model': 'hwb/' + model, 'small_model': 'hwb/' + model,
-        'provider': {'hwb': {'npm': '@ai-sdk/openai-compatible', 'name': 'Workbench explicit endpoint',
-            'options': {'baseURL': base_url, 'apiKey': 'hwb-local-no-credential'},
+        'provider': {'hwb': {'npm': ({'anthropic':'@ai-sdk/anthropic','openai':'@ai-sdk/openai','google':'@ai-sdk/google',
+                'openrouter':'@openrouter/ai-sdk-provider'}[provider['name']] if provider.get('mode')=='native' else '@ai-sdk/openai-compatible'), 'name': 'Workbench explicit endpoint',
+            'options': {'baseURL': base_url, 'apiKey': '{env:HWB_SELECTED_PROVIDER_KEY}' if provider.get('api_key_env') else 'hwb-local-no-credential'},
             'models': {model: {'name': model, 'tool_call': True,
-                'limit': {'context': 32768, 'output': 4096}}}}},
+                'limit': {'context': provider.get('context_window',32768), 'output': provider.get('max_tokens',4096)}}}}},
         'permission': {'*': 'deny', 'read': 'allow', 'bash': 'allow', 'edit': 'allow'},
         'lsp': False, 'formatter': False, 'plugin': [], 'mcp': {},
     }
 
 
-def evaluate_demo(record, before_test, after_test, scripted):
+def evaluate_demo(record, before_test, after_test, scripted, redactions=()):
     errors = list(record['verdict']['errors'])
     before = {p['path']: p for p in record['workspace']['before']}
     after = {p['path']: p for p in record['workspace']['after']}
@@ -187,8 +213,8 @@ def evaluate_demo(record, before_test, after_test, scripted):
     if scripted and [t['call_id'] for t in tools] != [f'hwb-repair-{n}' for n in range(4)]:
         errors.append('scripted tool sequence changed')
     return {'passed': not errors, 'errors': errors, 'changed_paths': changed,
-        'native_bash_exits': exits, 'independent_before': process_record(before_test),
-        'independent_after': process_record(after_test),
+        'native_bash_exits': exits, 'independent_before': process_record(before_test, redactions),
+        'independent_after': process_record(after_test, redactions),
         'scope': 'coding repair only; no claim about arbitrary workload correctness'}
 
 
@@ -198,10 +224,14 @@ def capture(config_path, launcher, timeout, parent, demo=False, check_only=False
     root = Path(tempfile.mkdtemp(prefix='.hwb-opencode-', dir=parent)).resolve()
     config, binary, identity = doctor(config_path, launcher, root)
     record = {'schema': RUN_SCHEMA, 'runtime': identity, 'workspace': {'retained_root': str(root)}}
+    if 'controls' in config:
+        from harness_workbench._adapter_controls import evidence as control_evidence
+        record['controls'] = control_evidence(config['controls'])
     if check_only:
         record['verdict'] = {'passed': True, 'errors': [], 'scope': 'runtime identity and config validation only'}
         return record
     base = config_path.parent
+    record['input_migration'] = config.get('input_migration', [])
     record['inputs'] = [{'path': n, 'sha256': digest_file(base / n)} for n in sorted(config['inputs'])]
     fixture = root / 'fixture'
     shutil.copytree(base / config['fixture'], fixture)
@@ -209,28 +239,43 @@ def capture(config_path, launcher, timeout, parent, demo=False, check_only=False
         item.chmod(0o755 if item.is_dir() else 0o644)
     record['workspace']['before'] = manifest(fixture)
     env = environment(root)
+    test_env = minimal_environment(root / 'independent-home', {'PYTHONDONTWRITEBYTECODE': '1'})
+    provider_env, provider_secrets = provider_auth.resolve(config['provider'])
     if config['provider']['mode'] == 'scripted':
         (root / 'original.py').write_bytes((fixture / 'slugger.py').read_bytes())
     test_argv = [sys.executable, '-B', '-m', 'unittest', '-v']
-    before_test = run_bounded(test_argv, cwd=fixture, env=env, timeout=20, termination_grace=1) if demo else None
+    before_test = run_bounded(test_argv, cwd=fixture, env=test_env, timeout=20, termination_grace=1) if demo else None
     scripted = config['provider']['mode'] == 'scripted'
     context = ScriptedProvider(fixture) if scripted else nullcontext(None)
     with context as provider:
         endpoint = provider.base_url if provider else config['provider']['base_url']
         runtime = runtime_config(config['provider'], endpoint)
+        if config.get('controls', {}).get('values'):
+            render = control_runtime(base).render
+            record['controls'] = render(config['controls'], runtime, root)
+            if 'tool_counter' in config['controls']['values']:
+                # Explicit owned plugin profile; fresh homes/project discovery/default
+                # plugins and offline package restrictions remain in force.
+                env.update({'OPENCODE_PURE':'false', 'OPENCODE_DISABLE_CLAUDE_CODE':'true',
+                    'OPENCODE_DISABLE_EXTERNAL_SKILLS':'true', 'OPENCODE_DISABLE_LSP_DOWNLOAD':'true'})
         (root / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n')
+        env.update(provider_env)
         env['OPENCODE_CONFIG'] = str(root / 'runtime.json')
         model = 'hwb/' + config['provider'].get('model', 'repair')
         argv = [str(binary), 'run', '--format', 'json', '--title', 'Workbench repair', '--model', model, regular(base, config['task']).read_text()]
+        (root / 'launch.json').write_bytes(redact_bytes((json.dumps({'argv': argv, 'environment': env}, indent=2)+'\n').encode(), provider_secrets)[0])
         result = run_bounded(argv, cwd=fixture, env=env, timeout=timeout,
-            stdout_limit=4_194_304, stderr_limit=524_288, termination_grace=2)
-    record['process'] = process_record(result)
-    record['summary'] = summarize(result.stdout)
-    (root / 'stdout.jsonl').write_bytes(result.stdout)
-    (root / 'stderr.txt').write_bytes(result.stderr)
+            stdout_limit=4_194_304, stderr_limit=524_288, termination_grace=2,
+            track_descendants=True)
+    record['process'] = process_record(result, provider_secrets)
+    stored_stdout = base64.b64decode(record['process']['stdout']['base64'])
+    stored_stderr = base64.b64decode(record['process']['stderr']['base64'])
+    record['summary'] = summarize(stored_stdout)
+    (root / 'stdout.jsonl').write_bytes(stored_stdout)
+    (root / 'stderr.txt').write_bytes(stored_stderr)
     errors = list(record['summary']['errors'])
     if not clean_exit(result):
-        errors.append('process failed, hit a capture bound, or retained a surviving process')
+        errors.append('process failed, hit a capture bound, or cleanup could not be verified')
     if provider:
         record['scripted_provider'] = {'requests': provider.requests, 'errors': provider.errors}
         (root / 'provider.json').write_text(json.dumps(record['scripted_provider']))
@@ -241,15 +286,44 @@ def capture(config_path, launcher, timeout, parent, demo=False, check_only=False
         errors.append('declared source inputs changed during capture')
     record['network'] = {'mode': 'scripted-loopback' if scripted else 'explicit-local-endpoint',
         'base_url': endpoint, 'model': config['provider'].get('model', 'repair'),
-        'containment': False, 'ambient_credentials_passed': False}
+        'containment': False, 'ambient_credentials_passed': False,
+        'provider': config['provider'], 'selected_credential_passed': bool(provider_secrets)}
     record['verdict'] = {'passed': not errors, 'errors': errors, 'scope': 'capture validity; task correctness unchecked'}
     if demo:
-        after_test = run_bounded(test_argv, cwd=fixture, env=env, timeout=20, termination_grace=1)
-        record['outcome'] = evaluate_demo(record, before_test, after_test, scripted)
+        after_test = run_bounded(test_argv, cwd=fixture, env=test_env, timeout=20, termination_grace=1)
+        record['outcome'] = evaluate_demo(record, before_test, after_test, scripted, provider_secrets)
         record['workspace']['after_independent_tests'] = manifest(fixture)
         if record['workspace']['after_independent_tests'] != record['workspace']['after']:
             record['outcome']['errors'].append('independent tests changed fixture files')
             record['outcome']['passed'] = False
+    if 'checks' in config:
+        record['task_checks'] = task_checks.run(config['checks'], fixture,
+            minimal_environment(root / 'checks-home', {'PYTHONDONTWRITEBYTECODE':'1'}), provider_secrets)
+        record['workspace']['after_checks'] = manifest(fixture)
+    # Tests/checks are part of the run and may accidentally touch source inputs.
+    record['inputs_after'] = []
+    for n in sorted(config['inputs']):
+        try:
+            digest = digest_file(regular(base, n))
+        except (OSError, ValueError):
+            digest = None
+        record['inputs_after'].append({'path': n, 'sha256': digest})
+    if record['inputs_after'] != record['inputs']:
+        error = 'declared source inputs changed during capture'
+        if error not in record['verdict']['errors']:
+            record['verdict']['errors'].append(error)
+        record['verdict']['passed'] = False
+        if 'outcome' in record:
+            if error not in record['outcome']['errors']:
+                record['outcome']['errors'].append(error)
+            record['outcome']['passed'] = False
+    if config.get('controls', {}).get('values'):
+        measure = control_runtime(base).measure
+        record['controls'] = measure(record['controls'], record, root)
+        record['experiment'] = record['controls']['effect']
+        if record['controls'].get('errors'):
+            record['verdict']['errors'].extend(record['controls']['errors'])
+            record['verdict']['passed'] = False
     (root / 'result.json').write_text(json.dumps(record, sort_keys=True) + '\n')
     return record
 
@@ -273,7 +347,7 @@ def main(argv=None):
         print(json.dumps({'schema': RUN_SCHEMA, 'error': str(error)}))
         return 2
     print(json.dumps(result, sort_keys=True, separators=(',', ':')))
-    return 0 if result.get('outcome', result['verdict'])['passed'] else 1
+    return 0 if result.get('outcome', result['verdict'])['passed'] and result.get('task_checks', {'passed': True})['passed'] and result.get('experiment', {'passed': True})['passed'] else 1
 
 
 if __name__ == '__main__':

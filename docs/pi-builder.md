@@ -1,13 +1,68 @@
 # Pi builder integration — release candidate
 
+[All builder adapters](builder-adapters.md) · [Workbench documentation](../README.md#documentation)
+
 This candidate turns the existing Pi adapter into an owned builder workflow.
 It is not yet a published release. The default profile is Pi 1.4.0 with Node
 26.13.0 and a locked undici 8.12.3 override. Linux and macOS are the target
 platforms; verify the exact candidate's hosted checks before release.
 
+## Choose your model after installation
+
+Pi 1.4.0 can now use its native `models.json` and catalog providers without a
+custom provider extension. After completing the installation below, run these commands from the owned
+workspace. Replace the endpoint/model placeholders with your running server:
+
+```sh
+hwb-pi configure . --base-url http://127.0.0.1:11434/v1 --model YOUR_MODEL_ID --context-window 65536 --check '["python3", "-B", "-m", "unittest", "-v"]'
+hwb-pi run model_adapter_config.json --pi ./runtime/node_modules/.bin/pi --timeout 600 --output model.result.json
+```
+
+For an authenticated endpoint add `--api-key-env MY_MODEL_KEY`. Set its value
+outside the config through your shell/secret manager. For a Pi catalog provider
+use `--provider PROVIDER_ID --model MODEL_ID --api-key-env MY_MODEL_KEY`; an
+explicit proxy `--base-url` is optional. Native providers use catalog API/context
+metadata. Compatible APIs default to `openai-completions`; other accepted APIs
+are `openai-responses`, `anthropic-messages` and `google-generative-ai`. All four
+have authenticated local native-tool protocol-fixture coverage. Only Pi 1.4.0 supports this new config path.
+
+`configure` writes a NEW config, leaving the scripted repair unchanged. Use
+`--config-name NEW_NAME.json` to keep another setup. It does not contact a model
+or change the server. `--offline` disables automatic catalog/network activity;
+explicit inference requests still run. Compatible context/output metadata does
+not reconfigure server context. Use `--max-tokens` to change its output limit.
+
+The config's optional `provider` field selects mode `compatible` (base_url,
+model, optional api_key_env/api/context_window/max_tokens) or `native` (name,
+model, api_key_env, optional base_url). With this field, legacy `extensions` and competing
+provider/model/key flags in pi_arguments are rejected. The declared
+`controls.values.tool_call_extension` profile below is the supported local hook path. Declare adapter.py,
+normalizer.py and provider_config.py along with the config/task/fixture inputs.
+
+Repeatable `--check JSON_ARGV` adds independently bounded task checks and declares
+task_checks.py. Inspect `task_checks.passed` separately from `verdict`; either
+failure gives a nonzero adapter exit. Check commands run without provider keys.
+See the [shared guide](builder-adapters.md#run-your-task-and-checks) for the full
+check schema. The default `demo` remains the optional scripted reference control.
+
+Local fixtures validate compatible authentication, a catalog OpenRouter route,
+credential redaction, auth failure and independent checks. Pi passed the strict
+Qwen 27B repair: failing baseline, native exits [1, 0], only slugger.py changed,
+independent tests passed and cleanup succeeded. Actual hosted accounts remain
+unvalidated. Fresh ARM64 Mac checks are described under local platform
+validation below. OAuth/saved-account import is outside this API-key path.
+
+
 ## Install and run the first repair
 
 Put Node 26.13.0 on PATH. From this reviewed Workbench candidate checkout:
+
+The Workbench install requires Python virtual-environment support (including
+`ensurepip` on distributions that package it separately) and access to the
+declared build backend, `setuptools>=77`. The default source-install command
+may fetch that build dependency; it is not an offline-install claim. A local
+Workbench wheel installs without runtime dependency downloads. Native harness
+installation below is a separate step with its own downloads.
 
 ```sh
 python3 -m venv .venv
@@ -28,6 +83,10 @@ virtual environment active so commands use the installed candidate.
 The demo uses Pi's actual read/edit/bash tools with an offline scripted provider.
 It reproduces failing tests, edits the implementation, reruns the tests and
 checks the exact outcome independently. It does not measure live-model reasoning.
+
+After installation, use [model selection](#choose-your-model-after-installation)
+and then [your own workload](#bring-your-own-workload). The scripted demo above
+is an optional integration diagnostic.
 
 ## Commands and verdicts
 
@@ -52,8 +111,13 @@ not auto-deleted: preserve the evidence you need before cleaning up.
 
 ## Bring your own workload
 
-Copy coding_adapter_config.json to your-config.json. Change its task, fixture,
-extensions, provider, tools and system prompt. Update inputs to include the new
+Follow [the shared runnable task walkthrough](builder-adapters.md#a-small-task-you-can-adapt)
+with `HWB_TASK_CONFIG=model_adapter_config.json` after running `configure`.
+It supplies new files, declares checks and runs `own_task.json`.
+
+For another model-backed workload, copy `model_adapter_config.json` to
+`your-config.json` and change its task and fixture. Keep `extensions` empty;
+provider selection belongs in `provider`, not `pi_arguments`. Update inputs to include the new
 config itself, pin, task, every fixture file and every extension. Paths must be
 relative files within the owned workspace; escaping paths fail before execution.
 
@@ -63,8 +127,8 @@ hwb-pi run your-config.json --pi ./runtime/node_modules/.bin/pi --output custom.
 
 Do not reuse the demo's coding oracle for another task. Add independent checks
 for your declared outcomes. The private Pi configuration does not copy saved
-credentials; live-provider authentication and outcome evaluation require a
-separate integration design.
+credentials; saved-account/OAuth authentication remains outside this API-key path.
+Use explicit provider selection and declared checks for model-backed tasks.
 
 For a sealed outer Workbench record, expose the owned Pi launcher on PATH:
 
@@ -77,6 +141,43 @@ hwb verify RUN_ID
 Also inspect the inner step exit and verdict. hwb run exit 0 only means the outer
 recorder completed. Do not reset a freeze baseline to conceal changed inputs;
 start a new owned workspace for a new setup.
+
+## Local platform validation
+
+The Mac validation used fresh Pi 1.4.0 with Node 26.13.0 and the locked
+undici 8.12.3 override.
+
+Fresh owned-workspace validation on ARM64 macOS 26.5 on 2026-11-03 passed
+runtime identity checks. The complete source suite ran with Workbench Python
+3.11.15 and 3.14.7: each ran 464 tests, with 463 passing and one skip because
+the historical core-only Hermes runtime was not installed. A clean installed
+wheel built with pinned setuptools 83.0.0 passed all nine authenticated local
+native protocol routes and all three scripted native-tool repairs.
+
+These measurements establish local ARM64 Mac execution for this candidate
+snapshot. These scripted measurements alone do not measure model task outcomes,
+hosted
+account access, current-candidate hosted CI or macOS x64. The earlier Qwen
+repair results are separate Linux model evidence. The historical Pi baseline
+profile was not installed for this Mac validation. Exact-candidate hosted CI
+remains a release gate.
+
+A separate installed ARM64 Mac execution of the documented `total(values)` task
+used the existing Linux Qwen 27B service through an owned loopback-only SSH tunnel.
+One fresh attempt with a 1200-second bound completed in 463.60 seconds; native
+unit-test exits were `[1, 0, 0]`. The external baseline exited 1, final independent
+tests/checks passed, only `total.py` changed, and original input/test bytes stayed
+unchanged. A separate deterministic 100-integer-list probe passed. Recorded
+process-group cleanup passed. These are Mac client/native-tool observations with
+Linux inference, not Mac inference benchmarks, hosted accounts or universal
+model/task compatibility. OpenCode now supervises observed owned descendants, with Linux source/installed
+and Mac source native evidence; Mac clean wheel and source-archive installed native regressions also passed.
+These functional results do not establish release-artifact conformance. Earlier timeout failures remain retained, and normal model-task
+success does not establish cancellation behavior. Evidence is
+retained in the local `further-validation/` bundle. No outer sealed model-task
+record was produced.
+The extra passing native test is retained; the earlier exact `[1, 0]` sequence
+flag stays false, separately from the independently verified repair outcome.
 
 ## Compatibility and dependency contract
 
@@ -122,3 +223,127 @@ quality and hostile-code/network containment are outside this milestone.
 The demo normalizes shipped modes to 0644 (shell launchers 0755), uses umask 022
 and disables Python bytecode for its test command. It still rejects unexpected
 files and permission changes. Custom workloads retain their own semantics.
+
+
+## Local custom-task evidence bridge
+
+The unreleased candidate also provides `hwb-adapter spec HARNESS CONFIG
+--launcher OWNED_RUNTIME --output NEW_SPEC.json`. Use `pi` as `HARNESS`;
+for Hermes the launcher argument is the owned source directory, while Pi and
+OpenCode take their pinned executable. It stages declared task inputs afresh
+for each outer retry/sample and retains selected results/fixture files inside
+the sealed record. Configure independent checks and inspect their verdicts;
+outer completion and sealed verification do not establish task success.
+
+This bridge revision accepts scripted or unauthenticated HTTP loopback routes
+only. Native-client bridge qualification currently covers Pi/OpenCode on Linux;
+Hermes native bridge execution is now measured on Linux. The earlier Pi
+artifact passed Mac ARM64 source/wheel/source-archive bridge/control gates;
+newer control changes need separate platform qualification. Earlier direct
+adapter/model/platform evidence remains separate. `hwb-adapter capabilities
+pi` reports the new control contract: the local `tool_call_extension` profile is
+implemented; other native controls remain unsupported. Unsupported values fail clearly; defaults remain compatible.
+
+See the [shared builder guide](builder-adapters.md)'s “Seal a local custom task with the
+evidence bridge” section for generation, budgets, retained paths and limitations.
+Declared code is trusted; the bridge is not an OS sandbox.
+
+
+## Declared local tool-call extension
+
+The first supported control is `controls.values.tool_call_extension` in the
+Pi1.4.0/Node26.13.0 profile. It supports unauthenticated HTTP loopback Chat
+Completions only. Keep the exact `pi_arguments` generated by `hwb-pi configure`,
+with an empty legacy `extensions` list. Provider/auth/model flags, evidence
+flags and alternate tool/session/settings arguments cannot be added to this
+profile. Other existing direct configurations retain their behavior.
+
+A hook is a declared ES module with this **narrow** interface:
+
+```javascript
+export default async function (event, settings) {
+  if (event.toolName === "edit") {
+    return {block: settings.block, reason: "Declared edit experiment"};
+  }
+}
+```
+
+It receives a deeply frozen copy of the native tool event and settings, not Pi's
+provider/session/tool-registration API. Return undefined to allow, or an object
+containing boolean `block` and optional string `reason`. Invalid returns,
+exceptions and asynchronous deadlines fail closed and invalidate capture.
+`timeout_ms` is1..5000; synchronous CPU loops cannot be preempted by a JavaScript
+timer, so the outer native-process deadline remains necessary. A timer does not
+cancel an already running asynchronous operation; failed capture and owned
+process cleanup remain required. No API allows
+the hook to replace Workbench's recording mode or selected provider by accident.
+Trusted executable code still has Node builtins and filesystem access; this is
+not an OS sandbox or protection against deliberately malicious code.
+
+Merge the following into your complete config, using actual file hashes and an
+existing regular fixture file as `expect.path`:
+
+```json
+{
+  "controls": {
+    "schema": "hwb-native-controls/v1",
+    "harness": "pi",
+    "values": {
+      "tool_call_extension": {
+        "entry": "guard.mjs",
+        "files": {"guard.mjs": "REPLACE_WITH_LOWERCASE_SHA256"},
+        "settings": {"block": true},
+        "expect": {"tool": "edit", "path": "slugger.py", "effect": "unchanged"},
+        "timeout_ms": 1000
+      }
+    }
+  }
+}
+```
+
+The placeholder is deliberately invalid; compute it from the exact file bytes.
+Declare `guard.mjs`, every dependency, `control_runtime.py` and
+`tool_call_control.mjs` in top-level `inputs`. `files` binds the entry and up to64
+`.mjs`/`.json` files with lowercase SHA256 digests. Bare-package imports,
+undeclared local module imports, links, package.json/node_modules profiles and
+lazy installation are unsupported. Normal module imports from the owned tree
+resolve only declared files or `node:` builtins. This is not a general check on
+filesystem reads made by trusted code. There is no npm dependency provisioning
+or full TypeScript/native Pi extension API in this first profile.
+
+Inputs are verified before native execution, then copied to an owned control
+source tree. The wrapper and rendered configuration are hash-bound and checked
+again afterward, as is the selected provider configuration. Assistant events
+must report the selected provider/model. A load marker alone establishes neither
+a tool attempt nor a useful effect: the effect oracle matches hook decisions
+with native call IDs, tool names, paths and native error results, and compares
+independently collected target hashes. Checks must preserve the target afterward.
+
+For baseline set `settings.block` false and `expect.effect` changed; for enabled
+set block true and effect unchanged. Keep task/model/fixture/checks identical.
+An inversion keeps the enabled expectation but breaks the declared hook or its
+dependency, updating its digest deliberately. Generate a NEW outer spec for
+each case with `hwb-adapter spec pi ...`; never reset an older freeze baseline.
+Native read/bash tools remain available. Blocking edit does not prevent a model
+from using another tool to change the file: that makes the unchanged-file
+oracle fail and is evidence of the limitation, not a containment success.
+
+Inspect inner `controls.requested`, `rendered`, `activation` and `effect`
+separately. The bridge copies these observations and the effect verdict to
+`experiment`; `task_success` still comes only from independent task checks.
+A successful denial may have valid capture, passing experiment and failing task.
+An inverted hook can have valid capture and passing task but failing experiment.
+Both produce nonzero adapter/worker exits; outer recorder completion and sealed
+verification remain separate. Missing attempts or missing evidence never count
+as a control pass. `native/control.trace.jsonl`, wrapper/config/source copies,
+inner results and retained fixture bytes are sealed in the outer record.
+
+Local native-client qualification covers baseline, enabled, inverted dependency,
+load error, undeclared import, asynchronous timeout, thrown error, invalid result,
+corrupt stdout and synchronous-hang cleanup. The experiment changes only target.txt in the tiny
+retained task; original inputs are checked independently. This protocol fixture
+is not a hosted account test or model-quality measurement. Local Qwen confirmation
+is reported separately in the implementation plan and retained assurance bundle.
+The earlier Pi artifact passed Mac ARM64 source/wheel/source-archive gates.
+Hermes now has Linux native bridge observations. Broader native-feature/controller
+campaign qualification remains separate from these direct control oracles.
