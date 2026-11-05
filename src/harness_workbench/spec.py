@@ -62,15 +62,17 @@ def _safe_component(value: Any, field: str) -> str:
 
 
 class Step:
-    __slots__ = ("id", "argv", "inputs")
+    __slots__ = ("id", "argv", "inputs", "attempt_context")
 
-    def __init__(self, id: str, argv: List[str], inputs: List[str]):
+    def __init__(self, id: str, argv: List[str], inputs: List[str], attempt_context=None):
         self.id = id
         self.argv = argv
         self.inputs = inputs
+        self.attempt_context = attempt_context
 
     def as_record(self) -> Dict[str, Any]:
-        return {"id": self.id, "argv": list(self.argv)}
+        return {"id": self.id, "argv": list(self.argv),
+                **({"attempt_context": self.attempt_context} if self.attempt_context else {})}
 
 
 class FeatureRef:
@@ -120,7 +122,7 @@ class Spec:
             for f in raw.get("features", [])
         ]
         self.steps = [
-            Step(s["id"], list(s["argv"]), list(s.get("inputs", [])))
+            Step(s["id"], list(s["argv"]), list(s.get("inputs", [])), s.get("attempt_context"))
             for s in raw["steps"]
         ]
 
@@ -184,6 +186,8 @@ def load(path: str) -> Spec:
                 any(not isinstance(arg, str) for arg in s["argv"]) or
                 not s["argv"][0]):
             raise SpecError("step %r: argv must be a non-empty list" % s.get("id"))
+        if "attempt_context" in s and s["attempt_context"] != "hwb-attempt/v1":
+            raise SpecError("unsupported attempt_context")
         inputs = s.get("inputs", [])
         if (not isinstance(inputs, list) or
                 any(not isinstance(item, str) for item in inputs)):
@@ -196,6 +200,9 @@ def load(path: str) -> Spec:
         v = raw.get(key)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v <= 0):
             raise SpecError("%s must be a positive integer, got %r" % (key, v))
+
+    if any(s.get("attempt_context") for s in steps) and not raw.get("step_timeout_ms"):
+        raise SpecError("attempt_context requires step_timeout_ms")
 
     replicates = raw.get("replicates")
     if replicates is not None:

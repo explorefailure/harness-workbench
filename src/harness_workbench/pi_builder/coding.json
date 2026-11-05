@@ -1,0 +1,29 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "confirmation",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {"name": "freeze"},
+    {"name": "receipt"}
+  ],
+  "step_timeout_ms": 60000,
+  "steps": [
+    {
+      "id": "pi-coding-repair",
+      "argv": ["./run_coding_adapter.sh"],
+      "inputs": [
+        "run_coding_adapter.sh",
+        "coding_adapter_config.json",
+        "adapter.py",
+        "coding_runner.py",
+        "coding_oracle.py",
+        "normalizer.py",
+        "coding_provider.ts",
+        "pin.json",
+        "coding_task.md",
+        "coding_fixture/slugger.py",
+        "coding_fixture/test_slugger.py"
+      ]
+    }
+  ]
+}

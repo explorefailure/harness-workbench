@@ -141,6 +141,13 @@ class Bounded:
         return self.termination_reason == TIMEOUT
 
 
+@dataclass(frozen=True)
+class _SupervisedBounded(Bounded):
+    """Opt-in observed-descendant evidence; ordinary Bounded bytes stay stable."""
+
+    descendant_cleanup: dict[str, Any] | None = None
+
+
 def _group_alive(pgid: int) -> bool:
     """Whether any process remains in the group.
 
@@ -191,6 +198,7 @@ def run_bounded(
     stderr_limit: int = DEFAULT_STDERR_LIMIT,
     termination_grace: float = 5.0,
     forward_signals: bool = True,
+    track_descendants: bool = False,
 ) -> Bounded:
     """Run `argv` under a wall clock and per-stream byte ceilings.
 
@@ -207,11 +215,27 @@ def run_bounded(
     Output past a limit is dropped, not buffered: memory stays bounded by the
     limits themselves, and `*_source_bytes` preserves how much was discarded.
 
+    Opt-in descendant tracking also cleans observed children in other sessions.
+    It verifies kernel birth identity before signaling each recorded process;
+    it cannot discover a child that forks and reparents between observations.
+
     Raises CaptureError only for a request that cannot be measured -- a
     nonpositive timeout or limit. Everything the child does is returned.
     """
     if timeout <= 0 or stdout_limit <= 0 or stderr_limit <= 0 or termination_grace <= 0:
         raise CaptureError("process timeout and capture limits must be positive")
+
+    # This is cooperative lifecycle supervision, not filesystem/process
+    # containment. In particular a process can detach/reparent between samples.
+    # Unsupported inspection must fail before launching an unsupervised client.
+    tree = None
+    if track_descendants:
+        from .process_tree import ObservedProcessTree, ProcessTreeError
+
+        try:
+            ObservedProcessTree.check_supported()
+        except ProcessTreeError as error:
+            raise CaptureError(str(error)) from error
 
     argv = list(argv)
     forwarded: list[int] = []
@@ -226,7 +250,7 @@ def run_bounded(
 
     def _forward(signum: int, _frame: Any) -> None:
         forwarded.append(signum)
-        if process is not None and process.poll() is None:
+        if not track_descendants and process is not None and process.poll() is None:
             _signal_group(process.pid, signal.SIGTERM)
 
     if installing:
@@ -242,6 +266,7 @@ def run_bounded(
     sent_at: float | None = None
     alive_before = False
     alive_after = False
+    descendant_cleanup = None
 
     try:
         process = subprocess.Popen(
@@ -253,11 +278,20 @@ def run_bounded(
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        if track_descendants:
+            try:
+                tree = ObservedProcessTree(process.pid)
+            except ProcessTreeError as error:
+                raise CaptureError(str(error)) from error
         assert process.stdout is not None and process.stderr is not None
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ, "stdout")
         selector.register(process.stderr, selectors.EVENT_READ, "stderr")
         deadline = time.monotonic() + timeout
+
+        def signal_owned_group(signum: int) -> None:
+            if tree is None or tree.root_alive():
+                _signal_group(process.pid, signum)
 
         def terminate(why: str) -> None:
             nonlocal reason, sent_at
@@ -265,11 +299,15 @@ def run_bounded(
                 return
             reason = why
             sent_at = time.monotonic()
+            if tree is not None:
+                tree.observe()
             if process is not None and process.poll() is None:
-                _signal_group(process.pid, signal.SIGTERM)
+                signal_owned_group(signal.SIGTERM)
 
         try:
             while selector.get_map():
+                if tree is not None:
+                    tree.observe()
                 now = time.monotonic()
                 if reason is None and now >= deadline:
                     terminate(TIMEOUT)
@@ -285,7 +323,7 @@ def run_bounded(
                     # holds it. Stop reading and escalate; waiting on EOF here
                     # is how a bounded run becomes unbounded.
                     if process.poll() is None:
-                        _signal_group(process.pid, signal.SIGKILL)
+                        signal_owned_group(signal.SIGKILL)
                     break
                 read_any = False
                 # One selector result is one pre-termination sampling cycle.
@@ -330,27 +368,55 @@ def run_bounded(
             process.stdout.close()
             process.stderr.close()
     finally:
-        if process is not None:
-            # Reap the child *before* sampling the group. The child leads its
-            # own group, so a not-yet-reaped exit status makes the group look
-            # occupied and turns every clean run into a reported orphan.
-            if process.poll() is None:
-                if not _wait_for_group_exit(process.pid, termination_grace):
-                    _signal_group(process.pid, signal.SIGKILL)
-                    if not _wait_for_group_exit(process.pid, termination_grace):
-                        process.kill()
-            process.wait()
-            alive_before = _group_alive(process.pid)
-            if alive_before:
-                _signal_group(process.pid, signal.SIGTERM)
-                if not _wait_for_group_exit(process.pid, termination_grace):
-                    _signal_group(process.pid, signal.SIGKILL)
-                    _wait_for_group_exit(process.pid, termination_grace)
-            alive_after = _group_alive(process.pid)
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        try:
+            if process is not None:
+                # Setup can fail before a selector exists (e.g. kernel identity
+                # inspection is denied). Close pipes on that path as well.
+                for pipe in (process.stdout, process.stderr):
+                    if pipe is not None:
+                        pipe.close()
+                if track_descendants:
+                    # Never signal an old PGID after reaping its leader. Known
+                    # children retain individual birth identities after orphaning.
+                    if tree is not None:
+                        tree.observe()
+                    if process.poll() is None:
+                        if tree is None or tree.root_alive():
+                            _signal_group(process.pid, signal.SIGTERM)
+                        try:
+                            process.wait(timeout=termination_grace)
+                        except subprocess.TimeoutExpired:
+                            if tree is None or tree.root_alive():
+                                _signal_group(process.pid, signal.SIGKILL)
+                            # An unreaped Popen child still reserves its PID.
+                            process.kill()
+                            process.wait()
+                    alive_before = _group_alive(process.pid)
+                    if tree is not None:
+                        descendant_cleanup = tree.cleanup(termination_grace)
+                    alive_after = _group_alive(process.pid)
+                else:
+                    # Reap before sampling: an unreaped leader looks like an orphan.
+                    if process.poll() is None:
+                        if not _wait_for_group_exit(process.pid, termination_grace):
+                            _signal_group(process.pid, signal.SIGKILL)
+                            if not _wait_for_group_exit(process.pid, termination_grace):
+                                process.kill()
+                    process.wait()
+                    alive_before = _group_alive(process.pid)
+                    if alive_before:
+                        _signal_group(process.pid, signal.SIGTERM)
+                        if not _wait_for_group_exit(process.pid, termination_grace):
+                            _signal_group(process.pid, signal.SIGKILL)
+                            _wait_for_group_exit(process.pid, termination_grace)
+                    alive_after = _group_alive(process.pid)
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
 
-    return Bounded(
+    result_type = _SupervisedBounded if track_descendants else Bounded
+    extra = {"descendant_cleanup": descendant_cleanup} if track_descendants else {}
+    return result_type(
         argv=argv,
         returncode=process.returncode if process is not None else -1,
         termination_reason=reason,
@@ -363,6 +429,7 @@ def run_bounded(
         group_alive_before_cleanup=alive_before,
         group_alive_after_cleanup=alive_after,
         forwarded_signals=tuple(forwarded),
+        **extra,
     )
 
 
@@ -586,7 +653,7 @@ def _bounded_evidence(
     accidentally retain a return code while discarding the bound that produced
     it.
     """
-    return {
+    record = {
         "argv": list(result.argv if argv is None else argv),
         "limits": {
             "stdout_bytes": stdout_limit,
@@ -615,6 +682,9 @@ def _bounded_evidence(
         },
         "forwarded_signals": list(result.forwarded_signals),
     }
+    if isinstance(result, _SupervisedBounded):
+        record["descendant_cleanup"] = result.descendant_cleanup
+    return record
 
 
 def parse_jsonl(

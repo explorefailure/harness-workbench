@@ -156,6 +156,31 @@ Into `src/harness_workbench/`, as public API:
 - path containment against a declared root
 - JSONL decoding
 
+### Optional observed-descendant supervision
+
+`run_bounded(..., track_descendants=False)` preserves the default process-group
+behavior and existing result/evidence wire shape. OpenCode's native invocation
+opts in with `track_descendants=True`; its result adds `descendant_cleanup`.
+This records observation backend/count, identity-bound signals, remaining
+identities, errors, `passed` and the polling scope. Default callers receive no
+new field. Adapter `clean_exit` requires a supervised cleanup report to pass;
+group liveness alone is insufficient for OpenCode's detached native tools.
+
+The observer follows verified parent lineage and kernel birth identities,
+including recorded children that later reparent. Linux uses pidfds when
+available. Darwin uses microsecond birth rechecks, with a residual non-atomic
+check/signal race. Shared work/deadline budgets bound observation passes and
+cleanup phases; errors, exhausted budgets and unknown/surviving identities fail
+closed. Budget checks around kernel reads cannot preempt a blocked OS call. An unidentifiable initial process fails setup even after actual exit 0;
+Darwin may hide an unreaped zombie. Setup failures close pipes and restore
+signal handlers independently of selector/tracker construction.
+
+This supervises observed owned processes; polling may miss a fork/reparent
+between samples, and it is not an OS sandbox. Linux source/installed and Mac
+source native blocked-tool/lingering-child regressions passed; final installed
+Mac validation is pending. Earlier failures and fix evidence remain under the
+local `outputs/opencode-cleanup-fix/` bundle.
+
 ## Stays out
 
 Target-specific, by construction: every `_normalize_*`, every `_*_command`,
