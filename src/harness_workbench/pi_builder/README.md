@@ -8,7 +8,7 @@ the working checkout documentation as the matching reference.
 
 This candidate turns the existing Pi adapter into an owned builder workflow.
 It is not yet a published release. The default profile is Pi 1.4.0 with Node
-26.13.0 and a locked undici 8.12.3 override. Linux and macOS are the target
+26.13.0 with locked minimatch 11.0.4 and undici 8.12.3 overrides. Linux and macOS are the target
 platforms; verify the exact candidate's hosted checks before release.
 
 ## Choose your model after installation
@@ -196,8 +196,9 @@ checks package integrity; the adapter hashes the lock and Pi-owned files, not
 every installed dependency byte. This is not continuous dependency-tamper
 monitoring. Do not use npm update to bypass identity failures.
 
-The root override upgrades external undici to 8.12.3 without modifying Pi 1.4.0.
-A fresh install and npm audit on 2026-10-30 reported zero vulnerabilities. Hosted
+The root overrides upgrade external minimatch to 11.0.4 and undici to 8.12.3
+without modifying Pi 1.4.0. A fresh install and npm audit on 2026-11-04 reported
+zero vulnerabilities. Hosted
 newer-profile jobs repeat that audit. This is a dated check, not a promise that
 future advisories cannot appear. A loopback gzip-response test exercises Pi's
 actual HTTP dispatcher against the patched dependency.
