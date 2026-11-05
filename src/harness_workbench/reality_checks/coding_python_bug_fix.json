@@ -1,0 +1,32 @@
+{
+  "schema": "hwbspec/v0.1",
+  "run_class": "confirmation",
+  "features_root": "harness_workbench:builtin",
+  "features": [
+    {"name": "freeze"},
+    {"name": "receipt"}
+  ],
+  "step_timeout_ms": 300000,
+  "steps": [
+    {
+      "id": "pi-python-bug-fix",
+      "argv": ["./run_reality_subject.sh", "pi", "repair"],
+      "inputs": [
+        "run_reality_subject.sh",
+        "runner.py",
+        "adapters.py",
+        "oracles.py",
+        "workloads.py",
+        "pin.json",
+        "model_selection.json",
+        "repair_task.md",
+        "repair_fixture/slugger.py",
+        "repair_fixture/test_slugger.py",
+        "hook.py",
+        "hermes_config.yaml",
+        "dsh_patch.yml",
+        "apparatus.json"
+      ]
+    }
+  ]
+}

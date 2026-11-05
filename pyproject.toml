@@ -125,6 +125,7 @@ harness_workbench = [
     "subjects/.gitleaks.toml",
     "subjects/repair_fixture/*.py",
     "subjects/replay_fixtures/*.json",
+    "reality_checks/*.json",
 ]
 
 [tool.setuptools.dynamic]

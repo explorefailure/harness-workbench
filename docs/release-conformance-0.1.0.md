@@ -105,6 +105,49 @@ for the actual release even though their repository preparation is in place.
 
 ## Verified first-run record
 
+### Reality Check candidate boundary
+
+`hwb try coding/python-bug-fix` is implemented in this candidate branch and
+has local source-test evidence; it is not part of public `main` or a published
+`v0.1.0` release. A `pass` requires a complete untampered Workbench record,
+the canonical template, a genuinely red baseline, a green final required
+test, only the permitted file change, a valid adapter measurement, and the
+independent repair oracle. `partial` is reserved for trustworthy green repair
+evidence that misses another success condition; `fail` is a validly measured
+unsuccessful repair; `invalid` means prerequisite or evidence trust failed.
+The model completion claim is retained but never supplies the verdict.
+
+The local Ollama contract is a **recorded live digest, not pinned
+reproduction**. The historical `pin.json` digest is neither enforced nor
+silently refreshed by this branch. Recipes are editable configuration with
+one editable file, `model_selection.json`; every other required Recipe file is
+manifest-bound, while the normal run record captures the exact effective
+input digests. Therefore a rerun does not claim byte-identical model behavior.
+
+The installed command does not require virtual-environment activation. The
+invoked `hwb` process takes its runtime identity from `sys.executable` and
+passes it as the declared `HWB_PYTHON` environment input to the Reality
+Check-only subject launcher. That launcher executes the quoted path directly;
+it does not consult `PATH` for Python. The Recipe stays portable because it
+does not persist the machine path. The ordinary sealed record retains the
+effective declared environment value, the effective spec, and the digests of
+the launcher and all other declared inputs. The generic certified adapter
+launcher remains unchanged.
+
+The known-red integration proof runs one stable deterministic native subject
+script through ordinary Workbench execution, output capture, record sealing,
+and the final verifier. Its simulated protocol document is a separate declared
+input, and red and green controls use independent specification directories
+and freeze baselines. The test captures diagnostics and fails if unexplained
+`[freeze] DRIFT` returns. A simulated protocol document retains a positive model claim
+while reporting a failing final required test; the detector returns `fail`.
+Changing only that injected fact to a passing final test yields `pass`. This
+tests a native process, normal capture/sealing, and the local protocol/verdict
+boundary. The adapter protocol is simulated; a live model, Ollama, network,
+and Pi child-session behavior remain unobserved. Hosted platform and CodeQL checks, exact release
+commit checks, tag/downloaded-asset checks, and public release publication all
+remain pending.
+
 ### Assurance label and verifier
 
 - Label: **Self-run verification (preparation only)**.
@@ -330,6 +373,7 @@ command fails the suite until this record routes it.
 - `hwb --version`
 - `python -m harness_workbench --help`
 - `hwb run --help`
+- `hwb try --help`
 - `hwb subjects --help`
 - `hwb ls --help`
 - `hwb show --help`

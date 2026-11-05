@@ -216,7 +216,10 @@ class Recorder:
         return d
 
     # ---- close ---------------------------------------------------------
-    def close(self, status: str, features, gates=None) -> Dict[str, Any]:
+    def close(
+        self, status: str, features, gates=None,
+        environment: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         self._attempts.close()
         self._finalise_attempt_artifacts()
         # A DECLARED variable that is unset records as null, not absent.
@@ -225,8 +228,9 @@ class Recorder:
         # empty dict -- so the record could not say whether the author had
         # thought about the environment at all. Found by fidelity reporting
         # `nothing declared` for a spec that declares one variable.
-        env_declared = {k: os.environ.get(k) for k in self.spec.env}
-        env_other = [k for k in os.environ if k not in self.spec.env]
+        effective_environment = os.environ if environment is None else environment
+        env_declared = {k: effective_environment.get(k) for k in self.spec.env}
+        env_other = [k for k in effective_environment if k not in self.spec.env]
         record = {
             "schema": RECORD_SCHEMA,
             "run_id": self.run_id,
@@ -443,7 +447,10 @@ def verify(run_dir: str) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- the loop
 
-def execute(spec, loaded, root: str) -> Dict[str, Any]:
+def execute(
+    spec, loaded, root: str,
+    environment: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     # Before anything is created: an unresolvable reproduction claim must
     # fail without leaving a run directory behind.
     from .spec import validate_replicates, SpecError
@@ -481,8 +488,9 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
                     # this is ownership tracking, never an OS sandbox.
                     from pathlib import Path
                     from .capture import run_bounded
+                    base_environment = os.environ if environment is None else environment
                     proc = run_bounded(step.argv, cwd=Path(spec.dir),
-                        env={**os.environ, "HWB_ATTEMPT_DIR": os.path.abspath(adir)},
+                        env={**base_environment, "HWB_ATTEMPT_DIR": os.path.abspath(adir)},
                         timeout=timeout_s or 3600, stdout_limit=8 * 1024 * 1024,
                         stderr_limit=1024 * 1024, termination_grace=2,
                         track_descendants=True)
@@ -493,7 +501,8 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
                                        if k not in ("stdout", "stderr")}
                 else:
                     proc = subprocess.run(step.argv, cwd=spec.dir,
-                                          capture_output=True, timeout=timeout_s)
+                                          env=environment, capture_output=True,
+                                          timeout=timeout_s)
                     exit_code = proc.returncode
                     out, err = proc.stdout, proc.stderr
             except subprocess.TimeoutExpired as e:
@@ -544,4 +553,4 @@ def execute(spec, loaded, root: str) -> Dict[str, Any]:
         disp.call("after_step", step, {"attempts": counter["n"]}, step_id=step.id)
 
     disp.call("after_run", spec)
-    return rec.close("completed", loaded)
+    return rec.close("completed", loaded, environment=environment)

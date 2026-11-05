@@ -66,6 +66,21 @@ def cmd_run(args) -> int:
     return 0          # a harness that worked exits 0, whatever the steps did
 
 
+def cmd_try(args) -> int:
+    from . import reality
+
+    try:
+        result = reality.run_check(
+            args.check,
+            runs_root=args.root,
+            recipe_dir=args.recipe,
+        )
+    except reality.RealityError as error:
+        return _fail(str(error))
+    reality.print_result(result)
+    return 0 if result["verdict"] == "pass" else 1
+
+
 def cmd_subjects(args) -> int:
     from . import subject_tree
 
@@ -813,6 +828,13 @@ def build_parser() -> argparse.ArgumentParser:
     r = command("run")
     r.add_argument("spec", help="path to a spec JSON file")
     r.set_defaults(func=cmd_run)
+
+    tr = command("try")
+    tr.add_argument("check", choices=("coding/python-bug-fix",),
+                    help="Reality Check to run")
+    tr.add_argument("--recipe", default=None,
+                    help="Recipe directory (default: ./.hwb/recipes/<check>)")
+    tr.set_defaults(func=cmd_try)
 
     sj = command("subjects")
     # No positional: every id-taking positional has to be visible to the
