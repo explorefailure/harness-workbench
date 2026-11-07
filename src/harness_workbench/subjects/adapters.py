@@ -346,9 +346,19 @@ def _resolve_model(subject: str) -> dict[str, str]:
         ),
     }
     if profile.get("verify_digest"):
-        resolved["model_digest"] = _verify_ollama_digest(
+        expected_digest = profile.get("model_digest")
+        if type(expected_digest) is not str or len(expected_digest) != 64:
+            raise AdapterError(
+                f"profile {name!r} has no valid expected model digest"
+            )
+        observed_digest = _verify_ollama_digest(
             model, str(profile["base_url"])
         )
+        if observed_digest != expected_digest:
+            raise AdapterError(
+                f"Ollama model digest does not match profile {name!r}"
+            )
+        resolved["model_digest"] = observed_digest
     return resolved
 
 

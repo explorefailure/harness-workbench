@@ -19,6 +19,7 @@ _CHECKOUT_SOURCE = HERE.parents[1]
 if (_CHECKOUT_SOURCE / "harness_workbench" / "__init__.py").is_file():
     sys.path.insert(0, str(_CHECKOUT_SOURCE.resolve()))
 
+import adapters
 import certify
 from harness_workbench.canon import digest_file, digest_tree
 from harness_workbench.capture import Bounded, minimal_environment
@@ -566,6 +567,8 @@ def _canary_usage_errors(
     candidate: dict[str, Any], record_root: Path
 ) -> tuple[list[str], dict[str, Any] | None]:
     errors: list[str] = []
+    profile_name: str | None = None
+    profile_kind: str | None = None
     canary = candidate.get("provider_route_canary")
     if not isinstance(canary, dict):
         errors.append("candidate provider-route canary binding is missing")
@@ -602,6 +605,24 @@ def _canary_usage_errors(
                 )
             ):
                 errors.append("provider-route canary is not a clean exact-three result")
+            profile = report.get("profile")
+            if not isinstance(profile, dict):
+                errors.append("provider-route canary has no profile binding")
+            else:
+                name = profile.get("name")
+                kind = profile.get("kind")
+                selection = adapters._model_selection()
+                if type(name) is not str or name not in selection["profiles"]:
+                    errors.append("provider-route canary has an unknown profile")
+                elif type(kind) is not str or kind not in {"gateway", "local"}:
+                    errors.append("provider-route canary has an invalid profile kind")
+                else:
+                    declared = selection["profiles"][name]
+                    if kind != declared.get("kind"):
+                        errors.append("provider-route canary profile kind disagrees")
+                    else:
+                        profile_name = name
+                        profile_kind = kind
 
     usage = candidate.get("usage")
     after: dict[str, Any] | None = None
@@ -618,13 +639,22 @@ def _canary_usage_errors(
         )
     except ReviewError as error:
         return errors + [str(error)], after
-    if (
-        before.get("schema") != usage_probe.SCHEMA
-        or after.get("schema") != usage_probe.SCHEMA
-        or before.get("metered") is not True
-        or after.get("metered") is not True
-    ):
-        errors.append("retained usage snapshots are not readable metered evidence")
+    valid_schema = (
+        before.get("schema") == usage_probe.SCHEMA
+        and after.get("schema") == usage_probe.SCHEMA
+    )
+    metered = before.get("metered") is True and after.get("metered") is True
+    local_unmetered = (
+        profile_kind == "local"
+        and before.get("metered") is False
+        and after.get("metered") is False
+        and before.get("profile") == profile_name
+        and after.get("profile") == profile_name
+        and before.get("windows") == {}
+        and after.get("windows") == {}
+    )
+    if not valid_schema or not (metered or local_unmetered):
+        errors.append("retained usage snapshots do not match the bound route profile")
     if usage.get("delta") != usage_probe.delta(before, after):
         errors.append("usage delta does not reproduce from retained snapshots")
     limits = usage.get("limits")
@@ -633,6 +663,19 @@ def _canary_usage_errors(
     elif usage_probe.gate(after, limits)[0] is not True:
         errors.append("post-run usage does not pass the retained limits")
     return errors, after
+
+
+def _bound_model_profile(candidate: dict[str, Any], record_root: Path) -> str | None:
+    canary = candidate.get("provider_route_canary")
+    if not isinstance(canary, dict):
+        return None
+    report = _json_object(
+        _safe_relative(record_root, canary.get("report"), "canary report"),
+        "canary report",
+    )
+    profile = report.get("profile")
+    name = profile.get("name") if isinstance(profile, dict) else None
+    return name if type(name) is str else None
 
 
 def _proposed_certification(
@@ -745,6 +788,7 @@ def execute(plan: dict[str, Any], review_dir: Path) -> tuple[dict[str, Any], int
         security_errors = _security_receipt_errors(candidate, record_root)
         errors.extend(security_errors)
         canary_errors, after_usage = _canary_usage_errors(candidate, record_root)
+        model_profile = _bound_model_profile(candidate, record_root)
         errors.extend(canary_errors)
         report["validation"] = {
             "candidate_shape": shape_passed,
@@ -766,10 +810,10 @@ def execute(plan: dict[str, Any], review_dir: Path) -> tuple[dict[str, Any], int
             ),
         }
 
-        child_env = minimal_environment(
-            destination,
-            {"PYTHONPATH": str(source_root)},
-        )
+        child_overrides = {"PYTHONPATH": str(source_root)}
+        if model_profile is not None:
+            child_overrides["HWB_MODEL_PROFILE"] = model_profile
+        child_env = minimal_environment(destination, child_overrides)
         python = plan["python"]
         runs_root = record_root / "runs"
         process_index = 0

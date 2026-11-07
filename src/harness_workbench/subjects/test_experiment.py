@@ -224,6 +224,7 @@ class CommonTests(unittest.TestCase):
             "base_url": "http://127.0.0.1:21435/v1",
             "identity_strength": "local_content_digest",
             "verify_digest": True,
+            "model_digest": "a" * 64,
             "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
         }
         with mock.patch.object(
@@ -233,6 +234,16 @@ class CommonTests(unittest.TestCase):
         self.assertEqual("local", plan["profile"]["kind"])
         self.assertEqual("local_content_digest", plan["profile"]["identity_strength"])
         self.assertEqual(0, plan["model_calls_authorized"])
+
+    def test_comparator_honors_the_selected_model_profile(self) -> None:
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+            name, profile = comparator._active_model_profile()
+        self.assertEqual("ark1-qwen38", name)
+        self.assertEqual("local_content_digest", profile["identity_strength"])
+        self.assertEqual(
+            "7c439d5c1f940e7c163f59ba2eebea89e3bde8849409cb54eb343ac9fe640b46",
+            profile["model_digest"],
+        )
 
     def test_route_canary_refuses_local_profile_without_digest_contract(self) -> None:
         profile = {
@@ -1151,6 +1162,10 @@ class CommonTests(unittest.TestCase):
                     "passed": True,
                     "status": "passed",
                     "model_calls_started": 3,
+                    "profile": {
+                        "name": "opencode-go",
+                        "kind": "gateway",
+                    },
                     "routes": routes,
                 }),
                 encoding="utf-8",

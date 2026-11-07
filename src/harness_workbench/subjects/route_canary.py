@@ -170,6 +170,8 @@ def _active_route() -> tuple[str, dict[str, Any]]:
     if profile.get("kind") == "local" and (
         profile.get("verify_digest") is not True
         or profile.get("identity_strength") != "local_content_digest"
+        or type(profile.get("model_digest")) is not str
+        or len(profile["model_digest"]) != 64
     ):
         raise ValueError("local route canary requires content-digest verification")
     return name, profile
