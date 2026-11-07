@@ -43,6 +43,22 @@ endpoint does not authenticate. (`qwen3.5:9b` was the earlier local pin and is
 no longer selected for any subject.) `dsh_patch.yml` retains workspace
 confinement while making DeepSeek runs noninteractive.
 
+`ark1-qwen38` is the remote-local profile used for the low-memory canary. Set
+`HWB_MODEL_PROFILE=ark1-qwen38` rather than editing the committed default. Its
+27B model may offload layers to CPU RAM; local profiles therefore receive a
+20-minute subject bound. Forward Ark1's loopback Ollama port to local port
+21434, then run the compatibility shim on 21435:
+
+```sh
+ssh -N -L 21434:127.0.0.1:11434 ark1
+python3.11 ollama_compat_proxy.py --upstream http://127.0.0.1:21434
+HWB_MODEL_PROFILE=ark1-qwen38 python3.11 runner.py --subject hermes
+```
+
+The shim exists for Ollama's stricter post-tool message alternation. It adds a
+continuation user turn only after a real assistant tool call and repeats the
+original task so local models do not mistake that turn for a new session.
+
 `harness_workbench` must be importable: the adapters take bounded capture,
 credential redaction, manifests and digests from `harness_workbench.capture`
 rather than carrying a second copy of them. Installing the package (which is

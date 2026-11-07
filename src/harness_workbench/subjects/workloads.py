@@ -23,8 +23,8 @@ REPAIR_PROMPT = (
     "specified test command once before editing; its initial failure is expected, "
     "so proceed directly to editing slugger.py rather than retrying it unchanged. "
     "Run exactly `python3.11 -m unittest -v` as a standalone command both times. "
-    "Do not append or chain any other command to either test invocation. Finish "
-    "with done."
+    "Do not append or chain any other command to either test invocation. After "
+    "the second test, reply with exactly `done` and no recap or other text."
 )
 
 WRITE_INPUTS = (

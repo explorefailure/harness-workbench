@@ -10,6 +10,24 @@
     "Record the strength; do not pretend a gateway label is a digest."
   ],
   "profiles": {
+    "ark1-qwen38": {
+      "kind": "local",
+      "base_url": "http://127.0.0.1:21435/v1",
+      "api_key_env": "HWB_LOCAL_KEY",
+      "api_key_placeholder": "ark1-ollama-local-placeholder",
+      "identity_strength": "local_content_digest",
+      "verify_digest": true,
+      "models": {
+        "deepseek": "qwen3.8-agent-64k:latest",
+        "hermes": "qwen3.8-agent-64k:latest",
+        "pi": "qwen3.8-agent-64k:latest"
+      },
+      "subject_key_env": {
+        "deepseek": "HWB_LOCAL_KEY",
+        "hermes": "OPENAI_API_KEY",
+        "pi": "HWB_LOCAL_KEY"
+      }
+    },
     "local-ollama": {
       "kind": "local",
       "base_url": "http://127.0.0.1:11434/v1",

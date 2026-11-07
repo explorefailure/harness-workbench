@@ -47,9 +47,14 @@ WORKLOAD_TIMEOUT_OVERRIDES = {
     # repair enough latency headroom to reach its edit and green test.
     ("hermes", "repair"): 180,
 }
+LOCAL_MODEL_TIMEOUT_SECONDS = 1200
 
 
 def timeout_seconds(subject: str, workload: str) -> int:
+    if subject in adapters.CONFIGURABLE_MODEL_SUBJECTS:
+        _, profile = adapters._active_profile()
+        if profile.get("kind") == "local":
+            return LOCAL_MODEL_TIMEOUT_SECONDS
     return WORKLOAD_TIMEOUT_OVERRIDES.get(
         (subject, workload), SUBJECT_TIMEOUT_SECONDS[subject]
     )

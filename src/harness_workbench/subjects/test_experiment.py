@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ import certify
 import compare as comparator
 import doctor
 import guard_hook
+import ollama_compat_proxy
 import preflight
 import recertify
 import review_candidate
@@ -1725,6 +1727,46 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(120, subject_runner.timeout_seconds("hermes", "write"))
         self.assertEqual(180, subject_runner.timeout_seconds("hermes", "repair"))
         self.assertEqual(120, subject_runner.timeout_seconds("claude", "repair"))
+
+    def test_local_model_profile_can_override_default_and_gets_cpu_offload_headroom(self) -> None:
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+            name, profile = adapters._active_profile()
+            self.assertEqual("ark1-qwen38", name)
+            self.assertEqual("local", profile["kind"])
+            self.assertEqual(
+                subject_runner.LOCAL_MODEL_TIMEOUT_SECONDS,
+                subject_runner.timeout_seconds("hermes", "write"),
+            )
+
+    def test_ollama_digest_probe_uses_the_profile_endpoint(self) -> None:
+        payload = io.BytesIO(json.dumps({"models": [{
+            "name": "qwen3.8:27b", "digest": "sha256:content"
+        }]}).encode())
+        with mock.patch.object(adapters, "urlopen", return_value=payload) as opened:
+            digest = adapters._verify_ollama_digest(
+                "qwen3.8:27b", "http://127.0.0.1:21434/v1"
+            )
+        self.assertEqual("sha256:content", digest)
+        self.assertEqual(
+            "http://127.0.0.1:21434/api/tags", opened.call_args.args[0]
+        )
+
+    def test_ollama_compat_bridge_only_repairs_real_post_tool_turns(self) -> None:
+        untouched = json.dumps({"messages": [{"role": "tool", "content": "ok"}]}).encode()
+        self.assertEqual(
+            untouched, ollama_compat_proxy.bridge_tool_continuation(untouched)
+        )
+        payload = {"messages": [
+            {"role": "user", "content": "write exact fixture"},
+            {"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+            {"role": "tool", "content": "22 bytes written"},
+        ]}
+        bridged = json.loads(ollama_compat_proxy.bridge_tool_continuation(
+            json.dumps(payload).encode()
+        ))
+        self.assertEqual("user", bridged["messages"][-1]["role"])
+        self.assertIn("write exact fixture", bridged["messages"][-1]["content"])
+        self.assertIn("22 bytes written", bridged["messages"][-1]["content"])
 
     def test_live_recertification_retains_each_record_and_report(self) -> None:
         plan = recertify.build_plan(("claude",), "repair", 1)
