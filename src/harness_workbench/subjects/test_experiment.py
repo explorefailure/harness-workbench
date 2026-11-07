@@ -218,6 +218,52 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
         self.assertFalse(plan["apparatus"]["gitleaks_available"])
 
+    def test_route_canary_plan_accepts_digest_bound_local_profile(self) -> None:
+        profile = {
+            "kind": "local",
+            "base_url": "http://127.0.0.1:21435/v1",
+            "identity_strength": "local_content_digest",
+            "verify_digest": True,
+            "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("ark1", profile)
+        ), mock.patch.object(route_canary.shutil, "which", return_value=None):
+            plan = route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+        self.assertEqual("local", plan["profile"]["kind"])
+        self.assertEqual("local_content_digest", plan["profile"]["identity_strength"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+
+    def test_route_canary_refuses_local_profile_without_digest_contract(self) -> None:
+        profile = {
+            "kind": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "identity_strength": "gateway_model_label",
+            "verify_digest": False,
+            "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("unsafe-local", profile)
+        ), self.assertRaisesRegex(ValueError, "content-digest"):
+            route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+
+    def test_route_canary_allows_only_certification_drift_for_exact_three(self) -> None:
+        checks = {
+            name: {"passed": name != "certification"}
+            for name in ("identity", "schema_replay", "authentication", "certification")
+        }
+        report = {
+            "overall_status": "attention_required",
+            "subjects": [{
+                "subject": subject,
+                "status": "live_verification_required",
+                "checks": checks,
+            } for subject in route_canary.SUBJECTS],
+        }
+        self.assertTrue(route_canary._doctor_allows_route_recut(report))
+        report["subjects"][0]["checks"]["identity"]["passed"] = False
+        self.assertFalse(route_canary._doctor_allows_route_recut(report))
+
     def test_route_canary_plan_bootstraps_from_an_unrelated_working_directory(
         self,
     ) -> None:
@@ -332,6 +378,21 @@ class CommonTests(unittest.TestCase):
                     certify.DEFAULT_LIMITS,
                     require_live_prerequisites=True,
                 )
+
+    def test_certification_plan_declares_local_route_canary_kind(self) -> None:
+        profile = {
+            "kind": "local",
+            "identity_strength": "local_content_digest",
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("ark1", profile)
+        ):
+            plan = certify.build_plan(certify.DEFAULT_LIMITS)
+        route = plan["call_breakdown"]["provider_route_canary"]
+        self.assertEqual("ark1", route["profile"])
+        self.assertEqual("local", route["kind"])
+        self.assertEqual("local_content_digest", route["identity_strength"])
+        self.assertIn("profile_aware_route_canary", plan["stages"])
 
     def test_certification_replaces_a_relative_pythonpath(self) -> None:
         with mock.patch.dict(os.environ, {"PYTHONPATH": "../../src"}, clear=False):
@@ -1737,6 +1798,9 @@ class CommonTests(unittest.TestCase):
                 subject_runner.LOCAL_MODEL_TIMEOUT_SECONDS,
                 subject_runner.timeout_seconds("hermes", "write"),
             )
+            usage_name, usage_profile = usage_probe.active_profile()
+            self.assertEqual(name, usage_name)
+            self.assertEqual(profile, usage_profile)
 
     def test_ollama_digest_probe_uses_the_profile_endpoint(self) -> None:
         payload = io.BytesIO(json.dumps({"models": [{

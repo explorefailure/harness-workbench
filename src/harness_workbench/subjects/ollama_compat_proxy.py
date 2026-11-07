@@ -71,11 +71,15 @@ def handler(upstream: str) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            stream_response = False
             if self.path == "/v1/chat/completions":
                 body = bridge_tool_continuation(body)
-            self._forward(body)
+                stream_response = json.loads(body).get("stream") is True
+            self._forward(body, stream_response=stream_response)
 
-        def _forward(self, body: bytes | None) -> None:
+        def _forward(
+            self, body: bytes | None, *, stream_response: bool = False
+        ) -> None:
             headers = {
                 key: value for key, value in self.headers.items()
                 if key.lower() not in {"host", "content-length", "connection"}
@@ -90,15 +94,25 @@ def handler(upstream: str) -> type[BaseHTTPRequestHandler]:
                 response = urllib.request.urlopen(request, timeout=1200)
             except urllib.error.HTTPError as error:
                 response = error
-            raw = response.read()
             self.send_response(response.status)
             for key, value in response.headers.items():
                 if key.lower() not in {"content-length", "connection", "transfer-encoding"}:
                     self.send_header(key, value)
-            self.send_header("Content-Length", str(len(raw)))
+            if not stream_response:
+                raw = response.read()
+                self.send_header("Content-Length", str(len(raw)))
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(raw)
+            try:
+                if stream_response:
+                    while line := response.readline():
+                        self.wfile.write(line)
+                        self.wfile.flush()
+                else:
+                    self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionResetError):
+                # A bounded canary intentionally closes after its first event.
+                return
 
     return Handler
 

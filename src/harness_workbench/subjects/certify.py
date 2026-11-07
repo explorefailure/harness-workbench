@@ -219,6 +219,10 @@ def build_plan(
     apparatus = _offline_apparatus(
         require_live_prerequisites=require_live_prerequisites
     )
+    route_profile_name, route_profile = adapters._active_profile()
+    route_kind = str(route_profile.get("kind"))
+    if route_kind not in {"gateway", "local"}:
+        raise ValueError("certification requires a gateway or local route profile")
     run_root = "<fresh-record-dir>/runs"
     return {
         "schema": SCHEMA,
@@ -233,6 +237,9 @@ def build_plan(
         "call_breakdown": {
             "provider_route_canary": {
                 "subjects": ["deepseek", "hermes", "pi"],
+                "profile": route_profile_name,
+                "kind": route_kind,
+                "identity_strength": str(route_profile["identity_strength"]),
                 "nominal": ROUTE_CANARY_CALLS,
                 "maximum": ROUTE_CANARY_CALLS,
             },
@@ -288,7 +295,7 @@ def build_plan(
         "stages": [
             "offline_prerequisites",
             "usage_gate",
-            "provider_route_canary",
+            "profile_aware_route_canary",
             "five_sealed_workbench_runs",
             "verify_every_sealed_store",
             "exact_five_comparison",
@@ -710,7 +717,7 @@ def execute(
     }
     if not canary_passed:
         operational_errors.append(
-            "provider-route canary did not prove all three shared gateway routes"
+            "profile-aware route canary did not prove all three configured routes"
         )
 
     for subject in SUBJECTS if not operational_errors else ():

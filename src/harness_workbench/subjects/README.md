@@ -184,7 +184,7 @@ bounded workload now.
 For the full matrix, `certify.py` is also plan-only by default. The plan fixes
 the subject set to exactly Claude, Codex, DeepSeek, Hermes, and Pi; fixes the
 workload to repair; revalidates `sample.n = 3` inside `retry.max = 2`; reports
-18 nominal and 33 maximum calls (three provider-route canaries followed by the
+18 nominal and 33 maximum calls (three profile-aware route canaries followed by the
 15-call matrix, whose retry ceiling remains 30); resolves the interpreter, source
 root, specs, run store, comparator, and child `PYTHONPATH` to absolute paths;
 and authorizes zero calls:
@@ -198,7 +198,7 @@ external executable a requirement for zero-call planning. `--live` fails
 before creating a record directory unless the executable is present, usable,
 and digest-bound into the plan.
 
-The gateway canary is also a standalone plan-only command:
+The route canary is also a standalone plan-only command:
 
 ```sh
 python3.11 route_canary.py
@@ -206,11 +206,15 @@ python3.11 route_canary.py --live \
   --record-dir ../../../measure/canary/provider-routes-YYYY-MM-DD
 ```
 
-It is fixed to DeepSeek, Hermes, and Pi because those are the adapters sharing
-the configured OpenAI-compatible gateway route. For each subject, the real
+It is fixed to DeepSeek, Hermes, and Pi because those are the model-configurable
+adapters sharing the selected OpenAI-compatible route. Gateway profiles retain
+the existing label-strength route proof. Local profiles must declare digest
+verification and `local_content_digest`; live execution records the Ollama
+content digest for every selected subject model before any route call. For each
+subject, the real
 repair adapter renders its tool-bearing request against a loopback server using
 a fake credential. The exact JSON body is retained and replayed directly to the
-declared gateway with the real credential only in the authorization header. The
+declared endpoint with the prepared credential only in the authorization header. The
 connection closes after the first valid streaming JSON event, before any
 harness receives a response or can execute a tool. Redirects, elapsed time,
 request/response bytes, stream lines, output capture, and cleanup are bounded.
