@@ -8,6 +8,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'src/harness_workbench/pi_builder'
@@ -112,6 +113,36 @@ class PiProtocolCompatibilityTests(unittest.TestCase):
         self.assertFalse(self.normalizer.summarize(malformed,system_messages=True)['valid'])
         unbalanced=copy.deepcopy(events);unbalanced.pop(4)
         self.assertFalse(self.normalizer.summarize(unbalanced,system_messages=True)['valid'])
+
+    def test_empty_successful_identity_probe_is_retried_once(self):
+        from harness_workbench.capture import Bounded
+
+        def result(stdout):
+            return Bounded(
+                argv=['node', '--version'], returncode=0,
+                termination_reason=None, stdout=stdout, stderr=b'',
+                stdout_source_bytes=len(stdout), stderr_source_bytes=0,
+                stdout_overflow=False, stderr_overflow=False,
+                group_alive_before_cleanup=False,
+                group_alive_after_cleanup=False,
+            )
+
+        with mock.patch.object(
+            self.adapter, 'run_bounded',
+            side_effect=[result(b''), result(b'v26.13.0\n')],
+        ) as bounded:
+            self.assertEqual(
+                'v26.13.0',
+                self.adapter.command_output(['node', '--version'], cwd=ROOT),
+            )
+        self.assertEqual(2, bounded.call_count)
+
+        with mock.patch.object(
+            self.adapter, 'run_bounded',
+            side_effect=[result(b''), result(b'')],
+        ):
+            with self.assertRaisesRegex(self.adapter.AdapterError, 'empty output twice'):
+                self.adapter.command_output(['node', '--version'], cwd=ROOT)
 
     def test_bundled_pin_binds_installation_lock_and_rejects_mutation(self):
         import hashlib

@@ -7,6 +7,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
 import harness_workbench
 
 TEST_ENV = {**os.environ, "PYTHONPATH": str(Path(harness_workbench.__file__).parent.parent)}
@@ -152,7 +156,7 @@ class BridgeTests(unittest.TestCase):
     def test_missing_context_and_existing_outputs_refused(self):
         path=self.generate()
         with self.assertRaises(ValueError):generate(self.root/'custom.json','opencode',path,sys.executable,2)
-        env=dict(os.environ);env.pop('HWB_ATTEMPT_DIR',None)
+        env=dict(TEST_ENV);env.pop('HWB_ATTEMPT_DIR',None)
         proc=subprocess.run([sys.executable,'-m','harness_workbench._adapter_bridge','execute',str(path.with_suffix('.bridge.json'))],env=env,capture_output=True)
         self.assertEqual(2,proc.returncode)
 

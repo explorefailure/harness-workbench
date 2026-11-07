@@ -45,24 +45,33 @@ def command_output(argv: list[str], *, cwd: Path, timeout: float = 5.0) -> str:
     orphan the adapter later reports as clean. The purpose is pin verification,
     which stays adapter-local; the mechanism is the primitive's, so it uses it.
     """
-    result = run_bounded(
-        argv,
-        cwd=cwd,
-        env=dict(os.environ),
-        timeout=timeout,
-        stdout_limit=64 * 1024,
-        stderr_limit=64 * 1024,
-        termination_grace=1.0,
-    )
-    if result.returncode != 0 or result.termination_reason is not None:
-        raise AdapterError(
-            f"{argv[0]} probe failed: status {result.returncode}"
-            f" ({result.termination_reason or 'no bound fired'})"
+    for attempt in range(2):
+        result = run_bounded(
+            argv,
+            cwd=cwd,
+            env=dict(os.environ),
+            timeout=timeout,
+            stdout_limit=64 * 1024,
+            stderr_limit=64 * 1024,
+            termination_grace=1.0,
         )
-    try:
-        return result.stdout.decode("utf-8", errors="strict").strip()
-    except UnicodeDecodeError as error:
-        raise AdapterError(f"{argv[0]} probe output is not UTF-8: {error}") from error
+        if result.returncode != 0 or result.termination_reason is not None:
+            raise AdapterError(
+                f"{argv[0]} probe failed: status {result.returncode}"
+                f" ({result.termination_reason or 'no bound fired'})"
+            )
+        try:
+            text = result.stdout.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"{argv[0]} probe output is not UTF-8: {error}") from error
+        if text:
+            return text
+        # A successful version command must identify itself. One bounded retry
+        # tolerates the observed macOS runner capture race without accepting an
+        # empty identity or weakening the pinned comparison.
+        if attempt == 1:
+            raise AdapterError(f"{argv[0]} probe returned empty output twice")
+    raise AssertionError("unreachable")
 
 
 def package_tree_digest(root: Path) -> tuple[int, str]:

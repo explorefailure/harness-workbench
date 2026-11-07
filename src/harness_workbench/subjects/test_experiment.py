@@ -439,6 +439,31 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(0, report["model_calls_started"])
         run.assert_not_called()
 
+    def test_live_certification_allows_only_certification_digest_drift(self) -> None:
+        checks = {
+            name: {"passed": name != "certification", "detail": name}
+            for name in ("identity", "schema_replay", "authentication", "certification")
+        }
+        report = {
+            "overall_status": "attention_required",
+            "subjects": [
+                {
+                    "subject": subject,
+                    "status": "live_verification_required",
+                    "checks": checks,
+                }
+                for subject in certify.SUBJECTS
+            ],
+        }
+        self.assertTrue(certify._doctor_allows_live_recut(report))
+        for status in ("pin_drift", "schema_drift", "auth_missing"):
+            broken = json.loads(json.dumps(report))
+            broken["subjects"][0]["status"] = status
+            self.assertFalse(certify._doctor_allows_live_recut(broken), status)
+        broken = json.loads(json.dumps(report))
+        broken["subjects"][0]["checks"]["authentication"]["passed"] = False
+        self.assertFalse(certify._doctor_allows_live_recut(broken))
+
     def test_certification_failed_route_canary_starts_no_matrix_run(self) -> None:
         plan = self._certification_live_plan({"rolling": 80})
         ready = {
