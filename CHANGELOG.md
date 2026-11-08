@@ -7,6 +7,15 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: `hwb try coding/python-bug-fix` no longer stops as INVALID when this
+  machine's `gpt-oss:20b` digest differs from the one shipped in the package.
+  A Recipe's model baseline (`baseline_digest`) now comes from this machine's
+  Ollama; before each run the live digest is recorded as the checked
+  `model_digest`, and the result's `model_change` reports any difference from
+  the baseline instead of refusing the run. Recipes created by 0.2.0 are
+  repaired on their next run. The certified adapter and certification
+  profiles are unchanged and still enforce their reviewed digest.
+
 ## 0.2.0 — 2026-11-07
 
 - Pin the release build backend to setuptools 84.1.0, clearing the low-severity

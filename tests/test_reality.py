@@ -40,6 +40,120 @@ def captured_document(*, claim=True, initial=1, final=0, outcome=True):
 
 
 class RealityCheckTests(unittest.TestCase):
+    def setUp(self):
+        # No test may depend on whether this machine runs Ollama.
+        patcher = mock.patch.object(reality, "_local_model_digest", return_value=None)
+        self.local_digest = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_new_recipe_takes_this_machines_model_digest(self):
+        """Regression: v0.2.0 copied the shipped August digest into every new
+        Recipe, so a current Ollama made the first run INVALID."""
+        self.local_digest.return_value = "f" * 64
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            local = json.loads((destination / "model_selection.json").read_text(
+                encoding="utf-8"))["profiles"]["local-ollama"]
+            self.assertEqual("f" * 64, local["model_digest"])
+            self.assertEqual("f" * 64, local["baseline_digest"])
+            shipped = json.loads((Path(subject_tree.subjects_root()) /
+                                  "model_selection.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(shipped["profiles"]["local-ollama"]["model_digest"],
+                                local["model_digest"])
+            self.assertEqual("gpt-oss:20b", self.local_digest.call_args.args[0])
+
+    def test_new_recipe_without_ollama_has_empty_baseline_and_stays_valid(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            local = json.loads((destination / "model_selection.json").read_text(
+                encoding="utf-8"))["profiles"]["local-ollama"]
+            self.assertEqual("", local["model_digest"])
+            self.assertEqual("", local["baseline_digest"])
+            self.assertTrue(local["verify_digest"])
+            reality.prepare_recipe(destination)  # reopens through validation
+
+    def selection(self, destination):
+        return json.loads((destination / "model_selection.json").read_text(
+            encoding="utf-8"))["profiles"]["local-ollama"]
+
+    def test_run_refresh_records_live_digest_and_keeps_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            self.local_digest.return_value = "a" * 64
+            reality.prepare_recipe(destination)
+            self.local_digest.return_value = "b" * 64  # e.g. after `ollama pull`
+            reality.refresh_live_digest(destination)
+            local = self.selection(destination)
+            self.assertEqual(("b" * 64, "a" * 64),
+                             (local["model_digest"], local["baseline_digest"]))
+            reality.prepare_recipe(destination)  # still a valid Recipe
+
+    def test_run_refresh_adopts_first_readable_digest_as_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)  # Ollama unreadable: empty baseline
+            self.local_digest.return_value = "c" * 64
+            reality.refresh_live_digest(destination)
+            local = self.selection(destination)
+            self.assertEqual(("c" * 64, "c" * 64),
+                             (local["model_digest"], local["baseline_digest"]))
+
+    def test_run_refresh_repairs_a_recipe_created_by_0_2_0(self):
+        """0.2.0 Recipes hold the shipped digest and no baseline; the refresh
+        lives in the package, so it repairs them without recreating them."""
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            path = destination / "model_selection.json"
+            selection = json.loads(path.read_text(encoding="utf-8"))
+            local = selection["profiles"]["local-ollama"]
+            local.pop("baseline_digest")
+            local["model_digest"] = "17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7"
+            path.write_text(json.dumps(selection), encoding="utf-8")
+            self.local_digest.return_value = "f" * 64
+            reality.refresh_live_digest(destination)
+            local = self.selection(destination)
+            self.assertEqual(("f" * 64, "f" * 64),
+                             (local["model_digest"], local["baseline_digest"]))
+
+    def test_run_refresh_leaves_recipe_alone_when_ollama_is_unreadable(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            self.local_digest.return_value = "a" * 64
+            reality.prepare_recipe(destination)
+            before = (destination / "model_selection.json").read_bytes()
+            self.local_digest.return_value = None
+            reality.refresh_live_digest(destination)
+            self.assertEqual(before, (destination / "model_selection.json").read_bytes())
+
+    def test_model_change_is_reported_and_never_decides_the_verdict(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.local_digest.return_value = "a" * 64
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            same = reality.model_change(destination, {"model_digest": "a" * 64})
+            self.assertEqual({"recipe_baseline": "a" * 64, "recorded": "a" * 64,
+                              "matches_baseline": True}, same)
+            moved = reality.model_change(destination, {"model_digest": "b" * 64})
+            self.assertFalse(moved["matches_baseline"])
+            unknown = reality.model_change(destination, {"model_digest": "unobserved"})
+            self.assertIsNone(unknown["matches_baseline"])
+            self.assertNotIn("verdict", moved)
+
+    def test_terminal_model_line_names_the_case(self):
+        line = reality._model_line
+        self.assertIn("matches the Recipe's baseline",
+                      line({"recorded": "a" * 64, "recipe_baseline": "a" * 64,
+                            "matches_baseline": True}))
+        changed = line({"recorded": "b" * 64, "recipe_baseline": "a" * 64,
+                        "matches_baseline": False})
+        self.assertIn("model changed since the Recipe was made", changed)
+        self.assertIn("bbbbbbbbbbbb", changed)
+        self.assertIn("no baseline yet", line({"recorded": "a" * 64, "recipe_baseline": None}))
+        self.assertIn("not observed", line({}))
+
     def canonical_recipe(self, root: Path) -> Path:
         recipe = root / "recipe"
         recipe.mkdir()
