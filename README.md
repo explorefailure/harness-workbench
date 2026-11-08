@@ -1,7 +1,7 @@
 # Explore Failure - Harness Workbench
 
 **Explore Failure - Harness Workbench** is a test bench for your own software or AI harness—and for
-the features you add to it.**
+the features you add to it.
 
 Bring a real workload and connect the harness behavior you want to test,
 whether that's a retry policy, a redaction layer, a change detector, or
@@ -43,6 +43,7 @@ Harness Workbench is not a general-purpose benchmark. It focuses on whether
 the harness around that work behaved as intended.
 
 [`Try it`](#try-it) · [`What it can test`](#what-it-can-test) ·
+[`Builder integrations`](#builder-integrations) ·
 [`Experiment ideas`](#experiment-ideas) ·
 [`Measure your own code`](docs/measuring-your-own-code.md) ·
 [`How the evidence works`](#what-gets-recorded)
@@ -63,7 +64,8 @@ public GitHub release**, published 2026-08-25 with wheel and
 source-distribution assets. It is not published to PyPI.
 
 This tree is post-release development for the next version. Changes after the
-`v0.1.0` tag, including current adapter stabilization work, are unreleased.
+`v0.1.0` tag, including the builder integrations and Reality Check described
+below, are unreleased.
 Zero runtime dependencies, Python 3.11+.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
@@ -72,6 +74,40 @@ should start with an issue. There is no response, merge, compatibility, or
 support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
 process, [SUPPORT.md](SUPPORT.md) for public help, and
 [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+---
+
+## What's in the next release
+
+The current candidate adds three owned builder workflows, the first
+user-facing Reality Check, and a newly reviewed five-harness certification:
+
+- **Build with Pi, OpenCode, or Hermes.** The new `hwb-pi`, `hwb-opencode`,
+  and `hwb-hermes` commands create owned workspaces, verify pinned runtimes,
+  retain native tool evidence, and run independent checks against your task.
+- **Choose the model and provider explicitly.** The adapters support tested
+  compatible and native provider routes, named API-key environment references,
+  credential-redacted capture, and isolated runtime state. They do not inherit
+  logged-in accounts, download models, or reconfigure model servers.
+- **Run a bounded coding Reality Check.** `hwb try coding/python-bug-fix` asks
+  pinned Pi and a selected local Ollama model to repair a disposable fixture,
+  then derives its verdict from external tests, changed-file policy, and record
+  integrity—not from the model's claim.
+- **Compare five real coding harnesses.** The shipped subject tree covers
+  Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent, and Pi. The promoted
+  2026-11-07 candidate passed adapter capture and the exact repair outcome 3/3
+  for every subject, with zero timeouts.
+- **Retain defensible evidence.** Process-tree cleanup, exact input binding,
+  credential scans, usage gates, sealed-store verification, route canaries,
+  and independent candidate review are part of the certification path.
+
+The builder adapters and cross-harness envelope remain experimental candidate
+surfaces, not stable public library APIs. Local protocol fixtures cover the
+advertised routes; that does not claim that every hosted account, model, or
+platform combination has been validated. See the
+[builder adapter guide](docs/builder-adapters.md) and
+[certification record](src/harness_workbench/subjects/adapter_certification.json)
+for the precise boundaries.
 
 ---
 
@@ -87,7 +123,7 @@ $ python3 -m venv .venv
 $ . .venv/bin/activate
 $ pip install .
 $ hwb --version
-hwb 0.1.0
+hwb 0.2.0
 ```
 
 Create `hello.json` with one command and no features:
@@ -305,31 +341,35 @@ Start with a small, deterministic workload whenever possible:
   harness configurations while focusing on observable differences rather than
   scoring answer quality.
 
-## What I'm building next
+## Release direction
 
 Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. Final `0.1.0` includes
-the experimental subject tree verified in rc2 for Pi, Claude Code, Codex CLI,
-DeepSeek Harness, and Hermes Agent. They share one evidence envelope without
+own harness behavior can be added as Workbench features. Final `0.1.0` shipped
+the experimental five-subject tree. The current candidate builds on it with
+owned Pi, OpenCode, and Hermes workflows, the first Reality Check, and a fresh
+same-apparatus certification for Pi, Claude Code, Codex CLI, DeepSeek Harness,
+and Hermes Agent. The five subjects share an evidence envelope without
 pretending their native event and interception surfaces are the same.
 
-The adapter promotion review is complete: the whole
+The adapter promotion decision remains unchanged: the whole
 `cross-harness-adapter-run/v0.1` envelope remains experiment-local for
-`0.1.0`. Its exact-five-subject validator, live pin/model coupling, and
+the next release. Its exact-five-subject validator, live pin/model coupling, and
 closed field sets are useful for sealed comparisons but are not a
 vendor-neutral, additively evolving public API. The generic boundary already
 promoted is `capture` plus `canon`; see the
 [review](docs/adapter-envelope-promotion-review.md).
 
-The next work is immutable release evidence, not another adapter name:
+The remaining release work is immutable release evidence:
 
-- run the complete source and installed-artifact gate on the release-only
-  commit, then require its hosted Linux/macOS and CodeQL checks;
+- run the complete source and installed-artifact gate on the release commit,
+  then require its hosted Linux/macOS, adapter compatibility, and CodeQL checks;
 - create and verify the signed immutable tag; and
 - verify clean installs from the GitHub-downloaded wheel and source archive.
 
-Until those gates close, the adapters are an experimental candidate surface,
-not a supported integration promise.
+The integration PR passed its hosted checks and the live certification was
+independently reviewed, but those results do not transfer to a future tag or
+release artifact. Until the release gates close, the adapters remain an
+experimental candidate surface rather than a supported integration promise.
 
 Harness Workbench will remain independent of any particular model, provider,
 or agent framework.
@@ -559,6 +599,31 @@ The envelope shape, what it refuses to promote, and why is in
 [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md).
 The adapters themselves stay out of core, for the reason above.
 
+## Builder integrations
+
+Use Workbench with Pi, OpenCode, or Hermes to run your own task with a model you
+choose. Each command creates an owned workspace, checks the pinned runtime,
+captures native evidence, and can run your declared checks separately from the
+builder's own success claim.
+
+| Adapter | Start an owned workspace | Pinned candidate | Guide |
+| --- | --- | --- | --- |
+| Pi | `hwb-pi init ./my-pi-workspace` | Pi 1.4.0 / Node 26.13.0 | [Pi](docs/pi-builder.md) |
+| OpenCode | `hwb-opencode init ./my-opencode-workspace` | OpenCode 1.19.5 | [OpenCode](docs/opencode-builder.md) |
+| Hermes | `hwb-hermes init ./my-hermes-workspace` | Hermes 0.22.5 | [Hermes](docs/hermes-builder.md) |
+
+The [builder adapter guide](docs/builder-adapters.md) covers installation,
+model/provider selection, custom task configuration, independent checks,
+evidence fields, and troubleshooting. Scripted repair workloads are optional
+integration controls; the builders are intended to run user-supplied tasks.
+
+Provider support is harness-specific. Pi has tested compatible paths for OpenAI
+Chat Completions, OpenAI Responses, Anthropic Messages, and Google Generative
+AI, plus a separately covered OpenRouter catalog route. OpenCode and Hermes
+support compatible Chat Completions endpoints and the native provider routes
+listed in their guides. These are local protocol-fixture and current-candidate
+claims, not blanket validation of hosted services or model quality.
+
 ## Commands
 
 Two kinds, and mixing them up is the most common first mistake:
@@ -635,21 +700,3 @@ uploaded; building an archive is not by itself a release.
 ## Licence
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-## Builder integrations (unreleased candidates)
-
-Use Workbench with Pi, OpenCode or Hermes to run your tasks with a model you
-choose. The [builder adapter guide](docs/builder-adapters.md) explains current
-model/provider support, task configuration and evidence. The local working draft
-adds Pi provider selection, explicit API-key references and independent task
-checks for all three adapters. See the guide for tested paths and remaining
-hosted/platform validation. Scripted repairs are optional integration controls.
-
-| Adapter | Start an owned workspace | Setup and reference |
-| --- | --- | --- |
-| Pi | `hwb-pi init ./my-pi-workspace` | [Pi guide](docs/pi-builder.md): pinned Node/Pi and an in-process scripted provider |
-| OpenCode | `hwb-opencode init ./my-opencode-workspace` | [OpenCode guide](docs/opencode-builder.md): pinned executable, scripted tools and local models |
-| Hermes | `hwb-hermes init ./my-hermes-workspace` | [Hermes guide](docs/hermes-builder.md): pinned source runtime, native events, local models and gateway cleanup |
-
-These commands require a candidate checkout containing the integrations. Broader
-research experiments remain separate from these builder workflows.

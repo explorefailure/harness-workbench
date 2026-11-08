@@ -4232,7 +4232,8 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
         bad = []
         for root, dirs, files in os.walk(DOCS):
             dirs[:] = [d for d in dirs
-                       if d not in (".git", "build", "dist", "__pycache__")]
+                       if d not in (".git", "build", "dist", "node_modules",
+                                    "__pycache__")]
             for f in files:
                 if not f.endswith(".md"):
                     continue

@@ -1,5 +1,9 @@
 # Explore Failure - Harness Workbench 0.1.0 release conformance record
 
+The separate current-candidate record is
+[`docs/release-conformance-0.2.0.md`](release-conformance-0.2.0.md); it does not
+alter or transfer this release's evidence.
+
 > **Historical preparation record:** read-only verification on 2026-10-31
 > confirmed an existing [v0.1.0 release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0),
 > published 2026-08-25. The prepared/not-released wording below describes this

@@ -187,26 +187,26 @@ import verify_release_tag  # noqa: E402
 
 class TestReleaseVersion(unittest.TestCase):
     def test_final_version_and_public_tag_are_exact(self):
-        self.assertEqual("0.1.0", harness_workbench.__version__)
-        self.assertEqual("0.1.0", verify_release_tag.source_version())
-        verify_release_tag.verify("v0.1.0", harness_workbench.__version__)
+        self.assertEqual("0.2.0", harness_workbench.__version__)
+        self.assertEqual("0.2.0", verify_release_tag.source_version())
+        verify_release_tag.verify("v0.2.0", harness_workbench.__version__)
 
     def test_final_version_and_tag_policy_is_explicit(self):
         self.assertEqual(
-            "v0.1.0",
-            verify_release_tag.tag_for_package_version("0.1.0"),
+            "v0.2.0",
+            verify_release_tag.tag_for_package_version("0.2.0"),
         )
         self.assertEqual(
-            "0.1.0",
-            verify_release_tag.package_version_for_tag("v0.1.0"),
+            "0.2.0",
+            verify_release_tag.package_version_for_tag("v0.2.0"),
         )
 
     def test_mismatched_or_noncanonical_tags_are_rejected(self):
-        rejected = ("v0.1.0-rc.2", "0.1.0", "v0.1.0rc2", "v0.1.0-rc.02",
-                    "v0.1.0.0")
+        rejected = ("v0.2.0-rc.2", "0.2.0", "v0.2.0rc2", "v0.2.0-rc.02",
+                    "v0.2.0.0")
         for tag in rejected:
             with self.subTest(tag=tag), self.assertRaises(verify_release_tag.TagError):
-                verify_release_tag.verify(tag, "0.1.0")
+                verify_release_tag.verify(tag, "0.2.0")
 
     def test_cli_reports_the_source_version(self):
         env = os.environ.copy()
@@ -219,7 +219,7 @@ class TestReleaseVersion(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        self.assertEqual("hwb 0.1.0\n", completed.stdout)
+        self.assertEqual("hwb 0.2.0\n", completed.stdout)
 
     def test_issue_template_version_placeholders_are_current(self):
         """A reader-facing example version must not name a superseded candidate.
