@@ -110,6 +110,9 @@ class AdapterRegressions(unittest.TestCase):
                 config['provider'] = {'mode': 'compatible', 'base_url': 'http://localhost/v1',
                     'model': 'fixture', 'api_key_env': 'REVIEW_SELECTED_KEY'}
                 # A model-written test may echo a key already observed in native tools.
+                # This synthetic value is deliberately written into a temporary hostile
+                # fixture so the test can prove it never survives in retained evidence.
+                # codeql[py/clear-text-storage-sensitive-data]
                 (root / config['fixture'] / 'test_slugger.py').write_text(f'print({secret!r})\n')
                 path.write_text(json.dumps(config))
                 with patch.dict('os.environ', {'REVIEW_SELECTED_KEY': secret}):
