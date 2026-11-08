@@ -1,408 +1,331 @@
-# Explore Failure - Harness Workbench
+# Harness Workbench
 
-**Explore Failure - Harness Workbench** is a test bench for your own software or AI harness—and for
-the features you add to it.
+**Your hardware. Your models. Find out what they can do.**
 
-Bring a real workload and connect the harness behavior you want to test,
-whether that's a retry policy, a redaction layer, a change detector, or
-something entirely your own. Harness Workbench records each run so you can
-inspect what happened and compare it with other runs.
+Explore local AI on your own terms. Give a model a real job, see what actually
+happened, and keep the setup that worked.
 
-Its measurement campaigns deliberately change conditions, introduce faults,
-combine features, interrupt runs, and replay preserved inputs. They help reveal
-whether a feature had an effect, stayed contained, interfered with another
-feature, or failed without being noticed.
+Harness Workbench brings together your local model, coding agent, and
+configuration to try useful work on your machine. It independently checks the
+result, preserves the evidence, and saves a Recipe you can run again.
 
-## Why this matters
+Built around the freedom to compute: choose your tools, inspect your results,
+and build on what you learn.
 
-A workload can finish successfully even when its harness did not work as
-expected. A retry policy can fail when it is needed, a detector can miss a
-change, or two features that work separately can interfere when used together.
+> **Very experimental and still underdeveloped.** This is an early project
+> built by one developer. Features are incomplete, setup can be rough, and
+> behavior and interfaces may change. Expect bugs and limitations. The roadmap
+> describes where I want to take it, not what is ready today.
 
-These failures do not always produce an obvious error. Harness Workbench makes
-them visible through controlled experiments and preserves the evidence you
-need to reproduce and understand them.
+[Try it](#try-it) · [Understand your result](#understand-your-result) ·
+[Keep your Recipe](#keep-your-recipe) · [Where this is going](#where-this-is-going) ·
+[Documentation](#documentation)
 
-## Who this is for
+## Why this exists
 
-Harness Workbench is for people who build harnesses—or add new features to
-one—and need to know whether those changes really work.
+The more useful work you can do with local models, the more autonomy you have.
 
-It is especially useful if you are:
+A smaller model that works for your needs lets you put your own hardware to
+use, choose your tools, and rely less on data centers for everyday compute.
+You can experiment, learn, and keep working on your own terms.
 
-- building your own software or AI harness;
-- adding features such as retries, redaction, guardrails, tool controls,
-  memory, or change detection;
-- comparing harness, model, provider, or extension upgrades;
-- investigating failures that leave behind a successful-looking run; or
-- developing integrations for AI coding harnesses such as Pi, Claude Code,
-  Codex, or Hermes Agent.
+Harness Workbench exists to help you explore that possibility: find out what
+works locally, understand its limits, and keep building on it. Freedom to
+compute becomes more useful when you know what you can actually do with it.
 
-If your main question is whether an answer or generated program is good,
-Harness Workbench is not a general-purpose benchmark. It focuses on whether
-the harness around that work behaved as intended.
+## Local AI, on your terms
 
-[`Try it`](#try-it) · [`What it can test`](#what-it-can-test) ·
-[`Builder integrations`](#builder-integrations) ·
-[`Experiment ideas`](#experiment-ideas) ·
-[`Measure your own code`](docs/measuring-your-own-code.md) ·
-[`How the evidence works`](#what-gets-recorded)
+You have a machine, a model, and something you want to do. How do you find out
+whether that combination works for you?
 
-It is built for two jobs:
+Workbench gives you a place to experiment with useful jobs and inspect what
+happens. A successful-looking answer is only the beginning: did the agent
+change the right file, run the tests, and leave the rest alone? When something
+fails, the failed attempt stays available to learn from.
 
-- **Test your own harness ideas.** Write a feature, attach it to a step, then
-  invert it and check that something noticed. See
-  [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md).
-- **Test somebody else's harness.** `hwb subjects --into ./subjects` copies a
-  ready-made tree that runs Claude Code, Codex CLI, DeepSeek Harness, Hermes
-  Agent, and Pi as measured subjects, projecting five different native
-  evidence surfaces into one envelope. See
-  [Measuring another harness](#measuring-another-harness).
+The direction is simple:
 
-Latest published release: **[`v0.2.0`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0)
-public GitHub release**, published 2026-11-07 with signed tag, wheel,
-source-distribution, checksums, and a release-final conformance record. It is
-not published to PyPI.
+1. **Discover** what might work with your hardware and local AI setup.
+2. **Try** a Reality Check: one recognizable job with clear success conditions.
+3. **Prove** the result through independent checks and inspectable evidence.
+4. **Keep** a Recipe you can rerun and build on.
 
-The builder integrations, Reality Check, and certification workflow described
-below are included in `v0.2.0`. Changes after that tag are unreleased.
-Zero runtime dependencies, Python 3.11+.
+That journey is being built in stages. **Today, the released CLI offers one
+coding Reality Check using Pi and Ollama.** Automatic setup discovery and the
+full visual experience are still in development.
 
-Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
-documentation, and tests are welcome for best-effort review; larger changes
-should start with an issue. There is no response, merge, compatibility, or
-support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
-process, [SUPPORT.md](SUPPORT.md) for public help, and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting.
+## Start with a real job
 
----
+The first Reality Check asks a local coding agent to fix a Python bug in a
+disposable fixture. It gives the model a small job with a result you can check.
 
-## What's in the 0.2.0 release
+Workbench independently checks that the tests failed before the repair and
+passed afterward, that only the permitted file changed, and that the retained
+record is intact. It also checks the agent's native evidence for running the
+required test before and after its edit. The agent saying “done” does not earn
+a pass.
 
-The current candidate adds three owned builder workflows, the first
-user-facing Reality Check, and a newly reviewed five-harness certification:
-
-- **Build with Pi, OpenCode, or Hermes.** The new `hwb-pi`, `hwb-opencode`,
-  and `hwb-hermes` commands create owned workspaces, verify pinned runtimes,
-  retain native tool evidence, and run independent checks against your task.
-- **Choose the model and provider explicitly.** The adapters support tested
-  compatible and native provider routes, named API-key environment references,
-  credential-redacted capture, and isolated runtime state. They do not inherit
-  logged-in accounts, download models, or reconfigure model servers.
-- **Run a bounded coding Reality Check.** `hwb try coding/python-bug-fix` asks
-  pinned Pi and a selected local Ollama model to repair a disposable fixture,
-  then derives its verdict from external tests, changed-file policy, and record
-  integrity—not from the model's claim.
-- **Compare five real coding harnesses.** The shipped subject tree covers
-  Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent, and Pi. The promoted
-  2026-11-07 candidate passed adapter capture and the exact repair outcome 3/3
-  for every subject, with zero timeouts.
-- **Retain defensible evidence.** Process-tree cleanup, exact input binding,
-  credential scans, usage gates, sealed-store verification, route canaries,
-  and independent candidate review are part of the certification path.
-
-The builder adapters and cross-harness envelope remain experimental candidate
-surfaces, not stable public library APIs. Local protocol fixtures cover the
-advertised routes; that does not claim that every hosted account, model, or
-platform combination has been validated. See the
-[builder adapter guide](docs/builder-adapters.md) and
-[certification record](src/harness_workbench/subjects/adapter_certification.json)
-for the precise boundaries.
-
----
+You get a verdict, the facts behind it, changed files, a saved run record, and
+a Recipe to try again. A pass is evidence for this task and setup; repeated
+runs are needed to explore consistency.
 
 ## Try it
 
-The project is not published to PyPI. Install it from a clone in a virtual
-environment:
+The latest public GitHub release is
+[**v0.2.0**](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0),
+with a signed tag, wheel, source archive, checksums, and release-conformance
+record. The package is not published to PyPI.
+
+### Install Workbench
+
+Use Python 3.11–3.14 on Linux or macOS. Workbench has zero Python runtime
+dependencies; the coding agent, Node, and Ollama are separate prerequisites.
+Installing from source may download build dependencies.
+
+```sh
+git clone --branch v0.2.0 https://github.com/explorefailure/harness-workbench.git
+cd harness-workbench
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install .
+hwb --version
+```
+
+Release wheels and source archives are also available from the
+[release page](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
+
+### Prepare the local coding setup
+
+The first Reality Check is a demo of the feature, built around one specific
+setup so you can try the complete run, verification, and Recipe experience.
+These exact requirements apply to this demo. Support for additional local AI
+runtimes and integrations with agent tracing software are coming soon, with
+more models, coding agents, and configurations planned as the feature expands.
+Workbench will complement the tracing tools you already use, bringing their
+traces together with independent checks and controlled experiments to help you
+understand failures, improve your setup, and get better results from local AI.
+
+The demo requires:
+
+- Ollama running locally at `http://127.0.0.1:11434`, with `gpt-oss:20b`
+  installed and enough memory to run it.
+- Pi **0.84.1** and Node **22.22.3** on `PATH`. The check validates Pi's
+  executable hash as well as its version against the
+  [shipped pins](src/harness_workbench/subjects/pin.json).
+
+This is the subject adapter's baseline Pi setup. The separate
+[Pi builder integration](docs/pi-builder.md) defaults to a newer Pi/Node pair;
+that default does not satisfy this Reality Check's pins. Workbench does not
+install these tools, download models, or reconfigure your model server for you.
+
+**Known v0.2.0 setup issue:** the shipped local profile enforces a historical
+Ollama model digest. If your installed model has different bytes, the check can
+return `INVALID` before the agent starts. That is a setup failure, not a failed
+repair. A correction is in development; it is not included in v0.2.0. The
+intended behavior is to record your live model identity and flag changes for
+another proof.
+
+### Run the Reality Check
+
+From a directory where you want to keep your Recipes and run records:
+
+```sh
+hwb try coding/python-bug-fix
+```
+
+No Workbench specification needs to be written. The check selects the
+`local-ollama` profile, creates its disposable repair workspace, and retains
+an ordinary sealed Workbench record under `runs/`.
+
+Not ready to run a model? The [no-model example](#explore-without-a-model)
+lets you inspect a deterministic failure-and-retry experiment first.
+
+## Understand your result
+
+| Verdict | What it means |
+| --- | --- |
+| **PASS** | Every required independent fact is established. |
+| **PARTIAL** | Trustworthy evidence shows a green repair, but another required condition failed. |
+| **FAIL** | Trustworthy evidence measured an unsuccessful repair. |
+| **INVALID** | The setup or evidence cannot support a trustworthy task verdict. |
+
+The terminal shows the verification facts, changed files, reasons the result
+was not a pass, setup identity, record location, rerun command, and explicit
+blind spots. Open the retained record to investigate what happened:
+
+```sh
+hwb ls
+hwb show <run-id>
+hwb verify <run-id>
+```
+
+A sealed record lets you check that the retained files have not changed. It
+does not prove that every external effect was observed. This first check
+establishes a bounded fixture result, not general coding ability or a
+model-quality score.
+
+## Keep your Recipe
+
+The check saves a Recipe under `.hwb/recipes/coding-python-bug-fix`. It holds
+the configuration, task, fixture, tests, adapter inputs, and a rerun command.
+To use it again:
+
+```sh
+hwb try coding/python-bug-fix --recipe .hwb/recipes/coding-python-bug-fix
+```
+
+Only `model_selection.json` is editable configuration. The executable inputs,
+specification, task, fixture, and tests are integrity-bound; changed or missing
+bound files are rejected. Each sealed run retains the effective input digests.
+The v0.2.0 digest issue described above also applies to model changes.
+
+Rerunning a Recipe means trying the saved configuration again. It does not
+guarantee identical behavior. The record gives you something concrete to
+compare as you explore.
+
+## Where this is going
+
+The goal is to make local AI easier to explore on hardware you control, with
+useful results you can inspect and reuse.
+
+- **Discover your setup — under consideration.** Other tools already detect
+  hardware, models, and runtimes. I’m exploring integrations and whether
+  built-in discovery would add enough value to help you choose a Reality Check.
+- **Explore in the Lab.** Run a check, inspect its proof, keep a Recipe, and
+  revisit previous runs through a local web interface.
+- **Built-in harness support.** All harness adapters will become part of
+  Workbench. Choose your harness and configure it—no adapter code to manage.
+- **Compare and stress-test.** Change one model or setting, or introduce a
+  controlled failure, and investigate what changes.
+- **Explore how agents use tools.** Inspect tool calls, test permissions and
+  failure recovery, and see how context and memory affect the job.
+- **Share and challenge discoveries.** Publish privacy-reviewed Proof Cards
+  and try the same public task on another machine.
+
+These are development directions, not v0.2.0 features. A basic Lab prototype
+is in development and unreleased. Automatic recommendations, Proof Cards,
+the challenge command, and a shared compatibility map are future work.
+The immediate priority is making the first Reality Check useful to fresh
+users and publishing concrete results.
+
+## Go deeper
+
+The experiment engine underneath the Reality Check is also available for your
+own workloads and harness ideas. You can preserve every attempt, compare
+runs, introduce faults, and test whether a control really changes behavior.
+
+### Explore without a model
+
+The library of deterministic workloads will expand, giving you more ways to
+test a harness or setup with scripted, predictable behavior. These workloads
+take the model out of the equation so you can investigate retries, tool
+failures, controls, and evidence capture without model variability obscuring
+what changed. They test the surrounding machinery; model-backed Reality
+Checks then explore how the complete setup performs.
+
+Try a [deterministic workload](examples/flaky/) to see how your harness handles
+failure and recovery—without needing a model. The example walks through
+retries, preserved failures, redaction, and change detection.
+
+### What gets recorded
+
+Each attempt keeps its exit status, raw stdout and stderr, timing, and causal
+feature. The executed specification and selected feature source are preserved
+beside it. A final success never erases earlier failures. Records are designed
+to be inspected without Workbench; [the record guide](docs/the-record.md)
+explains how.
+
+### What it can test
+
+Campaigns can ask whether a retry worked, a detector noticed a change, two
+features interfered, or a checker rejected a known violation. Each verdict is
+limited to the declared scenario and observed surfaces.
+
+The core accepts ordinary commands. Six opt-in features ship with it:
+`retry`, `sample`, `redact`, `freeze`, `receipt`, and `timing`.
+Start with [measuring your own code](docs/measuring-your-own-code.md), then
+[write a feature](docs/writing-a-feature.md) or choose a
+[measurement campaign](docs/measuring.md).
+
+For command reference:
+
+- **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy`
+- **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine` `replay` `interfere` `order`
+- **take neither** — `ls` and `subjects`; `try` takes a Reality Check name.
+
+Use `hwb --help` or `hwb <command> --help` for options.
+
+### Builder integrations
+
+Separate experimental builders let you supply tasks, model/provider settings,
+and independent checks to **Pi, OpenCode, and Hermes**. See the
+[builder adapter guide](docs/builder-adapters.md) for setup and boundaries.
+These workflows do not promise support for every native plugin, account,
+model, or platform combination.
+
+### Measuring another harness
+
+The shipped experimental subject tree covers **Claude Code, Codex CLI,
+DeepSeek Harness, Hermes Agent, and Pi**:
 
 ```console
-$ git clone https://github.com/explorefailure/harness-workbench.git
-$ cd harness-workbench
-$ python3 -m venv .venv
-$ . .venv/bin/activate
-$ pip install .
-$ hwb --version
-hwb 0.2.0
+$ hwb subjects --into ./subjects
 ```
 
-Create `hello.json` with one command and no features:
+Its own offline suite needs no subject installed:
 
-```json
-{
-  "schema": "hwbspec/v0.1",
-  "features": [],
-  "steps": [{"id": "01", "argv": ["/bin/echo", "hello"]}]
-}
+```sh
+cd subjects
+python3 -m unittest test_experiment.py  # offline; no subject installed
 ```
 
-```console
-$ hwb run hello.json
-20260807T170423Z-6beee9-4472  discovery  1 step(s)  completed
+Local models are the preferred starting point. You can also use a hosted API
+through the adapter's supported routes. Choose your model and provider before
+running live experiments; copied configurations may contain a preset route.
+Hosted APIs may require credentials, network access, and paid usage.
+See the [subject guide](src/harness_workbench/subjects/README.md) for setup
+and supported options, including the `local-ollama` profile. The optional
+`opencode-go` API route uses `HWB_OPENCODE_KEY` and requires outbound network
+access; paid usage may apply. Choose the route that suits your setup.
 
-$ hwb ls
-RUN                            CLASS         STATE       STEPS  FEATURES
-20260807T170423Z-6beee9-4472   discovery     complete    1      -
+The five-subject envelope remains experiment-local, not a stable vendor-neutral
+API. See the [adapter promotion review](docs/adapter-envelope-promotion-review.md).
 
-$ hwb show 20260807T170423Z-6beee9-4472
-```
+## Execution and privacy
 
-This run needs no configuration or features. The run store is `./runs` by
-default.
+Harness Workbench runs local code with your permissions. It is **not a security sandbox**:
+workload commands execute directly, and selected feature modules are imported
+as arbitrary Python code. Run only trusted commands, features, and Recipes.
+Replay directories organize files; they do not provide OS isolation.
 
-**`completed` describes the harness, not the command.** `hwb run` exits 0 when
-the harness completes successfully. A non-zero workload exit is recorded data,
-not a harness error.
+Records can contain stdout, stderr, selected environment values, configuration,
+and source. Keep secrets out of declared inputs and review evidence before
+sharing it. Local execution does not make every connected tool or provider
+local; inspect your chosen route. See [SECURITY.md](SECURITY.md).
 
-### Try the first local-AI Reality Check
+## Documentation
 
-The first user-facing check asks the version-and-executable-pinned Pi coding
-agent and a locally installed Ollama model to repair a disposable Python
-fixture:
-
-```console
-$ hwb try coding/python-bug-fix
-```
-
-An installed absolute entrypoint works without activating its virtual
-environment. The console entrypoint selects its own `sys.executable`; Reality
-Check orchestration passes that value to its dedicated subject launcher as the
-declared `HWB_PYTHON` environment input. The launcher quotes and executes that
-exact path instead of resolving `python3` from `PATH`. The portable Recipe does
-not store a machine-specific interpreter path, while the sealed record retains
-the effective `HWB_PYTHON` value and the launcher/spec/input digests that used
-it.
-
-It requires the Pi and Node identities declared by the shipped subject tree,
-resolves the Recipe's local Ollama model, and records the live content digest.
-That model digest is **recorded, not enforced against the historical value in
-`pin.json`**: a result identifies the bytes Ollama reported for that run, but
-does not claim byte-identical model reproduction. The adapter owner must make
-any future pin-enforcement change; this command does not silently refresh or
-reinterpret that pin.
-The command creates an ordinary Recipe
-under `.hwb/recipes/coding-python-bug-fix`, executes an ordinary Workbench spec,
-and preserves the normal sealed run under `runs/`. Pass/fail is derived from
-external red-before and green-after test runs, an exact changed-file policy,
-the unchanged fixture template, and record integrity—not from the model's
-completion claim.
-
-Verdicts have deliberately narrow meanings:
-
-- `pass`: every required independent fact is established.
-- `partial`: trustworthy evidence shows a green repair, but another required
-  success condition (for example the exact changed-file policy) failed.
-- `fail`: trustworthy evidence measured an unsuccessful repair.
-- `invalid`: the record, baseline, template, adapter measurement, or required
-  evidence is unusable or untrustworthy.
-
-Recipes are intentionally editable configuration, not immutable
-reproductions. Only `model_selection.json` may be edited. The spec, executable
-adapter path, task, tests, and fixture are bound to digests in `recipe.json`;
-missing, malformed, or changed bound files are rejected before execution. The
-normal sealed record digests the exact effective Recipe inputs, so rerun means
-"run this saved configuration again," not "guarantee identical bytes or
-behavior." The terminal prints that contract and the saved Recipe path.
-
-This is a bounded result for one fixture and setup. It is not a model-quality
-score, compatibility claim, containment boundary, or certification. Workloads
-and callbacks remain trusted code; the terminal result lists unobserved
-surfaces explicitly.
-
-The sensitivity test uses one stable deterministic native subject script
-through the normal runner, capture, sealed record, and final verifier. The
-simulated adapter protocol is a separate declared input, and red and green
-conditions use independent specification directories and freeze baselines, so
-changing the declared condition is not misreported as unexplained script
-drift. The test rejects any returning `[freeze] DRIFT` diagnostic. Its simulated
-adapter protocol claims success while the required final test remains red;
-the result is `fail`, the claim remains inspectable in `stdout.bin`, and the
-same path with a green final test passes. This proves verdict sensitivity
-without claiming that CI observed a live model, Ollama, network behavior, or
-Pi child-session behavior.
-
-### See it test something
-
-The deterministic [`examples/flaky/`](examples/flaky/) workload fails twice
-and then succeeds. From that directory, attach the shipped `retry` feature and
-run it:
-
-```console
-$ rm -f .flaky-state
-$ hwb run retry.json
-[timing] step check: 3 attempt(s)
-20260807T174244Z-947867-1117  discovery  1 step(s)  completed
-```
-
-The final attempt passed, but Harness Workbench did not erase the two failures
-that came before it. The full example compares the run with and without retry,
-shows what changed, and demonstrates redaction and change detection without a
-model or network connection.
-
-## What gets recorded
-
-Every attempt is kept, flat and append-only, and never collapsed to an
-outcome:
-
-```console
-$ hwb show <run id>
-attempts
-  step check n=0   exit=1     8ms  <- retry:0
-  step check n=1   exit=1     8ms  <- retry:1
-  step check n=2   exit=0     7ms  <- retry:2
-```
-
-Each attempt names what caused it. A harness that reduced this to "passed"
-would destroy the only evidence that the step is flaky at all. Reduction
-happens at read time, never at capture.
-
-The record is meant to be readable **without this tool**—raw output as bytes,
-the spec that ran, and every attached feature's source preserved beside it.
-`hwb fidelity` checks that claim rather than asserting it, and
-[`docs/the-record.md`](docs/the-record.md) is the map for reading a run with
-nothing but `cat`.
-
-## What it can test
-
-Harness Workbench tests the features that observe, change, protect, and record
-a run. It can help answer:
-
-- **Did it work?** Did the feature change the downstream result it was supposed
-  to change, or was it present but ineffective?
-- **Did it notice what it should?** Does a detector catch deliberate changes to
-  its declared inputs while ignoring changes outside its job?
-- **Did it fail safely?** If a feature breaks, hangs, or writes somewhere it
-  should not, is the damage contained and the unfinished run clearly marked?
-- **Did anything interfere?** Do features behave differently together or when
-  their order changes?
-- **Can the evidence be trusted?** Is the record complete, intact, readable
-  without Harness Workbench, and capable of being replayed?
-- **Is the comparison meaningful?** Is the unchanged baseline stable, what
-  changed between runs, and what noise was deliberately ignored?
-
-Harness Workbench does not score whether the workload produced a good answer
-or prove that a harness is correct in every environment. Each measurement
-answers one specific, bounded question and preserves the evidence behind its
-result. Start with
-[`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) to attach
-your own command and feature, then choose the measurement that matches your
-question.
-
-## Experiment ideas
-
-### Problems I'm building adapters to test
-
-The most revealing experiments ask whether the harness kept a promise that an
-ordinary successful run could hide:
-
-- **Does stop actually mean stop?** Cancel a harness while a delayed tool action
-  is about to arrive. Check whether any tool still runs or any file changes
-  after cancellation.
-- **Is the guardrail actually doing anything?** Run the same operation once
-  blocked and once allowed. The durable outcome should reverse, proving that
-  the guardrail—not something else—controlled the result.
-- **What did context compaction forget?** Force compaction halfway through a
-  task whose later steps depend on earlier decisions. Check whether the harness
-  preserves the decisions, file state, tool results, and next required action.
-- **Did a retry perform the action twice?** Let an action succeed but hide or
-  delay its acknowledgement. Check whether retries recover safely or duplicate
-  the effect.
-- **What changed when you upgraded?** Replay the same scenarios before and
-  after changing the harness, model, provider, or extension. Compare the tools,
-  decisions, events, and durable outcomes—not just the final answer.
-
-These experiments need structured access to the target harness. The subject
-tree provides that access for five harnesses, but no adapter envelope is part
-of the public library API. This list describes experiments—not capabilities
-claimed for a third-party harness.
-
-### Experiments you can run now
-
-Start with a small, deterministic workload whenever possible:
-
-- Make a workload fail twice and succeed on the third attempt. Add a retry
-  policy and see whether a successful final result still preserves the evidence
-  of the earlier failures.
-- Take two features that work correctly on their own, run them together, and
-  reverse their order. Check whether combination or composition changes either
-  feature's behavior.
-- Give a feature a silent fault—such as a valid-looking but incorrect return—
-  instead of making it crash. Check whether the harness notices and contains
-  the damage.
-- Interrupt the runner moments before and after it finishes closing a record.
-  Check whether any unfinished evidence can masquerade as a successful run.
-- Introduce a violation that a checker is supposed to reject. Confirm that the
-  checker still detects it rather than treating silence as success.
-- Print an unmistakably synthetic secret and verify that a redaction feature
-  removes it before the output is stored.
-- Allow one filesystem destination, deliberately write somewhere else, and
-  verify that the boundary violation is detected.
-- For an AI workload, repeat the same prompt or compare model, prompt, and
-  harness configurations while focusing on observable differences rather than
-  scoring answer quality.
-
-## Release direction
-
-Harness Workbench can already run anything exposed as a command, while your
-own harness behavior can be added as Workbench features. Final `0.1.0` shipped
-the experimental five-subject tree. The current candidate builds on it with
-owned Pi, OpenCode, and Hermes workflows, the first Reality Check, and a fresh
-same-apparatus certification for Pi, Claude Code, Codex CLI, DeepSeek Harness,
-and Hermes Agent. The five subjects share an evidence envelope without
-pretending their native event and interception surfaces are the same.
-
-The adapter promotion decision remains unchanged: the whole
-`cross-harness-adapter-run/v0.1` envelope remains experiment-local for
-the next release. Its exact-five-subject validator, live pin/model coupling, and
-closed field sets are useful for sealed comparisons but are not a
-vendor-neutral, additively evolving public API. The generic boundary already
-promoted is `capture` plus `canon`; see the
-[review](docs/adapter-envelope-promotion-review.md).
-
-The remaining release work is immutable release evidence:
-
-- run the complete source and installed-artifact gate on the release commit,
-  then require its hosted Linux/macOS, adapter compatibility, and CodeQL checks;
-- create and verify the signed immutable tag; and
-- verify clean installs from the GitHub-downloaded wheel and source archive.
-
-The integration PR passed its hosted checks and the live certification was
-independently reviewed, but those results do not transfer to a future tag or
-release artifact. Until the release gates close, the adapters remain an
-experimental candidate surface rather than a supported integration promise.
-
-Harness Workbench will remain independent of any particular model, provider,
-or agent framework.
-
-## How it works
-
-Each step is a command. The runner executes it and records every attempt, exit
-code, raw output, attached feature, and feature result. **Features** are
-declared units of behavior that hook into a run at fixed seams.
-
-The runner has **no notion of a model, a provider, or a prompt.** A step calling
-`curl`, a test suite, a build script, a shell pipeline, or a Python script
-hitting some API is identical to the workbench. Several examples call a local
-model through ollama, but those are examples, not requirements: nothing in
-`src/` couples to ollama and the test suite has no network references. Start
-with [`examples/flaky/`](examples/flaky/), which uses a shell script and no
-model.
-
-Campaigns deliberately change or damage part of the setup, then compare what
-happened. They can test whether a feature failure was contained, whether an
-inverted decision changed downstream behavior, whether a detector observed an
-input mutation, and whether verdict engines reject a known record violation.
-
-## Project status and support
-
-Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
-documentation, and tests are welcome for best-effort review; larger changes
-should start with an issue. There is no response, merge, compatibility, or
-support SLA. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
-process, [SUPPORT.md](SUPPORT.md) for public help, and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting.
+| I want to… | Read |
+| --- | --- |
+| Run my own task through a builder | [Builder adapters](docs/builder-adapters.md) |
+| Attach my own command or harness behavior | [Measuring your own code](docs/measuring-your-own-code.md) |
+| Explore without a model | [Flaky workload example](examples/flaky/) |
+| Read the evidence | [The record](docs/the-record.md) |
+| Compare runs and test controls | [Measurement campaigns](docs/measuring.md) |
+| Define an experiment | [The specification](docs/the-spec.md) |
+| Write a feature | [Feature interface](docs/writing-a-feature.md) |
+| Inspect current release assurance | [v0.2.0 conformance record](docs/release-conformance-0.2.0.md) |
+| Inspect historical release assurance | [v0.1.0 source conformance record](docs/release-conformance-0.1.0.md) |
 
 ## Compatibility
+
+Harness Workbench requires CPython 3.11 or newer. Supported versions are
+CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS.
+Windows is unsupported at this time. Windows support is being considered
+once the main features are working.
+
+<details>
+<summary>Release verification and historical compatibility evidence</summary>
 
 `harness-workbench` requires CPython 3.11 or newer. The v0.2 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
@@ -434,279 +357,32 @@ and [Hermes](https://github.com/explorefailure/harness-workbench/actions/runs/42
 compatibility matrices. Its published assets were downloaded and independently
 reverified after publication.
 
-Windows is unsupported. The workbench is deliberately POSIX-oriented rather
-than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
+The current engine depends on POSIX behavior: seam budgets use `SIGALRM`, interruption campaigns
 terminate a direct child at published checkpoints, filesystem measurements
 preserve and inspect executable modes, symlinks, and special nodes such as
 FIFOs, and the shipped examples execute `/bin/sh` scripts. Workload commands
 are passed directly to `subprocess` without a shell, so users choose their own
 POSIX command or request `/bin/sh -c` explicitly.
 
-## Security boundary
+</details>
 
-Harness Workbench is an execution tool, **not a security sandbox**. Reading and
-validating a JSON spec and its feature manifests is inert, but running that
-spec crosses a trust boundary: every `steps[].argv` command executes with the
-current user's permissions, and every selected `feature.py` module is imported
-as arbitrary Python code. Only run specs, commands, feature roots, and
-preserved feature source that you trust.
+## Project status and support
 
-Campaigns do not change that boundary. In particular, `hwb replay` copies
-declared workload files into a separate directory to avoid overwriting the
-original workload. That directory is ordinary filesystem organization, not
-OS-level isolation: replayed commands and feature modules retain the user's
-filesystem, process, environment, and network access.
+Harness Workbench is **actively developed, solo maintained**, under Apache-2.0.
+Try it, investigate what happens, and bring back a clear reproduction when
+something breaks. Focused fixes, documentation improvements, and tests are
+welcome for best-effort review. Larger changes should start with an issue;
+there is no response, merge, compatibility, or support SLA.
 
-Passing a bounded Workbench experiment is evidence about that declared
-scenario and observed boundary—not a general security, sandboxing, or
-prompt-injection certification.
+[SUPPORT.md](SUPPORT.md) · [CONTRIBUTING.md](CONTRIBUTING.md) ·
+[Private security reporting](SECURITY.md) · [License](LICENSE) · [Notice](NOTICE)
 
-Run records preserve stdout, stderr, selected environment values, specs, and
-feature source. Do not put secrets in a spec's `env` list or commands unless
-you intend those values to enter the run store. See [SECURITY.md](SECURITY.md)
-for supported versions and private vulnerability reporting.
-
-## Adding features
-
-Six features ship inside the package. They are **opt-in**: a spec must select
-them by name.
-
-```json
-{
-  "schema": "hwbspec/v0.1",
-  "features_root": "harness_workbench:builtin",
-  "features": [
-    {"name": "retry", "config": {"max": 3}},
-    {"name": "timing"}
-  ],
-  "steps": [{"id": "01", "argv": ["./flaky.sh"], "inputs": ["flaky.sh"]}]
-}
-```
-
-| feature | power | does |
-|---|---|---|
-| `retry` | wrap | re-runs a failing step, keeping every attempt |
-| `sample` | wrap | runs each step N times |
-| `redact` | wrap | scrubs patterns out of captured output before it lands |
-| `freeze` | annotate | digests declared inputs, reports drift against a baseline |
-| `receipt` | annotate | binds the run to the identity of what it ran on |
-| `timing` | observe | reports seam dispatch cost (an instrument, not a capability) |
-
-Write your own: [`docs/writing-a-feature.md`](docs/writing-a-feature.md).
-
-## Measuring the harness
-
-```console
-$ hwb confine <run id>        # did each feature use only its declared record channel
-$ hwb effects <spec> --watch state --allow state/output.txt  # did files stay in a bounded envelope
-$ hwb blast <spec>            # break a feature; was the damage contained
-$ hwb interrupt <spec>        # kill the runner at each durable lifecycle boundary
-$ hwb steady <spec>           # is the unchanged baseline stable enough to compare
-$ hwb efficacy <spec>         # invert a feature's decision; did anything notice
-$ hwb catch <spec>            # perturb declared inputs; did a detector fire
-$ hwb sensitivity <run id>    # does every registered verdict engine reject a known violation
-$ hwb sweep <spec> && hwb interfere <sweep id>   # do features disturb each other
-$ hwb diff <run a> <run b>    # what changed, and what was masked
-$ hwb fidelity <run id>       # what can be answered from the record alone
-$ hwb replay <run id> --in .  # re-execute from the preserved spec
-```
-
-`hwb` does not score workload quality; that judgment needs an oracle the
-project does not have. The campaigns instead check a *relation* between two
-runs, or between a run and a deliberate violation. These verdicts do not need
-quality labels.
-
-Full guide: [`docs/measuring.md`](docs/measuring.md), including a section on
-what the instrument **cannot** see.
-
-## Measuring another harness
-
-A *feature* is a control you own and can invert. A *subject* is a harness you
-run from the outside and measure. The shipped subject tree covers five:
-
-```console
-$ hwb subjects --into ./subjects
-```
-
-`hwb subjects` with no destination lists what ships instead of copying it.
-Once the tree is yours, its own suite runs with no network and no third-party
-client installed; live subject runs have additional requirements. The
-committed active profile is the remote `opencode-go` gateway: DeepSeek,
-Hermes, and Pi runs require a valid `HWB_OPENCODE_KEY`, outbound network
-access, and may consume paid quota or incur spend. Hermes—the pinned Nous
-client—makes a remote API call under that active profile. `local-ollama` is a
-separate optional local profile, not the configuration those commands use by
-default:
+For development, the root suite is network-free and needs no model installed:
 
 ```sh
-cd subjects
-python3 -m unittest test_experiment.py            # offline; no subject installed
-python3 preflight.py                              # offline; all five must be ready
-python3 smoke.py --workload repair                # offline plan; zero calls authorized
-python3 route_canary.py                           # offline gateway-route plan; zero calls
-python3 certify.py                                # offline 3-draw recut plan; zero calls
-python3 review_candidate.py --candidate <path>    # offline promotion-review plan; zero calls
-python3 runner.py --subject claude --workload repair
+python3 -m unittest discover -s tests
 ```
 
-`certify.py --live --record-dir <new-directory>` is the guarded full repair
-recut. It first retains three exact-request provider-route canaries for the
-shared DeepSeek/Hermes/Pi gateway and stops before the matrix on any refusal.
-After they pass, it retains and verifies one sealed three-draw Workbench store
-for each subject, runs the exact-five comparator, records usage and bounded
-cleanup, scans all retained files for credentials, and emits a review
-candidate. It never promotes that candidate into `adapter_certification.json`.
-
-`review_candidate.py` independently rehashes a retained candidate and its
-bound source, checks every retained run and record digest, reruns all five
-`hwb verify` commands and the exact-five comparator, reproduces credential-scan
-coverage, and reruns gitleaks. Its default is a zero-write plan; explicit
-`--review --review-dir <new-directory>` emits a review report, proposed
-certification JSON, and unified patch without editing or applying the target.
-
-The tree is copied out rather than run in place, and that is the point: each
-spec declares its adapter sources in `inputs`, so `freeze` and `receipt`
-digest the exact bytes that ran. An adapter imported from the installed
-package would instead make "which adapter ran" a property of whichever
-version happened to be installed.
-
-**It is not a stable API.** Every subject is pinned to an exact third-party
-release, and one of them is a developer preview that documents breaking
-changes as expected. The tree ships so the workbench can demonstrate itself
-against real harnesses; `src/` imports nothing from it, and the pins are
-yours to update.
-
-Each subject exposes a different interception surface — some can deny a tool
-call, fewer can rewrite its input, fewer still can rewrite its result. Those
-differences are the interesting part, and
-[`SHARED_ADAPTER_CONTRACT.md`](src/harness_workbench/subjects/SHARED_ADAPTER_CONTRACT.md)
-records them per harness.
-
-### The capture primitive
-
-Writing adapters twice surfaced one thing that is not about any harness:
-bounding a hostile child process and coming back with evidence you can defend.
-That much is core, in `harness_workbench.capture`:
-
-```python
-from harness_workbench import capture
-
-env = capture.minimal_environment(root, {"MY_HARNESS_OFFLINE": "1"})
-result = capture.run_bounded(argv, cwd=workspace, env=env, timeout=120)
-evidence = capture.capture_bytes(
-    result.stdout, redactions=capture.credential_values(os.environ)
-)
-```
-
-A bound firing is a measurement, not an error: timeouts, byte limits and
-nonzero exits come back in `result`, and `run_bounded` raises only when it
-cannot measure at all. The child leads its own process group and every
-termination signals the group, because a subject holding a shell outlives a
-signal sent to the shell alone — and `group_alive_after_cleanup` reports
-whether anything survived rather than assuming nothing did.
-
-The envelope shape, what it refuses to promote, and why is in
-[`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md).
-The adapters themselves stay out of core, for the reason above.
-
-## Builder integrations
-
-Use Workbench with Pi, OpenCode, or Hermes to run your own task with a model you
-choose. Each command creates an owned workspace, checks the pinned runtime,
-captures native evidence, and can run your declared checks separately from the
-builder's own success claim.
-
-| Adapter | Start an owned workspace | Pinned candidate | Guide |
-| --- | --- | --- | --- |
-| Pi | `hwb-pi init ./my-pi-workspace` | Pi 1.4.0 / Node 26.13.0 | [Pi](docs/pi-builder.md) |
-| OpenCode | `hwb-opencode init ./my-opencode-workspace` | OpenCode 1.19.5 | [OpenCode](docs/opencode-builder.md) |
-| Hermes | `hwb-hermes init ./my-hermes-workspace` | Hermes 0.22.5 | [Hermes](docs/hermes-builder.md) |
-
-The [builder adapter guide](docs/builder-adapters.md) covers installation,
-model/provider selection, custom task configuration, independent checks,
-evidence fields, and troubleshooting. Scripted repair workloads are optional
-integration controls; the builders are intended to run user-supplied tasks.
-
-Provider support is harness-specific. Pi has tested compatible paths for OpenAI
-Chat Completions, OpenAI Responses, Anthropic Messages, and Google Generative
-AI, plus a separately covered OpenRouter catalog route. OpenCode and Hermes
-support compatible Chat Completions endpoints and the native provider routes
-listed in their guides. These are local protocol-fixture and current-candidate
-claims, not blanket validation of hosted services or model quality.
-
-## Commands
-
-Two kinds, and mixing them up is the most common first mistake:
-
-- **take a spec** — `run` `sweep` `blast` `catch` `steady` `effects` `interrupt` `efficacy`
-- **take an id** — `show` `verify` `diff` `fidelity` `sensitivity` `confine`
-  `replay` `interfere` `order`
-- **take neither** — `ls`, and `subjects` (copies the shipped subject tree)
-
-Use `hwb --help` or `hwb <command> --help` for the registered command and
-option reference.
-
-## Documentation
-
-| | |
-|---|---|
-| [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) | **start here to use it** — attach your workload and your own features, then measure them |
-| [`examples/flaky/`](examples/flaky/) | a worked example, no model required |
-| [`docs/builder-adapters.md`](docs/builder-adapters.md) | Pi, OpenCode and Hermes: choose, install, run, inspect evidence and troubleshoot |
-| [`docs/pi-builder.md`](docs/pi-builder.md) | Pi setup, scripted provider, custom workloads and runtime identity |
-| [`docs/opencode-builder.md`](docs/opencode-builder.md) | OpenCode setup, local models and independent repair checks |
-| [`docs/hermes-builder.md`](docs/hermes-builder.md) | Hermes setup, native events, local models and owned gateway cleanup |
-| [`docs/the-spec.md`](docs/the-spec.md) | every spec field, the bounds, and the digest rule |
-| [`docs/the-record.md`](docs/the-record.md) | what a run directory contains and how to read it without `hwb` |
-| [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
-| [`docs/writing-a-feature.md`](docs/writing-a-feature.md) | the manifest contract, seams, powers, capabilities |
-| [`docs/measuring.md`](docs/measuring.md) | every campaign, what its verdict means, and its limits |
-| [`docs/experiment-writeups.md`](docs/experiment-writeups.md) | required learning record and code-consequence template for every experiment |
-| [`docs/adapter-primitive-extraction.md`](docs/adapter-primitive-extraction.md) | what two independent adapters converged on, and which half of it became core |
-| [`docs/adapter-envelope-promotion-review.md`](docs/adapter-envelope-promotion-review.md) | why the five-subject envelope remains experiment-local for `0.1.0rc2`, and what would be required before another public-API review |
-| [`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) | the source-bundled pre-release conformance record for the source candidate that became final `0.1.0`; the [rc2 release-final record](https://github.com/explorefailure/harness-workbench/releases/download/v0.1.0-rc.2/harness-workbench-v0.1.0-rc.2-release-conformance.md) remains attached to that immutable prerelease |
-
-**These pages have machine-checked surfaces, not a blanket guarantee.** The
-test suite asserts that every spec field, every record key, the seam table,
-the powers table and the command split match the code. It re-runs each
-registered `console` transcript and holds the remaining unregistered count to
-a ceiling, with any elision in checked output marked `...`. What no test can
-check is whether the *prose* is still a good explanation. See
-[`docs/measuring.md`](docs/measuring.md#are-the-transcripts-in-these-docs-real).
-
-## Development
-
-```console
-$ python3 -m unittest discover -s tests
-```
-
-The test suite is network-free and needs no model installed.
-
-Contributions are reviewed on a best-effort basis. Use GitHub Issues for usage
-questions and non-sensitive bugs, and discuss larger changes there before
-substantial implementation. The complete posture and local checks are in
-[CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
-
-Release tooling is pinned in the `release` extra — the build backend included,
-because `[build-system].requires` is only a floor and an isolated build
-resolves it freshly — so local and CI artifact checks use the same versions:
-
-```sh
-python3 -m pip install '.[release]'
-python3 -m build --no-isolation --wheel
-python3 -m twine check --strict dist/*.whl
-```
-
-That is the development convenience. The release gate installs the same pinned
-versions without installing the project, because installing the project leaves
-behind the `build/` directory the gate refuses to start with.
-
-Maintainers should use the complete, fail-closed candidate and final-release
-procedure in [`RELEASING.md`](RELEASING.md), including clean artifact installs,
-commit-derived timestamps, ownership-neutral source-distribution repacking,
-tag/version agreement, and checksums. A raw backend-built sdist must not be
-uploaded; building an archive is not by itself a release.
-
-## Licence
-
-Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Maintainers should follow [RELEASING.md](RELEASING.md) for artifact checks and
+publication. A raw backend-built sdist must not be
+uploaded; use the complete normalization and release procedure.
