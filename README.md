@@ -59,13 +59,13 @@ It is built for two jobs:
   evidence surfaces into one envelope. See
   [Measuring another harness](#measuring-another-harness).
 
-Latest published release: **[`v0.1.0`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
-public GitHub release**, published 2026-08-25 with wheel and
-source-distribution assets. It is not published to PyPI.
+Latest published release: **[`v0.2.0`](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0)
+public GitHub release**, published 2026-11-07 with signed tag, wheel,
+source-distribution, checksums, and a release-final conformance record. It is
+not published to PyPI.
 
-This tree is post-release development for the next version. Changes after the
-`v0.1.0` tag, including the builder integrations and Reality Check described
-below, are unreleased.
+The builder integrations, Reality Check, and certification workflow described
+below are included in `v0.2.0`. Changes after that tag are unreleased.
 Zero runtime dependencies, Python 3.11+.
 
 Maintenance status: **actively developed, solo maintained**. Focused bug fixes,
@@ -77,7 +77,7 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 
 ---
 
-## What's in the next release
+## What's in the 0.2.0 release
 
 The current candidate adds three owned builder workflows, the first
 user-facing Reality Check, and a newly reviewed five-harness certification:
@@ -404,7 +404,7 @@ process, [SUPPORT.md](SUPPORT.md) for public help, and
 
 ## Compatibility
 
-`harness-workbench` requires CPython 3.11 or newer. The v0.1 support target is
+`harness-workbench` requires CPython 3.11 or newer. The v0.2 support target is
 CPython 3.11, 3.12, 3.13, and 3.14 on Linux and macOS. A newer Python may be
 able to install the package, but is not claimed as supported until it joins
 that test set. Published candidate `0.1.0rc2`, exact commit
@@ -423,6 +423,16 @@ and [post-publication immutable-tag
 check](https://github.com/explorefailure/harness-workbench/actions/runs/32898769529).
 Those results prove the tagged release commit and assets only; unreleased main
 must pass its own gates.
+
+Final `0.2.0`, exact commit
+`ef37c76df8910c75d676897ef4a2a9e1b196ab50`, passed its full [CI and package
+run](https://github.com/explorefailure/harness-workbench/actions/runs/42446370785),
+[CodeQL run](https://github.com/explorefailure/harness-workbench/actions/runs/42444044014),
+and the tagged [Pi](https://github.com/explorefailure/harness-workbench/actions/runs/42446370855),
+[OpenCode](https://github.com/explorefailure/harness-workbench/actions/runs/42446370783),
+and [Hermes](https://github.com/explorefailure/harness-workbench/actions/runs/42446370784)
+compatibility matrices. Its published assets were downloaded and independently
+reverified after publication.
 
 Windows is unsupported. The workbench is deliberately POSIX-oriented rather
 than merely untested there: seam budgets use `SIGALRM`, interruption campaigns
