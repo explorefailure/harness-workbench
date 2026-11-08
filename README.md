@@ -118,6 +118,73 @@ default.
 the harness completes successfully. A non-zero workload exit is recorded data,
 not a harness error.
 
+### Try the first local-AI Reality Check
+
+The first user-facing check asks the version-and-executable-pinned Pi coding
+agent and a locally installed Ollama model to repair a disposable Python
+fixture:
+
+```console
+$ hwb try coding/python-bug-fix
+```
+
+An installed absolute entrypoint works without activating its virtual
+environment. The console entrypoint selects its own `sys.executable`; Reality
+Check orchestration passes that value to its dedicated subject launcher as the
+declared `HWB_PYTHON` environment input. The launcher quotes and executes that
+exact path instead of resolving `python3` from `PATH`. The portable Recipe does
+not store a machine-specific interpreter path, while the sealed record retains
+the effective `HWB_PYTHON` value and the launcher/spec/input digests that used
+it.
+
+It requires the Pi and Node identities declared by the shipped subject tree,
+resolves the Recipe's local Ollama model, and records the live content digest.
+That model digest is **recorded, not enforced against the historical value in
+`pin.json`**: a result identifies the bytes Ollama reported for that run, but
+does not claim byte-identical model reproduction. The adapter owner must make
+any future pin-enforcement change; this command does not silently refresh or
+reinterpret that pin.
+The command creates an ordinary Recipe
+under `.hwb/recipes/coding-python-bug-fix`, executes an ordinary Workbench spec,
+and preserves the normal sealed run under `runs/`. Pass/fail is derived from
+external red-before and green-after test runs, an exact changed-file policy,
+the unchanged fixture template, and record integrity—not from the model's
+completion claim.
+
+Verdicts have deliberately narrow meanings:
+
+- `pass`: every required independent fact is established.
+- `partial`: trustworthy evidence shows a green repair, but another required
+  success condition (for example the exact changed-file policy) failed.
+- `fail`: trustworthy evidence measured an unsuccessful repair.
+- `invalid`: the record, baseline, template, adapter measurement, or required
+  evidence is unusable or untrustworthy.
+
+Recipes are intentionally editable configuration, not immutable
+reproductions. Only `model_selection.json` may be edited. The spec, executable
+adapter path, task, tests, and fixture are bound to digests in `recipe.json`;
+missing, malformed, or changed bound files are rejected before execution. The
+normal sealed record digests the exact effective Recipe inputs, so rerun means
+"run this saved configuration again," not "guarantee identical bytes or
+behavior." The terminal prints that contract and the saved Recipe path.
+
+This is a bounded result for one fixture and setup. It is not a model-quality
+score, compatibility claim, containment boundary, or certification. Workloads
+and callbacks remain trusted code; the terminal result lists unobserved
+surfaces explicitly.
+
+The sensitivity test uses one stable deterministic native subject script
+through the normal runner, capture, sealed record, and final verifier. The
+simulated adapter protocol is a separate declared input, and red and green
+conditions use independent specification directories and freeze baselines, so
+changing the declared condition is not misreported as unexplained script
+drift. The test rejects any returning `[freeze] DRIFT` diagnostic. Its simulated
+adapter protocol claims success while the required final test remains red;
+the result is `fail`, the claim remains inspectable in `stdout.bin`, and the
+same path with a green final test passes. This proves verdict sensitivity
+without claiming that CI observed a live model, Ollama, network behavior, or
+Pi child-session behavior.
+
 ### See it test something
 
 The deterministic [`examples/flaky/`](examples/flaky/) workload fails twice
@@ -510,6 +577,10 @@ option reference.
 |---|---|
 | [`docs/measuring-your-own-code.md`](docs/measuring-your-own-code.md) | **start here to use it** — attach your workload and your own features, then measure them |
 | [`examples/flaky/`](examples/flaky/) | a worked example, no model required |
+| [`docs/builder-adapters.md`](docs/builder-adapters.md) | Pi, OpenCode and Hermes: choose, install, run, inspect evidence and troubleshoot |
+| [`docs/pi-builder.md`](docs/pi-builder.md) | Pi setup, scripted provider, custom workloads and runtime identity |
+| [`docs/opencode-builder.md`](docs/opencode-builder.md) | OpenCode setup, local models and independent repair checks |
+| [`docs/hermes-builder.md`](docs/hermes-builder.md) | Hermes setup, native events, local models and owned gateway cleanup |
 | [`docs/the-spec.md`](docs/the-spec.md) | every spec field, the bounds, and the digest rule |
 | [`docs/the-record.md`](docs/the-record.md) | what a run directory contains and how to read it without `hwb` |
 | [`docs/campaign-manifests.md`](docs/campaign-manifests.md) | exact stores, schemas, fields, verdicts, and limits for campaign evidence |
@@ -564,3 +635,21 @@ uploaded; building an archive is not by itself a release.
 ## Licence
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## Builder integrations (unreleased candidates)
+
+Use Workbench with Pi, OpenCode or Hermes to run your tasks with a model you
+choose. The [builder adapter guide](docs/builder-adapters.md) explains current
+model/provider support, task configuration and evidence. The local working draft
+adds Pi provider selection, explicit API-key references and independent task
+checks for all three adapters. See the guide for tested paths and remaining
+hosted/platform validation. Scripted repairs are optional integration controls.
+
+| Adapter | Start an owned workspace | Setup and reference |
+| --- | --- | --- |
+| Pi | `hwb-pi init ./my-pi-workspace` | [Pi guide](docs/pi-builder.md): pinned Node/Pi and an in-process scripted provider |
+| OpenCode | `hwb-opencode init ./my-opencode-workspace` | [OpenCode guide](docs/opencode-builder.md): pinned executable, scripted tools and local models |
+| Hermes | `hwb-hermes init ./my-hermes-workspace` | [Hermes guide](docs/hermes-builder.md): pinned source runtime, native events, local models and gateway cleanup |
+
+These commands require a candidate checkout containing the integrations. Broader
+research experiments remain separate from these builder workflows.

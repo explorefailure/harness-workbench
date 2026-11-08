@@ -1,5 +1,6 @@
 model:
   default: qwen3.5:9b
+  context_length: 65536
   provider: custom
   base_url: http://127.0.0.1:11434/v1
   # Hermes reads the custom provider's key from THIS block, not OPENAI_API_KEY,

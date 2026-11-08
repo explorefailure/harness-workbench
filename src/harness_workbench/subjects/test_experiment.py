@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ import certify
 import compare as comparator
 import doctor
 import guard_hook
+import ollama_compat_proxy
 import preflight
 import recertify
 import review_candidate
@@ -216,6 +218,63 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(Path(plan["apparatus"]["source_root"]).is_absolute())
         self.assertFalse(plan["apparatus"]["gitleaks_available"])
 
+    def test_route_canary_plan_accepts_digest_bound_local_profile(self) -> None:
+        profile = {
+            "kind": "local",
+            "base_url": "http://127.0.0.1:21435/v1",
+            "identity_strength": "local_content_digest",
+            "verify_digest": True,
+            "model_digest": "a" * 64,
+            "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("ark1", profile)
+        ), mock.patch.object(route_canary.shutil, "which", return_value=None):
+            plan = route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+        self.assertEqual("local", plan["profile"]["kind"])
+        self.assertEqual("local_content_digest", plan["profile"]["identity_strength"])
+        self.assertEqual(0, plan["model_calls_authorized"])
+
+    def test_comparator_honors_the_selected_model_profile(self) -> None:
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+            name, profile = comparator._active_model_profile()
+        self.assertEqual("ark1-qwen38", name)
+        self.assertEqual("local_content_digest", profile["identity_strength"])
+        self.assertEqual(
+            "7c439d5c1f940e7c163f59ba2eebea89e3bde8849409cb54eb343ac9fe640b46",
+            profile["model_digest"],
+        )
+
+    def test_route_canary_refuses_local_profile_without_digest_contract(self) -> None:
+        profile = {
+            "kind": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "identity_strength": "gateway_model_label",
+            "verify_digest": False,
+            "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("unsafe-local", profile)
+        ), self.assertRaisesRegex(ValueError, "content-digest"):
+            route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+
+    def test_route_canary_allows_only_certification_drift_for_exact_three(self) -> None:
+        checks = {
+            name: {"passed": name != "certification"}
+            for name in ("identity", "schema_replay", "authentication", "certification")
+        }
+        report = {
+            "overall_status": "attention_required",
+            "subjects": [{
+                "subject": subject,
+                "status": "live_verification_required",
+                "checks": checks,
+            } for subject in route_canary.SUBJECTS],
+        }
+        self.assertTrue(route_canary._doctor_allows_route_recut(report))
+        report["subjects"][0]["checks"]["identity"]["passed"] = False
+        self.assertFalse(route_canary._doctor_allows_route_recut(report))
+
     def test_route_canary_plan_bootstraps_from_an_unrelated_working_directory(
         self,
     ) -> None:
@@ -331,6 +390,21 @@ class CommonTests(unittest.TestCase):
                     require_live_prerequisites=True,
                 )
 
+    def test_certification_plan_declares_local_route_canary_kind(self) -> None:
+        profile = {
+            "kind": "local",
+            "identity_strength": "local_content_digest",
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("ark1", profile)
+        ):
+            plan = certify.build_plan(certify.DEFAULT_LIMITS)
+        route = plan["call_breakdown"]["provider_route_canary"]
+        self.assertEqual("ark1", route["profile"])
+        self.assertEqual("local", route["kind"])
+        self.assertEqual("local_content_digest", route["identity_strength"])
+        self.assertIn("profile_aware_route_canary", plan["stages"])
+
     def test_certification_replaces_a_relative_pythonpath(self) -> None:
         with mock.patch.dict(os.environ, {"PYTHONPATH": "../../src"}, clear=False):
             environment = certify._child_environment()
@@ -438,6 +512,31 @@ class CommonTests(unittest.TestCase):
         self.assertEqual("usage_gate_blocked", report["status"])
         self.assertEqual(0, report["model_calls_started"])
         run.assert_not_called()
+
+    def test_live_certification_allows_only_certification_digest_drift(self) -> None:
+        checks = {
+            name: {"passed": name != "certification", "detail": name}
+            for name in ("identity", "schema_replay", "authentication", "certification")
+        }
+        report = {
+            "overall_status": "attention_required",
+            "subjects": [
+                {
+                    "subject": subject,
+                    "status": "live_verification_required",
+                    "checks": checks,
+                }
+                for subject in certify.SUBJECTS
+            ],
+        }
+        self.assertTrue(certify._doctor_allows_live_recut(report))
+        for status in ("pin_drift", "schema_drift", "auth_missing"):
+            broken = json.loads(json.dumps(report))
+            broken["subjects"][0]["status"] = status
+            self.assertFalse(certify._doctor_allows_live_recut(broken), status)
+        broken = json.loads(json.dumps(report))
+        broken["subjects"][0]["checks"]["authentication"]["passed"] = False
+        self.assertFalse(certify._doctor_allows_live_recut(broken))
 
     def test_certification_failed_route_canary_starts_no_matrix_run(self) -> None:
         plan = self._certification_live_plan({"rolling": 80})
@@ -1063,6 +1162,10 @@ class CommonTests(unittest.TestCase):
                     "passed": True,
                     "status": "passed",
                     "model_calls_started": 3,
+                    "profile": {
+                        "name": "opencode-go",
+                        "kind": "gateway",
+                    },
                     "routes": routes,
                 }),
                 encoding="utf-8",
@@ -1701,6 +1804,49 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(180, subject_runner.timeout_seconds("hermes", "repair"))
         self.assertEqual(120, subject_runner.timeout_seconds("claude", "repair"))
 
+    def test_local_model_profile_can_override_default_and_gets_cpu_offload_headroom(self) -> None:
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+            name, profile = adapters._active_profile()
+            self.assertEqual("ark1-qwen38", name)
+            self.assertEqual("local", profile["kind"])
+            self.assertEqual(
+                subject_runner.LOCAL_MODEL_TIMEOUT_SECONDS,
+                subject_runner.timeout_seconds("hermes", "write"),
+            )
+            usage_name, usage_profile = usage_probe.active_profile()
+            self.assertEqual(name, usage_name)
+            self.assertEqual(profile, usage_profile)
+
+    def test_ollama_digest_probe_uses_the_profile_endpoint(self) -> None:
+        payload = io.BytesIO(json.dumps({"models": [{
+            "name": "qwen3.8:27b", "digest": "sha256:content"
+        }]}).encode())
+        with mock.patch.object(adapters, "urlopen", return_value=payload) as opened:
+            digest = adapters._verify_ollama_digest(
+                "qwen3.8:27b", "http://127.0.0.1:21434/v1"
+            )
+        self.assertEqual("sha256:content", digest)
+        self.assertEqual(
+            "http://127.0.0.1:21434/api/tags", opened.call_args.args[0]
+        )
+
+    def test_ollama_compat_bridge_only_repairs_real_post_tool_turns(self) -> None:
+        untouched = json.dumps({"messages": [{"role": "tool", "content": "ok"}]}).encode()
+        self.assertEqual(
+            untouched, ollama_compat_proxy.bridge_tool_continuation(untouched)
+        )
+        payload = {"messages": [
+            {"role": "user", "content": "write exact fixture"},
+            {"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+            {"role": "tool", "content": "22 bytes written"},
+        ]}
+        bridged = json.loads(ollama_compat_proxy.bridge_tool_continuation(
+            json.dumps(payload).encode()
+        ))
+        self.assertEqual("user", bridged["messages"][-1]["role"])
+        self.assertIn("write exact fixture", bridged["messages"][-1]["content"])
+        self.assertIn("22 bytes written", bridged["messages"][-1]["content"])
+
     def test_live_recertification_retains_each_record_and_report(self) -> None:
         plan = recertify.build_plan(("claude",), "repair", 1)
         ready = {
@@ -2333,18 +2479,43 @@ class CommonTests(unittest.TestCase):
     def test_timeout_preserves_partial_effect_without_terminal_claim(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            result = run_bounded(
-                [
-                    sys.executable,
-                    "-c",
-                    "from pathlib import Path; import time; "
-                    "Path('partial.txt').write_text('partial'); "
-                    "print('started', flush=True); time.sleep(10)",
-                ],
-                cwd=root,
-                env=os.environ.copy(),
-                timeout=0.1,
-            )
+            real_popen = subprocess.Popen
+
+            def start_ready_child(*args, **kwargs):
+                # This test measures timeout AFTER a partial effect, not Python
+                # startup speed. Popen may return long before a loaded macOS
+                # runner schedules the interpreter. Wait for the child's flushed
+                # ready marker, written after stdout flush, before run_bounded creates
+                # its deadline. The production wall-clock bound is unchanged.
+                process = real_popen(*args, **kwargs)
+                try:
+                    ready = root / "ready"
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(ready.is_file(), "child never became ready")
+                    self.assertEqual((root / "partial.txt").read_text(), "partial")
+                    return process
+                except BaseException:
+                    process.kill()
+                    process.communicate(timeout=5)
+                    raise
+
+            with mock.patch.object(capture_module.subprocess, "Popen", side_effect=start_ready_child):
+                result = run_bounded(
+                    [
+                        sys.executable,
+                        "-c",
+                        # Deliberately exceed the capture timeout during startup:
+                        # the test must depend on readiness, not a faster machine.
+                        "import time; time.sleep(0.2); from pathlib import Path; "
+                        "Path('partial.txt').write_text('partial'); "
+                        "print('started', flush=True); Path('ready').touch(); time.sleep(10)",
+                    ],
+                    cwd=root,
+                    env=os.environ.copy(),
+                    timeout=0.1,
+                )
             self.assertEqual((root / "partial.txt").read_text(), "partial")
         self.assertEqual(result.termination_reason, "timeout")
         self.assertNotEqual(result.returncode, 0)

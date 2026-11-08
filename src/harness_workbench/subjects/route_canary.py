@@ -160,18 +160,53 @@ def _sha256(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def _active_gateway() -> tuple[str, dict[str, Any]]:
+def _active_route() -> tuple[str, dict[str, Any]]:
     name, profile = adapters._active_profile()
-    if profile.get("kind") != "gateway":
-        raise ValueError("provider-route canary requires an active gateway profile")
+    if profile.get("kind") not in {"gateway", "local"}:
+        raise ValueError("route canary requires an active gateway or local profile")
     missing = [subject for subject in SUBJECTS if subject not in profile.get("models", {})]
     if missing:
-        raise ValueError("gateway profile is missing canary subjects: " + ", ".join(missing))
+        raise ValueError("active profile is missing canary subjects: " + ", ".join(missing))
+    if profile.get("kind") == "local" and (
+        profile.get("verify_digest") is not True
+        or profile.get("identity_strength") != "local_content_digest"
+        or type(profile.get("model_digest")) is not str
+        or len(profile["model_digest"]) != 64
+    ):
+        raise ValueError("local route canary requires content-digest verification")
     return name, profile
 
 
 def _validate_limits(limits: dict[str, int]) -> None:
     certify._validate_limits(limits)
+
+
+def _doctor_allows_route_recut(report: dict[str, Any]) -> bool:
+    """Allow only certification drift for this canary's exact subject set."""
+    rows = report.get("subjects")
+    if not isinstance(rows, list) or len(rows) != len(SUBJECTS):
+        return False
+    if {row.get("subject") for row in rows if isinstance(row, dict)} != set(SUBJECTS):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        if row.get("status") == "ready":
+            continue
+        checks = row.get("checks")
+        if row.get("status") != "live_verification_required" or not isinstance(checks, dict):
+            return False
+        if any(
+            not isinstance(checks.get(name), dict)
+            or checks[name].get("passed") is not True
+            for name in ("identity", "schema_replay", "authentication")
+        ):
+            return False
+        if not isinstance(checks.get("certification"), dict) or checks[
+            "certification"
+        ].get("passed") is not False:
+            return False
+    return True
 
 
 def _scanner(*, required: bool) -> tuple[Path | None, str | None]:
@@ -191,7 +226,7 @@ def build_plan(
 ) -> dict[str, Any]:
     """Describe the three-route canary while authorizing zero model calls."""
     _validate_limits(limits)
-    profile_name, profile = _active_gateway()
+    profile_name, profile = _active_route()
     scanner, scanner_digest = _scanner(required=require_live_prerequisites)
     if not GITLEAKS_CONFIG.is_file():
         raise ValueError("the bundled gitleaks configuration is missing")
@@ -210,7 +245,7 @@ def build_plan(
         "stop_policy": "stop before the matrix on the first non-positive route result",
         "profile": {
             "name": profile_name,
-            "kind": "gateway",
+            "kind": str(profile["kind"]),
             "base_url": str(profile["base_url"]),
             "models": {subject: str(profile["models"][subject]) for subject in SUBJECTS},
             "identity_strength": str(profile["identity_strength"]),
@@ -504,18 +539,31 @@ def execute(
         certify._write_json_exclusive(destination / "route-canary-report.json", report)
         return report, 2
     report["preflight"] = {**initial_doctor, "local": local}
-    if initial_doctor.get("overall_status") != "ready":
+    if initial_doctor.get("overall_status") != "ready" and not _doctor_allows_route_recut(initial_doctor):
         report.update({"status": "preflight_blocked", "passed": False})
         certify._write_json_exclusive(destination / "route-canary-report.json", report)
         return report, 1
 
-    profile_name, profile = _active_gateway()
+    profile_name, profile = _active_route()
     if profile_name != plan["profile"]["name"] or {
         subject: str(profile["models"][subject]) for subject in SUBJECTS
     } != plan["profile"]["models"]:
-        raise ValueError("the active gateway profile changed after planning")
+        raise ValueError("the active route profile changed after planning")
+    if profile.get("kind") != plan["profile"]["kind"]:
+        raise ValueError("the active route kind changed after planning")
+    local_digests: dict[str, str] = {}
+    if profile.get("kind") == "local":
+        for subject in SUBJECTS:
+            model = str(profile["models"][subject])
+            local_digests[subject] = adapters._verify_ollama_digest(
+                model, str(profile["base_url"])
+            )
+        report["local_model_digests"] = local_digests
     credential_name = str(profile["api_key_env"])
     credential = os.environ.get(credential_name)
+    if not credential and profile.get("kind") == "local":
+        placeholder = profile.get("api_key_placeholder")
+        credential = str(placeholder) if placeholder else None
     if not credential:
         raise ValueError(f"{credential_name} is unavailable after preflight")
     values = tuple(sorted(set(credential_values(os.environ)) | {FAKE_KEY}, key=len,
@@ -577,6 +625,7 @@ def execute(
             "capture": str(capture_path.relative_to(destination)),
             "capture_sha256": digest_file(capture_path),
             "render_cleanup": rendered["cleanup"],
+            "model_digest": local_digests.get(subject),
         }
         report["routes"][subject] = route
         report["model_calls_started"] += 1
@@ -669,7 +718,7 @@ def execute(
         operational_errors.append(
             "post-canary usage reached a stop threshold; the matrix must not start"
         )
-    if postflight.get("overall_status") != "ready":
+    if postflight.get("overall_status") != "ready" and not _doctor_allows_route_recut(postflight):
         operational_errors.append("offline postflight is not ready")
     if report["model_calls_started"] > MAXIMUM_CALLS:
         operational_errors.append("canary exceeded its authorized call maximum")

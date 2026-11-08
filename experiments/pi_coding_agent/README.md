@@ -4,9 +4,10 @@ Experiment results and code consequences are recorded in
 [`LEARNINGS.md`](LEARNINGS.md). The repository-wide write-up standard is
 [`docs/experiment-writeups.md`](../../docs/experiment-writeups.md).
 
-Status: implemented and locally testable, but not shipped. This experiment remains
-outside the Python package and release examples while Harness Workbench is at
-`0.1.0rc2`.
+Status: research experiments are source-owned and locally testable. The
+unreleased Pi builder integration packages a focused adapter/repair subset; see
+[the builder guide](../../docs/pi-builder.md). The broader experiment suite and
+its version-specific outcome oracles remain separate from that CLI contract.
 
 The reusable layer is `adapter.py`. It accepts a `pi-hwb-adapter-config/v0.1`
 configuration, verifies the pinned Pi installation, creates a disposable workspace,
@@ -275,3 +276,19 @@ to the provider's next action and durable branch effect.
 Hostile escaped-session/network/process-pressure cases remain container-only. A live
 provider run remains optional, cost-bearing discovery rather than confirmation. RPC
 and Linux are separate gates because they add a new transport or support claim.
+
+
+## Pi 1.4.0 compatibility
+
+The newer builder profile uses Node 26.13.0, a locked optional npm install with
+undici overridden to 8.12.3, and a v0.2 installation pin. The old 0.84.1 baseline
+is retained unchanged. For source-owned newer experiments, copy the reviewed
+builder profile pin to an isolated experiment copy and put that pinned runtime
+on PATH; do not overwrite an existing freeze baseline.
+
+Pi 1.4.0 adds system messages and structured results. The repair and four
+honest/falsified rewrite/branch oracles handle those shapes explicitly. They bind
+the raw result to its summary and mask only valid bash wall time. They still
+reject wrong exit status, forged payloads, missing controls and inconsistent
+filesystem effects. A rewritten successful event may retain an embedded native
+isError:true; the original failure, final report and durable effect are distinct.

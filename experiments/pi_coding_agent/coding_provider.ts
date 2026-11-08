@@ -78,7 +78,7 @@ function streamScripted(
           type: "toolCall",
           id: RUN_FAILING_TESTS,
           name: "bash",
-          arguments: { command: "python3 -m unittest -q >/dev/null 2>&1" },
+          arguments: { command: "python3 -B -m unittest -q >/dev/null 2>&1" },
         },
         {
           type: "toolCall",
@@ -100,7 +100,7 @@ function streamScripted(
           type: "toolCall",
           id: RUN_PASSING_TESTS,
           name: "bash",
-          arguments: { command: "python3 -m unittest -q >/dev/null 2>&1" },
+          arguments: { command: "python3 -B -m unittest -q >/dev/null 2>&1" },
         },
       ];
       const toolCall = steps.find((step) => !toolResultIds.has(step.id));

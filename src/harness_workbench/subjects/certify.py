@@ -79,6 +79,36 @@ def _validate_limits(limits: dict[str, int]) -> None:
         raise ValueError("usage limits must be known windows between 1 and 100")
 
 
+def _doctor_allows_live_recut(report: dict[str, Any]) -> bool:
+    """Permit current evidence or certification-only drift before a recut."""
+    rows = report.get("subjects")
+    if not isinstance(rows, list) or len(rows) != len(SUBJECTS):
+        return False
+    if {row.get("subject") for row in rows if isinstance(row, dict)} != set(SUBJECTS):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        if row.get("status") == "ready":
+            continue
+        if row.get("status") != "live_verification_required":
+            return False
+        checks = row.get("checks")
+        if not isinstance(checks, dict) or set(checks) != {
+            "identity", "schema_replay", "authentication", "certification"
+        }:
+            return False
+        if any(
+            not isinstance(checks[name], dict)
+            or checks[name].get("passed") is not True
+            for name in ("identity", "schema_replay", "authentication")
+        ):
+            return False
+        if checks["certification"].get("passed") is not False:
+            return False
+    return True
+
+
 def _validate_spec_document(subject: str, document: object) -> dict[str, Any]:
     """Prove the retained Workbench semantics were not weakened."""
     if not isinstance(document, dict) or document.get("schema") != "hwbspec/v0.1":
@@ -189,6 +219,10 @@ def build_plan(
     apparatus = _offline_apparatus(
         require_live_prerequisites=require_live_prerequisites
     )
+    route_profile_name, route_profile = adapters._active_profile()
+    route_kind = str(route_profile.get("kind"))
+    if route_kind not in {"gateway", "local"}:
+        raise ValueError("certification requires a gateway or local route profile")
     run_root = "<fresh-record-dir>/runs"
     return {
         "schema": SCHEMA,
@@ -203,6 +237,9 @@ def build_plan(
         "call_breakdown": {
             "provider_route_canary": {
                 "subjects": ["deepseek", "hermes", "pi"],
+                "profile": route_profile_name,
+                "kind": route_kind,
+                "identity_strength": str(route_profile["identity_strength"]),
                 "nominal": ROUTE_CANARY_CALLS,
                 "maximum": ROUTE_CANARY_CALLS,
             },
@@ -258,7 +295,7 @@ def build_plan(
         "stages": [
             "offline_prerequisites",
             "usage_gate",
-            "provider_route_canary",
+            "profile_aware_route_canary",
             "five_sealed_workbench_runs",
             "verify_every_sealed_store",
             "exact_five_comparison",
@@ -565,7 +602,7 @@ def execute(
         report["error"] = f"offline prerequisites: {error}"
         return finish("preflight_error", 2)
     report["preflight"] = {**initial_doctor, "local": local}
-    if initial_doctor.get("overall_status") != "ready":
+    if not _doctor_allows_live_recut(initial_doctor):
         return finish("preflight_blocked", 1)
 
     values = credential_values(os.environ)
@@ -680,7 +717,7 @@ def execute(
     }
     if not canary_passed:
         operational_errors.append(
-            "provider-route canary did not prove all three shared gateway routes"
+            "profile-aware route canary did not prove all three configured routes"
         )
 
     for subject in SUBJECTS if not operational_errors else ():
@@ -886,7 +923,7 @@ def execute(
     eligibility_errors = list(operational_errors)
     if after_error is not None:
         eligibility_errors.append("post-run usage could not be retained")
-    if postflight.get("overall_status") != "ready":
+    if not _doctor_allows_live_recut(postflight):
         eligibility_errors.append("offline postflight is not ready")
     if not gitleaks_clean:
         eligibility_errors.append("gitleaks did not prove retained evidence clean")

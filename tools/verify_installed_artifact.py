@@ -69,6 +69,7 @@ def main() -> None:
         run([hwb, "--help"], cwd=work, env=env)
         run([python, "-m", "harness_workbench", "--help"], cwd=work, env=env)
         verify_materialized_subjects(hwb, python, work, env)
+        verify_subject_runtime_identity(hwb, python, work, env)
 
         spec = work / "hello.json"
         spec.write_text(json.dumps({
@@ -144,6 +145,58 @@ def verify_materialized_subjects(
         cwd=work,
         env=env,
     )
+
+
+def verify_subject_runtime_identity(
+    hwb: str, python: str, work: Path, env: dict[str, str]
+) -> None:
+    """Exercise the installed shell-to-Python boundary under a hostile PATH."""
+    probe = work / "runtime probe with spaces"
+    probe.mkdir()
+    source = work / "subjects" / "run_reality_subject.sh"
+    script = probe / "run_reality_subject.sh"
+    script.write_bytes(source.read_bytes())
+    script.chmod(source.stat().st_mode)
+    (probe / "runner.py").write_text(
+        "import json, sys\n"
+        "import harness_workbench\n"
+        "print(json.dumps({'executable': sys.executable, "
+        "'package': harness_workbench.__file__}, sort_keys=True))\n",
+        encoding="utf-8",
+    )
+    spec = probe / "runtime.json"
+    spec.write_text(json.dumps({
+        "schema": "hwbspec/v0.1",
+        "features_root": "harness_workbench:builtin",
+        "features": [{"name": "freeze"}, {"name": "receipt"}],
+        "env": ["HWB_PYTHON"],
+        "steps": [{
+            "id": "runtime",
+            "argv": ["./run_reality_subject.sh", "probe", "probe"],
+            "inputs": ["run_reality_subject.sh", "runner.py"],
+        }],
+    }), encoding="utf-8")
+    hostile = dict(env)
+    hostile["PATH"] = "/usr/bin:/bin"
+    hostile["HWB_PYTHON"] = python
+    runs = probe / "runs"
+    completed = run(
+        [hwb, "--root", str(runs), "run", spec.name], cwd=probe, env=hostile
+    )
+    run_id = completed.stdout.split()[0]
+    run([hwb, "--root", str(runs), "verify", run_id], cwd=probe, env=hostile)
+    attempt = runs / run_id / "steps" / "runtime" / "attempts" / "0" / "stdout.bin"
+    observed = json.loads(attempt.read_text(encoding="utf-8"))
+    if Path(observed["executable"]).resolve() != Path(python).resolve():
+        raise SystemExit(
+            "installed subject selected the wrong Python under the hostile PATH: "
+            f"{observed['executable']}"
+        )
+    if "site-packages" not in observed["package"]:
+        raise SystemExit("installed subject did not import the installed package")
+    record = json.loads((runs / run_id / "record.json").read_text(encoding="utf-8"))
+    if record.get("env", {}).get("declared", {}).get("HWB_PYTHON") != python:
+        raise SystemExit("sealed record did not retain the effective Python runtime")
 
 
 def artifact_version(python: str, cwd: Path, env: dict[str, str]) -> str:

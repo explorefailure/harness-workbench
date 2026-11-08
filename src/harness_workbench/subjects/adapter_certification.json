@@ -1,61 +1,61 @@
 {
   "schema": "cross-harness-live-certification/v0.1",
-  "certified_date": "2026-08-26",
+  "certified_date": "2026-11-07",
   "workload": "repair",
   "draws_per_subject": 3,
-  "comparator_sha256": "sha256:57b2f806d71f80eb404f1f5cc32b206bcaf0e635aae96350a4f5dea1e7a44d6d",
+  "comparator_sha256": "sha256:796973329c771a641aa20e9bf1562e6077bed64af7bdc6b3fc456cd4f3d98c13",
   "contract_passed": true,
   "inputs": {
-    "adapters.py": "sha256:88ec78e0115c4e1514c913fc2411782c47c932dcb956e677240343160aa396fd",
+    "adapters.py": "sha256:a7a4c667748f41ac90607333a6ae539652f283dfd9db4e93395b08f33bbd344a",
     "dsh_patch.yml": "sha256:c3520bb94f5872fc4d6e054ac612441f12ec843786139935837fe863b83edf95",
-    "hermes_config.yaml": "sha256:fd1781c0f224a47d2d72c1c04f624be5aeda5e45db2c29f2fb0a4bce93408bee",
+    "hermes_config.yaml": "sha256:e7993a551fdf194857cdfd6f86f177c899d4c0813df8c1e432b8e6c6542e8d72",
     "hook.py": "sha256:3a250e3d0f5c65c1ac6569b73fef50cc49c805e7f01f50cc08c216a0e5e5ca04",
-    "model_selection.json": "sha256:c66f82cf9109cee193a202149a36801d2f2dbd6e46a41d066d55a0d01a368cd8",
+    "model_selection.json": "sha256:f838dbbbbdf410213b7a1eb9a6333458366cc2a1bec2fb7344f065d121edd140",
     "oracles.py": "sha256:303fc9f67b2f44e238a041e32d60a84f0ff377ca8223fbcd481a21bedbe7436c",
-    "pin.json": "sha256:6f9e4c4875cfd732e2537893664689039a10248e4ee1110f88b0fdf489204088",
+    "pin.json": "sha256:1eb0d17c9c043d666c2ecd94048ac81be0f60aa541e1b1ec7f0246a2150df10e",
     "repair_fixture/slugger.py": "sha256:779c1838d6a838697ea20b464f895e8f1a01e64f1bab3d722dd424be9c1ff67c",
     "repair_fixture/test_slugger.py": "sha256:838c4e2f81586723a61f687ec01b0121bace32d0eacce44f85f54ef0f89b8da1",
     "repair_task.md": "sha256:cfb9c794b9cc4935661f39cdaf0a78e8c49991085825bfd0c6417e8be7f7fad3",
     "run_subject.sh": "sha256:fd73e6b1ad2f0d2585c0282d2cb2fca0047a0ea0f0cfdb01fb19e93e836c1568",
-    "runner.py": "sha256:c685361fcb2b4c5a933af247f99a3c8b9645ed0669469239971ade4a2b8b315b",
-    "workloads.py": "sha256:d2a46d05eadca1c49c1812c18e2786277c6279663be6cbaad19a306a225462a6"
+    "runner.py": "sha256:37d748e46173d04cd5cbecae745e7fa35531a18f7c96abb750e5f71f51af02ed",
+    "workloads.py": "sha256:dbaf823948cf89021e9bef3aa17e78479c53b631d679edd00082bbb9b95edf92"
   },
   "apparatus_modules": {
     "canon": "sha256:ad65d72e676b8b569316b2edc8a46f7df50cbceef39c31f6d9444ad26160de9b",
-    "capture": "sha256:9a6e2286b610ea4f268860615c73e2e37ee154c5f509e36281019ee5676a1ddc"
+    "capture": "sha256:3fbc5a793edb06b4023c96c9a76036afb184a3ba08c50ada7c2823b7003b875c"
   },
   "subjects": {
     "claude": {
-      "run_id": "20260826T083727Z-2355e9-a8ce",
-      "record_sha256": "sha256:658241bccfa29d445e34b03c88760535a2c9a93a2f501e67e0fbe6ed0142ce5a",
+      "run_id": "20261107T175023Z-2355e9-e8fc",
+      "record_sha256": "sha256:379fced23d7abf05e931979070c56672f1ed167d50fb2b65e3c5b288d7148126",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "codex": {
-      "run_id": "20260826T083825Z-e523b9-7d45",
-      "record_sha256": "sha256:ad8b9b4ed0c23314b4363231361e2641f46fe57ee8a48baa50c26a412564a2a5",
+      "run_id": "20261107T175102Z-e523b9-e46b",
+      "record_sha256": "sha256:2395a3ec0dbddbd2b08c7e5232eb697b3433aa92f0c7deb8f41f26a67624ee9a",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "deepseek": {
-      "run_id": "20260826T084019Z-afb1ef-f931",
-      "record_sha256": "sha256:e1760ce65b741610e6a4853ca2ac1f9a1d563e9671871395eb33239789d59d3c",
+      "run_id": "20261107T175216Z-afb1ef-7b57",
+      "record_sha256": "sha256:a015ba7dd3353f581fde81b0520ea3598efcd81a2e9b1b262c05fcc8531a6162",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "hermes": {
-      "run_id": "20260826T084212Z-400fd4-5b81",
-      "record_sha256": "sha256:efe5d5a7c092284e82743a8b6d2db51f5f13b346e19a003eb863b79727fc9d99",
+      "run_id": "20261107T175940Z-400fd4-f018",
+      "record_sha256": "sha256:55eaf2bec5b0eb9ef2b7c64fca21916c5fb95a3373a3386a9d1882e9266d1299",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "pi": {
-      "run_id": "20260826T084438Z-c6514d-b8e7",
-      "record_sha256": "sha256:573cb58a2bc78ba145d0832497a1c50625cdfd5a4b7fee1ef67bacdeb4957329",
+      "run_id": "20261107T181431Z-c6514d-3ffe",
+      "record_sha256": "sha256:2c51dbabb6f1299ee48657a3d621cd8d579a8656dd5679689902f0bff0d09cc9",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0

@@ -42,10 +42,10 @@ dependencies = []
 # The exact release toolchain, including the build backend. `requires` above is
 # a floor, and `python -m build` resolves a floor freshly in an isolated
 # environment, so the same commit built minutes apart produced different wheel
-# bytes and different member modes under setuptools 79.0.1 and 84.0.0 -- 84
-# drops the executable bit from `.py` package data that the source tree marks
-# executable. The release gate therefore builds with `--no-isolation` against
-# this pin. Third parties building from source are still governed by the floor;
+# bytes and different member modes under setuptools 79.0.1 and 84.0.0.
+# Namespace discovery also caused timestamp-dependent helper-mode loss, even
+# under 83; the finder below excludes those data directories from module copying.
+# The release gate still builds with `--no-isolation` against this pin. Third parties building from source are still governed by the floor;
 # only the release path is pinned. `RELEASING.md` writes these versions
 # literally and a test asserts the two lists agree.
 release = [
@@ -61,6 +61,10 @@ Issues = "https://github.com/explorefailure/harness-workbench/issues"
 
 [project.scripts]
 hwb = "harness_workbench.cli:main"
+hwb-adapter = "harness_workbench._adapter_bridge:main"
+hwb-pi = "harness_workbench._pi_cli:main"
+hwb-opencode = "harness_workbench._opencode_cli:main"
+hwb-hermes = "harness_workbench._hermes_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -76,6 +80,27 @@ include-package-data = true
 # imported -- `hwb subjects init` copies it into a directory the user owns,
 # where each spec's `inputs` digest covers the exact adapter bytes that ran.
 harness_workbench = [
+    "hermes_builder/*.py",
+    "hermes_builder/*.json",
+    "hermes_builder/*.sh",
+    "hermes_builder/*.md",
+    "hermes_builder/.gitignore",
+    "hermes_builder/coding_fixture/*.py",
+    "opencode_builder/*.py",
+    "opencode_builder/*.json",
+    "opencode_builder/*.sh",
+    "opencode_builder/*.md",
+    "opencode_builder/.gitignore",
+    "opencode_builder/coding_fixture/*.py",
+    "pi_builder/*.py",
+    "pi_builder/*.json",
+    "pi_builder/*.ts",
+    "pi_builder/*.mjs",
+    "pi_builder/*.sh",
+    "pi_builder/*.md",
+    "pi_builder/.gitignore",
+    "pi_builder/coding_fixture/*.py",
+    "pi_builder/runtime/*.json",
     "builtin/*/*.py",
     "builtin/*/FEATURE.json",
     "subjects/*.py",
@@ -100,6 +125,7 @@ harness_workbench = [
     "subjects/.gitleaks.toml",
     "subjects/repair_fixture/*.py",
     "subjects/replay_fixtures/*.json",
+    "reality_checks/*.json",
 ]
 
 [tool.setuptools.dynamic]
@@ -110,3 +136,7 @@ version = { attr = "harness_workbench.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# Builder/subject directories are shipped data, not namespace packages.
+# Discovering their .py helpers as modules strips executable modes before a
+# timestamp-dependent data recopy; integral-mtime source archives exposed it.
+namespaces = false

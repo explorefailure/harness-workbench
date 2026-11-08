@@ -9,12 +9,14 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
 import unittest
+import zipfile
 from unittest import mock
 
 
@@ -688,6 +690,61 @@ class TestArchiveExecutableAgreement(unittest.TestCase):
             & 0o100
         )
         self.assertFalse((ROOT / "README.md").stat().st_mode & 0o100)
+
+
+class TestCleanWheelModes(unittest.TestCase):
+    def test_data_script_modes_survive_integral_and_fractional_source_mtimes(self):
+        """Build from the real finder/data configuration, without a build cache.
+
+        Namespace discovery used to copy these scripts twice. Module copying
+        stripped executable bits; the later data copy restored them only when
+        timestamp precision happened to force another copy. Use both timestamp
+        shapes and compare bytes as well as modes, without fixing the product.
+        """
+        python = os.environ.get("HWB_PACKAGE_BUILD_PYTHON", sys.executable)
+        probe = subprocess.run(
+            [python, "-c", "import importlib.metadata as m; print(m.version('setuptools'))"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if probe.returncode or int(probe.stdout.split(".", 1)[0]) < 77:
+            self.skipTest("requires setuptools >=77; set HWB_PACKAGE_BUILD_PYTHON")
+        members = ["hook.py", "runner.py"]
+        with tempfile.TemporaryDirectory(prefix="hwb-data-wheel-") as raw:
+            work = Path(raw)
+            for label, nanos in [("integral", 0), ("fractional", 123456789)]:
+                with self.subTest(timestamp=label):
+                    source = work / label
+                    source.mkdir()
+                    names = ["pyproject.toml", "README.md", "LICENSE", "NOTICE",
+                             "src/harness_workbench/__init__.py"] + [
+                        "src/harness_workbench/subjects/" + name for name in members]
+                    for name in names:
+                        target = source / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(ROOT / name, target)
+                        target.chmod(0o755 if name.endswith(tuple(members)) else 0o644)
+                        stamp = 1793393857 * 1_000_000_000 + nanos
+                        os.utime(target, ns=(stamp, stamp))
+                    home = source / "home"
+                    home.mkdir()
+                    env = {"HOME": str(home), "PATH": os.defpath,
+                           "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
+                           "SOURCE_DATE_EPOCH": "1793393857"}
+                    built = subprocess.run(
+                        [python, "-c", "import os; os.umask(0o022); "
+                         "from setuptools.build_meta import build_wheel; build_wheel('dist')"],
+                        cwd=source, env=env, text=True, capture_output=True, timeout=60,
+                    )
+                    self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+                    wheels = list((source / "dist").glob("*.whl"))
+                    self.assertEqual(1, len(wheels))
+                    with zipfile.ZipFile(wheels[0]) as wheel:
+                        for name in members:
+                            member = "harness_workbench/subjects/" + name
+                            mode = (wheel.getinfo(member).external_attr >> 16) & 0o777
+                            self.assertEqual(0o755, mode, member)
+                            self.assertEqual((ROOT / "src" / member).read_bytes(),
+                                             wheel.read(member))
 
 
 class TestReleaseSurfaces(unittest.TestCase):
@@ -1507,9 +1564,24 @@ class TestReleaseSurfaces(unittest.TestCase):
     # because a new module needed no decision from anyone.
     INTERNAL_MODULES = frozenset({
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",
-        "efficacy", "features", "fidelity", "interrupt", "replay", "runner",
+        "efficacy", "features", "fidelity", "interrupt", "reality", "replay", "runner",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
-        "sweep",
+        "sweep", "_pi_cli", "_opencode_cli", "_hermes_cli",
+        # CLI implementation and versioned adapter validator; no Python API promise.
+        "_adapter_bridge", "_adapter_controls", "_opencode_controls", "_hermes_controls", "opencode_builder.control_runtime", "hermes_builder.control_runtime",
+        # Optional observed-descendant lifecycle machinery, not a library API.
+        "process_tree",
+        "hermes_builder.provider_auth", "hermes_builder.task_checks", "hermes_builder.adapter", "hermes_builder.normalizer",
+        "hermes_builder.scripted_provider", "hermes_builder.runtime_identity",
+        "hermes_builder.gateway_cleanup", "hermes_builder.install_runtime", "hermes_builder.coding_fixture.slugger",
+        "hermes_builder.coding_fixture.test_slugger",
+        "opencode_builder.provider_auth", "opencode_builder.task_checks", "opencode_builder.adapter", "opencode_builder.normalizer",
+        "opencode_builder.scripted_provider", "opencode_builder.install_runtime",
+        "opencode_builder.coding_fixture.slugger", "opencode_builder.coding_fixture.test_slugger",
+        # Owned builder data is launched by path, not a Python library API.
+        "pi_builder.control_runtime", "pi_builder.task_checks", "pi_builder.provider_config", "pi_builder.adapter", "pi_builder.normalizer",
+        "pi_builder.coding_runner", "pi_builder.coding_oracle",
+        "pi_builder.coding_fixture.slugger", "pi_builder.coding_fixture.test_slugger",
         # The builtin feature tree. `builtin/` carries no `__init__.py`, but a
         # namespace package nested inside a regular one is importable anyway
         # and every file here ships in the wheel, so these are as reachable as
@@ -1574,11 +1646,13 @@ class TestReleaseSurfaces(unittest.TestCase):
             find.get("where"),
             "package discovery no longer roots at src/; this check reads src/",
         )
+        self.assertIs(find.get("namespaces"), False,
+                      "data helpers must not also be copied as Python modules")
         # An include/exclude filter would change what "found under src/ ships"
         # means, and this check may not assume the answer it was written for.
         self.assertEqual(
             [],
-            sorted(set(find) - {"where"}),
+            sorted(set(find) - {"where", "namespaces"}),
             "packages.find grew a filter; re-derive what actually ships before "
             "trusting the set below",
         )

@@ -4092,7 +4092,7 @@ class TestTheFirstRunDeadEnds(Base):
         # Enumerated from the parser rather than listed by hand, so a command
         # added later cannot quietly escape the check.
         from harness_workbench import cli
-        spec_takers = {"run", "sweep", "blast", "catch", "efficacy",
+        spec_takers = {"run", "try", "sweep", "blast", "catch", "efficacy",
                        "steady", "effects", "interrupt"}
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]

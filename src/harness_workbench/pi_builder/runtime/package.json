@@ -1,0 +1,12 @@
+{
+  "name": "hwb-pi-builder-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  },
+  "overrides": {
+    "minimatch": "11.0.4",
+    "undici": "8.12.3"
+  }
+}

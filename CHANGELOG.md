@@ -7,6 +7,53 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Include the upstream-pinned Anthropic SDK extra in the owned Hermes runtime
+  and verify its dependency profile before execution. Pin sessions with --in
+  and test relative file operations and native working directories to prevent
+  parent Git discovery from moving a task out of its retained fixture.
+
+- Add local working support for native Pi model/provider configuration, named
+  API-key references across Pi/OpenCode/Hermes, selected native provider routes,
+  credential-redacted capture and independently bounded task checks with separate
+  results. Hosted accounts, other native protocols and fresh platform validation
+  remain unvalidated; no release is implied.
+
+- Document Pi, OpenCode and Hermes together with a builder onboarding guide,
+  current model/provider support, evidence-field map, custom-workload workflow,
+  remaining provider requirements and troubleshooting; link the individual guides from the main documentation.
+
+- Add `hwb-hermes` owned builder commands, a verified optional Hermes 0.22.5
+  source/runtime installer, native stream-json evidence, scripted real-tool repair
+  and independent outcome checks. Support explicit local OpenAI-compatible
+  endpoints without inheriting accounts or promoting the universal envelope.
+
+- Synchronize the partial-effect timeout test with the child’s flushed ready
+  signal so slow interpreter startup cannot masquerade as lost durable effects.
+  Keep the production timeout behavior and evidence assertions unchanged.
+
+- Add the owned `hwb-opencode` builder workflow with a checksum-pinned optional
+  OpenCode 1.19.5 runtime, isolated state, bounded JSON-event capture, a scripted
+  native-tool repair and independent before/after outcome checks. Support explicit
+  unauthenticated local model endpoints without inheriting provider accounts.
+
+- Port the four Pi result-rewrite/branch scenarios to Pi 1.4.0 while retaining
+  raw-result hashes, final reported status, native embedded error status and
+  independent durable-effect checks. Add explicit duration-only comparison masks
+  and regression cases that reject fabricated results and missing controls.
+- Override optional Pi runtime undici to 8.12.3 and rebind its lock identity;
+  fresh-install audit reports zero vulnerabilities as of 2026-10-30.
+
+- Add the `hwb-pi` builder CLI: materialize an owned workspace, check exact
+  runtime identity, run the deterministic repair example and capture custom
+  workload specs without promoting the experimental cross-harness envelope.
+- Add a locked optional Pi 1.4.0 / Node 26.13.0 compatibility candidate alongside
+  the original Pi 0.84.1 / Node 22.22.3 baseline. Handle the bundled launcher,
+  installation lock, system-message events and new structured repair results.
+  Retain raw results; mask only validated bash elapsed time in the repair oracle.
+- Make the repair fixture independent of Python bytecode generation and normalize
+  shipped demo modes. Add builder/protocol/outcome regression tests and a
+  Linux/macOS workflow. Hosted results and candidate publication remain pending.
+
 - Add a retained, plan-only-by-default `review_candidate.py` workflow that
   independently rehashes a certification candidate and its exact bound source,
   reruns five sealed-store verifications, the exact-five comparator, complete

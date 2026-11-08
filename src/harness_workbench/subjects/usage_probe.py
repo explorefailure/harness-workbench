@@ -62,7 +62,7 @@ def active_profile() -> tuple[str, dict[str, Any]]:
     selection = json.loads(
         (HERE / "model_selection.json").read_text(encoding="utf-8")
     )
-    name = str(selection["active"])
+    name = os.environ.get("HWB_MODEL_PROFILE", str(selection["active"]))
     try:
         return name, selection["profiles"][name]
     except KeyError as error:

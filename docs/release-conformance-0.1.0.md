@@ -1,5 +1,12 @@
 # Explore Failure - Harness Workbench 0.1.0 release conformance record
 
+> **Historical preparation record:** read-only verification on 2026-10-31
+> confirmed an existing [v0.1.0 release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0),
+> published 2026-08-25. The prepared/not-released wording below describes this
+> earlier preparation snapshot, not current release availability. This record
+> does not cover the current uncommitted Pi/OpenCode/Hermes adapter changes;
+> those need an unused version and a fresh exact-candidate conformance record.
+
 > **Prepared candidate record — NOT RELEASED.** This is the repository-owned
 > pre-release record for an intended R2 public release. It records historical
 > and current preparation CI separately from release-final evidence and is not
@@ -97,6 +104,49 @@ for the actual release even though their repository preparation is in place.
 | `EF-SRS-10` — recorded departure | **MET** | `D-01` through `D-09` name every known unmet predicate, the reason, recipient consequence, and closure evidence. |
 
 ## Verified first-run record
+
+### Reality Check candidate boundary
+
+`hwb try coding/python-bug-fix` is implemented in this candidate branch and
+has local source-test evidence; it is not part of public `main` or a published
+`v0.1.0` release. A `pass` requires a complete untampered Workbench record,
+the canonical template, a genuinely red baseline, a green final required
+test, only the permitted file change, a valid adapter measurement, and the
+independent repair oracle. `partial` is reserved for trustworthy green repair
+evidence that misses another success condition; `fail` is a validly measured
+unsuccessful repair; `invalid` means prerequisite or evidence trust failed.
+The model completion claim is retained but never supplies the verdict.
+
+The local Ollama contract is a **recorded live digest, not pinned
+reproduction**. The historical `pin.json` digest is neither enforced nor
+silently refreshed by this branch. Recipes are editable configuration with
+one editable file, `model_selection.json`; every other required Recipe file is
+manifest-bound, while the normal run record captures the exact effective
+input digests. Therefore a rerun does not claim byte-identical model behavior.
+
+The installed command does not require virtual-environment activation. The
+invoked `hwb` process takes its runtime identity from `sys.executable` and
+passes it as the declared `HWB_PYTHON` environment input to the Reality
+Check-only subject launcher. That launcher executes the quoted path directly;
+it does not consult `PATH` for Python. The Recipe stays portable because it
+does not persist the machine path. The ordinary sealed record retains the
+effective declared environment value, the effective spec, and the digests of
+the launcher and all other declared inputs. The generic certified adapter
+launcher remains unchanged.
+
+The known-red integration proof runs one stable deterministic native subject
+script through ordinary Workbench execution, output capture, record sealing,
+and the final verifier. Its simulated protocol document is a separate declared
+input, and red and green controls use independent specification directories
+and freeze baselines. The test captures diagnostics and fails if unexplained
+`[freeze] DRIFT` returns. A simulated protocol document retains a positive model claim
+while reporting a failing final required test; the detector returns `fail`.
+Changing only that injected fact to a passing final test yields `pass`. This
+tests a native process, normal capture/sealing, and the local protocol/verdict
+boundary. The adapter protocol is simulated; a live model, Ollama, network,
+and Pi child-session behavior remain unobserved. Hosted platform and CodeQL checks, exact release
+commit checks, tag/downloaded-asset checks, and public release publication all
+remain pending.
 
 ### Assurance label and verifier
 
@@ -255,6 +305,10 @@ command fails the suite until this record routes it.
 | Surface group | Exact surfaces | EF-RS-REL route |
 |---|---|---|
 | Front door | `README.md` | T1: `C-HWB-01` through `C-HWB-12`; purpose, ceiling, evidence state, limits, and routes |
+| Builder onboarding and provider roadmap | `docs/builder-adapters.md`; `docs/model-provider-plan.md` | Unreleased workflow; distinguish measured provider paths from planned support. |
+| Hermes builder candidate | `docs/hermes-builder.md`; `.github/workflows/hermes-builder.yml` | Unreleased owned integration; native-stream, runtime and platform claims require candidate-specific evidence. |
+| OpenCode builder candidate | `docs/opencode-builder.md`; `.github/workflows/opencode-builder.yml` | Unreleased owned integration; runtime/platform and live-model claims require candidate-specific evidence. |
+| Pi builder candidate | `docs/pi-builder.md`; `.github/workflows/pi-builder.yml` | Unreleased CLI integration; exact runtime and platform claims require fresh candidate evidence. Existing release evidence does not cover it. |
 | Reference and guides | `docs/adapter-envelope-promotion-review.md`; `docs/adapter-primitive-extraction.md`; `docs/campaign-manifests.md`; `docs/experiment-writeups.md`; `docs/measuring-your-own-code.md`; `docs/measuring.md`; `docs/the-record.md`; `docs/the-spec.md`; `docs/writing-a-feature.md` | T1: primarily `C-HWB-02` through `C-HWB-08`; the experiment template constrains interpretation and code-promotion claims rather than adding a performance claim. The extraction and envelope-review memos record internal code-promotion decisions and make no claim about any third-party harness's behaviour |
 | This conformance/front-door supplement | `docs/release-conformance-0.1.0.md` | T1 claim card, trace, assurance, departures, and current status |
 | Examples and demonstration code/data | every exact `examples/` path in the manifest below | T1 demonstrations: `C-HWB-02`, `C-HWB-04`, `C-HWB-05`, `C-HWB-08`; no performance/generalization claim |
@@ -319,6 +373,7 @@ command fails the suite until this record routes it.
 - `hwb --version`
 - `python -m harness_workbench --help`
 - `hwb run --help`
+- `hwb try --help`
 - `hwb subjects --help`
 - `hwb ls --help`
 - `hwb show --help`

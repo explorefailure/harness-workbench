@@ -309,7 +309,7 @@ def _model_selection() -> dict[str, Any]:
 
 def _active_profile() -> tuple[str, dict[str, Any]]:
     selection = _model_selection()
-    name = str(selection["active"])
+    name = os.environ.get("HWB_MODEL_PROFILE", str(selection["active"]))
     try:
         return name, selection["profiles"][name]
     except KeyError:
@@ -346,12 +346,27 @@ def _resolve_model(subject: str) -> dict[str, str]:
         ),
     }
     if profile.get("verify_digest"):
-        resolved["model_digest"] = _verify_ollama_digest(model)
+        expected_digest = profile.get("model_digest")
+        if type(expected_digest) is not str or len(expected_digest) != 64:
+            raise AdapterError(
+                f"profile {name!r} has no valid expected model digest"
+            )
+        observed_digest = _verify_ollama_digest(
+            model, str(profile["base_url"])
+        )
+        if observed_digest != expected_digest:
+            raise AdapterError(
+                f"Ollama model digest does not match profile {name!r}"
+            )
+        resolved["model_digest"] = observed_digest
     return resolved
 
 
-def _verify_ollama_digest(model: str) -> str:
-    with urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as response:
+def _verify_ollama_digest(model: str, base_url: str) -> str:
+    endpoint = base_url.rstrip("/")
+    if endpoint.endswith("/v1"):
+        endpoint = endpoint[:-3]
+    with urlopen(endpoint + "/api/tags", timeout=3) as response:
         payload = json.load(response)
     for item in payload.get("models", []):
         if item.get("name") == model:
@@ -1078,7 +1093,7 @@ def _hermes_guard_hooks(config_text: str, guard_hook: Path) -> str:
 
 
 def _hermes_command(identity: dict[str, Any], workload: str) -> list[str]:
-    toolsets = "file" if workload == "write" else "file,terminal"
+    toolsets = "file,terminal"
     return [
         str(_executable("hermes")),
         "chat",
@@ -1103,7 +1118,7 @@ def _pi_command(
     # Pi reads the task from an @file reference resolved against its cwd, which
     # the supervisor already pins to the disposable workspace.
     if workload == "write":
-        tools = "write"
+        tools = "write,read,bash"
     elif workload == "guard":
         # `bash` is in the tool set ON PURPOSE, and it is the whole design. A
         # guard that denies `write` while the subject holds a shell is the

@@ -1,0 +1,13 @@
+{
+  "schema": "pi-hwb-pin/v0.1",
+  "npm_package": "@earendil-works/pi-coding-agent",
+  "version": "0.84.1",
+  "npm_integrity": "sha512-ncAqFrG+zAfCU8LcSZBwxzx1UB9XMgjgmg4lekeX5eXHmn/8BAhWcQcOpGbI5emBl57FVBqCwGr5MXChQ/VUxQ==",
+  "source_repository": "https://github.com/earendil-works/pi",
+  "source_commit": "6f707eb36064e82af9c1320a7634f4dfad21049b",
+  "node_version": "22.22.3",
+  "package_json_sha256": "f9aaa275eac3292508bd9a1325d705a41c2d24c9a34da2b690e400d5a761a985",
+  "npm_shrinkwrap_sha256": "a724da15dc849d0ab2fe346845f8986b059ab89339a03a365b5910b23217c0c3",
+  "launcher_sha256": "840d1e8e689ed9e4937bcb00b9a810e02a8567d9afb10a47097f11ca93ea1521",
+  "package_tree_sha256": "2d5cdfbe213ed256e4a8144f2d25872ea0bb8c5f3a78d0fcb8f9db8521338910"
+}

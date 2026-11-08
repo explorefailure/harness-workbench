@@ -10,6 +10,25 @@
     "Record the strength; do not pretend a gateway label is a digest."
   ],
   "profiles": {
+    "ark1-qwen38": {
+      "kind": "local",
+      "base_url": "http://127.0.0.1:21435/v1",
+      "api_key_env": "HWB_LOCAL_KEY",
+      "api_key_placeholder": "ark1-ollama-local-placeholder",
+      "identity_strength": "local_content_digest",
+      "verify_digest": true,
+      "model_digest": "7c439d5c1f940e7c163f59ba2eebea89e3bde8849409cb54eb343ac9fe640b46",
+      "models": {
+        "deepseek": "qwen3.8-agent-64k:latest",
+        "hermes": "qwen3.8-agent-64k:latest",
+        "pi": "qwen3.8-agent-64k:latest"
+      },
+      "subject_key_env": {
+        "deepseek": "HWB_LOCAL_KEY",
+        "hermes": "OPENAI_API_KEY",
+        "pi": "HWB_LOCAL_KEY"
+      }
+    },
     "local-ollama": {
       "kind": "local",
       "base_url": "http://127.0.0.1:11434/v1",
@@ -17,6 +36,7 @@
       "api_key_placeholder": "ollama-local-placeholder",
       "identity_strength": "local_content_digest",
       "verify_digest": true,
+      "model_digest": "17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7",
       "models": {
         "deepseek": "gpt-oss:20b",
         "hermes": "gpt-oss:20b",

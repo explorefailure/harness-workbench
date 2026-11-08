@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,8 +122,11 @@ def verify_adapter_subject(
 
 
 def _active_model_profile() -> tuple[str, dict[str, Any]]:
-    name = MODEL_SELECTION["active"]
-    return name, MODEL_SELECTION["profiles"][name]
+    name = os.environ.get("HWB_MODEL_PROFILE", MODEL_SELECTION["active"])
+    try:
+        return name, MODEL_SELECTION["profiles"][name]
+    except KeyError as error:
+        raise ValueError(f"model_selection.json has no profile {name!r}") from error
 
 
 def _declared_subject_identity(subject: str) -> dict[str, Any]:
@@ -163,7 +167,7 @@ def _declared_subject_identity(subject: str) -> dict[str, Any]:
             ),
         })
         if profile.get("verify_digest"):
-            expected["model_digest"] = PINS["ollama"]["model_digest"]
+            expected["model_digest"] = profile["model_digest"]
     return expected
 
 
