@@ -26,7 +26,7 @@ and build on what you learn.
 The more useful work you can do with local models, the more autonomy you have.
 
 A smaller model that works for your needs lets you put your own hardware to
-use, choose your tools, and rely less on data centers for everyday compute.
+use, choose your tools, and keep everyday compute close to home.
 You can experiment, learn, and keep working on your own terms.
 
 Harness Workbench exists to help you explore that possibility: find out what
