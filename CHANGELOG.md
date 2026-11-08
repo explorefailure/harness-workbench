@@ -44,6 +44,14 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   per-asset HTTP 504 for the pinned OpenCode 1.19.5 assets). It retries the
   same release asset through the GitHub API download route; the pinned archive
   and binary SHA-256 checks are unchanged.
+- `hwb setup [--json]` reports whether this machine can run
+  `coding/python-bug-fix`: platform, memory, Ollama models, `pi` and `node`,
+  and whether the Recipe's recorded model digest matches Ollama's.
+- `hwb try --json` prints the Reality Check result document unchanged.
+- `hwb lab` (MVP) serves a localhost web GUI for the same check: Discover, Try,
+  Proof, Recipe (model choice records Ollama's current digest) and History
+  (verdicts re-derived from sealed records). No live progress yet; the local
+  server is not hardened beyond localhost binding and JSON-only writes.
 
 ## 0.2.0 — 2026-11-07
 
