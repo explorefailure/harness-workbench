@@ -74,6 +74,42 @@ class RealityCheckTests(unittest.TestCase):
             self.assertTrue(local["verify_digest"])
             reality.prepare_recipe(destination)  # reopens through validation
 
+    def test_release_gate_no_shipped_digest_reaches_the_active_profile(self):
+        """Release gate for the v0.2.0 bug class: a digest pinned anywhere in
+        the shipped subject tree must never become the checked digest of a new
+        Recipe. Shipped pins are harvested, not listed, so a pin added later in
+        another file is caught too."""
+        shipped = set()
+
+        def harvest(value):
+            if isinstance(value, dict):
+                for item in value.values():
+                    harvest(item)
+            elif isinstance(value, list):
+                for item in value:
+                    harvest(item)
+            elif isinstance(value, str) and len(value) == 64 and all(
+                    c in "0123456789abcdef" for c in value):
+                shipped.add(value)
+
+        for path in Path(subject_tree.subjects_root()).rglob("*.json"):
+            harvest(json.loads(path.read_text(encoding="utf-8")))
+        shipped_model_digests = {
+            json.loads((Path(subject_tree.subjects_root()) / "pin.json").read_text(
+                encoding="utf-8"))["ollama"]["model_digest"]}
+        self.assertTrue(shipped_model_digests <= shipped)  # harvest sees the pin
+        for live in (None, "f" * 64, "0" * 64):
+            self.assertNotIn(live, shipped)
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as td:
+                self.local_digest.return_value = live
+                destination = Path(td) / "recipe"
+                reality.prepare_recipe(destination)
+                reality.refresh_live_digest(destination)
+                local = self.selection(destination)
+                self.assertEqual((live or "", live or ""),
+                                 (local["model_digest"], local["baseline_digest"]))
+                self.assertFalse({local["model_digest"], local["baseline_digest"]} & shipped)
+
     def selection(self, destination):
         return json.loads((destination / "model_selection.json").read_text(
             encoding="utf-8"))["profiles"]["local-ollama"]
