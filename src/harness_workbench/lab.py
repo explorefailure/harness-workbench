@@ -175,6 +175,9 @@ class Lab:
                 selection = json.loads(path.read_text(encoding="utf-8"))
                 local = selection["profiles"]["local-ollama"]
                 local["models"]["pi"] = model
+                # Choosing a model sets the person's baseline; the run itself
+                # refreshes the checked digest to whatever Ollama serves then.
+                local["baseline_digest"] = match["digest"]
                 local["model_digest"] = match["digest"]
                 path.write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
                 reality._validate_recipe(self.recipe_dir.resolve())

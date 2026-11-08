@@ -127,7 +127,10 @@ def recipe_state(recipe_dir: Path) -> dict[str, Any]:
                      if exists else _shipped_selection())
         local = selection["profiles"][PROFILE]
         model = str(local["models"]["pi"])
-        digest = str(local.get("model_digest") or "")
+        # A Recipe's reference is its baseline (this machine's digest when the
+        # Recipe was made or the model was chosen).  The shipped default has no
+        # meaningful baseline: a new Recipe takes the live digest.
+        digest = str(local.get("baseline_digest") or "") if exists else ""
         base_url = str(local["base_url"])
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {"path": str(recipe_dir), "exists": exists, "source": source,
@@ -146,6 +149,7 @@ def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[st
     tools = {name: tool(name, which=which) for name in ("pi", "node")}
 
     blockers: list[dict[str, str]] = []
+    notes: list[dict[str, str]] = []
     if recipe["error"]:
         blockers.append({"code": "recipe_unreadable", "message": recipe["error"]})
     if not tools["pi"]["found"]:
@@ -165,13 +169,15 @@ def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[st
                              "message": f"Ollama does not have {recipe['model']!r}."})
         else:
             live_digest = match["digest"]
-            if live_digest != recipe["recorded_digest"]:
-                blockers.append({
-                    "code": "digest_mismatch",
-                    "message": (f"The {recipe['source']} records a different digest for "
-                                f"{recipe['model']!r} than Ollama has now; the run would "
-                                "stop as invalid. Record the current digest first."),
-                })
+            if recipe["exists"] and not recipe["recorded_digest"]:
+                notes.append({"code": "baseline_pending",
+                              "message": "The Recipe has no model baseline yet; the next run "
+                                         "adopts Ollama's current digest."})
+            elif recipe["exists"] and live_digest != recipe["recorded_digest"]:
+                notes.append({"code": "model_changed",
+                              "message": (f"{recipe['model']!r} changed since the Recipe's "
+                                          "baseline. The run will proceed and record the new "
+                                          "digest; re-prove before relying on earlier results.")})
     recipe["live_digest"] = live_digest
 
     return {
@@ -179,6 +185,7 @@ def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[st
         "check": CHECK,
         "ready": not blockers,
         "blockers": blockers,
+        "notes": notes,
         "machine": machine(),
         "python": {"version": platform.python_version(), "executable": sys.executable},
         "workbench": {"version": __version__},
@@ -210,4 +217,6 @@ def print_setup(doc: dict[str, Any]) -> None:
     print("Ready" if doc["ready"] else "Not ready")
     for b in doc["blockers"]:
         print(f"  - {b['message']}")
+    for n in doc.get("notes", []):
+        print(f"  note: {n['message']}")
     print(doc["note"])

@@ -242,7 +242,10 @@
       <div class="blockers" id="dBlockers" hidden>
         <span class="label">Not ready yet</span>
         <ul id="dBlockerList"></ul>
-        <div class="actions" id="dFix" hidden><a class="pill" href="#recipe">Record the current model digest</a></div>
+      </div>
+      <div class="flash warn" id="dNotes" hidden>
+        <ul id="dNoteList" style="margin:0;padding-left:18px"></ul>
+        <div class="actions" id="dFix" style="margin-top:10px" hidden><a class="pill pill--light" href="#recipe">Adopt the current model</a></div>
       </div>
       <div class="recommend">
         <div>
@@ -353,7 +356,7 @@
           <div class="rows">
             <div class="row"><span class="label">Job</span><div>Repair one failing function in a disposable Python fixture and leave the required test passing.</div></div>
             <div class="row"><span class="label">Model</span><div id="rModel">—</div></div>
-            <div class="row"><span class="label">Recorded digest</span><div class="mono" id="rDigest">—</div></div>
+            <div class="row"><span class="label">Baseline digest</span><div class="mono" id="rDigest">—</div></div>
             <div class="row"><span class="label">Success means</span><div>Test red before · test green after · only <code>slugger.py</code> changed · sealed record verifies</div></div>
             <div class="row"><span class="label">Rerun when</span><div>The model, its digest, Pi, the runtime, the fixture or the machine changes</div></div>
             <div class="row"><span class="label">Location</span><div class="mono" id="rPath">—</div></div>
@@ -365,7 +368,7 @@
             <select id="rSelect"></select>
           </div>
           <div class="actions"><button class="pill" id="rSave" type="button">Use this model</button></div>
-          <p class="note">Saving records the model's current digest from Ollama. If the Recipe does not exist yet, it is created first.</p>
+          <p class="note">Saving makes the model's current Ollama digest the Recipe's baseline. If the Recipe does not exist yet, it is created first. A later model update is flagged, not refused.</p>
           <div class="flash" id="rFlash" hidden></div>
           <div class="field"><span class="label">Locked by hash</span><ul class="locked" id="rLocked"></ul></div>
           <div class="field"><span class="label">Rerun command</span><div class="cmd"><code id="rRerun">—</code><button class="copy" type="button" data-copy-from="rRerun">Copy</button></div></div>
@@ -466,7 +469,6 @@
       var needs = [
         [o.reachable, "Ollama answering on this machine"],
         [!!live, "The Recipe's model (" + (r.model || "?") + ") pulled in Ollama"],
-        [!!(live && live.digest === r.recorded_digest), "Recorded digest matches Ollama's model"],
         [s.tools.pi.found, "Pi coding agent " + (s.tools.pi.version || "") + (s.tools.pi.found ? "" : "(not found)")],
         [s.tools.node.found, "Node.js " + (s.tools.node.version || "") + (s.tools.node.found ? "" : "(not found)")]
       ];
@@ -474,11 +476,14 @@
 
       $("dBlockers").hidden = s.ready;
       $("dBlockerList").replaceChildren.apply($("dBlockerList"), s.blockers.map(function (b) { return el("li", { text: b.message }); }));
-      $("dFix").hidden = !s.blockers.some(function (b) { return b.code === "digest_mismatch"; });
+      var notes = s.notes || [];
+      $("dNotes").hidden = !notes.length;
+      $("dNoteList").replaceChildren.apply($("dNoteList"), notes.map(function (n) { return el("li", { text: n.message }); }));
+      $("dFix").hidden = !notes.some(function (n) { return n.code === "model_changed"; });
 
       $("dModels").replaceChildren.apply($("dModels"), o.models.length ? o.models.map(function (x) {
         return el("tr", {}, [el("td", { class: "mono", text: x.name }), el("td", { text: gb(x.size_bytes) }), el("td", { class: "mono", text: short(x.digest) }),
-          el("td", {}, [x.name === r.model ? el("span", { class: "chip " + (x.digest === r.recorded_digest ? "chip--ok" : "chip--warn"), text: x.digest === r.recorded_digest ? "Yes" : "Digest differs" }) : el("span", { class: "muted", text: "—" })])]);
+          el("td", {}, [x.name === r.model ? el("span", { class: "chip " + (!r.recorded_digest || x.digest === r.recorded_digest ? "chip--ok" : "chip--warn"), text: !r.recorded_digest || x.digest === r.recorded_digest ? "Yes" : "Changed since baseline" }) : el("span", { class: "muted", text: "—" })])]);
       }) : [el("tr", {}, [el("td", { colspan: "4", class: "muted", text: o.reachable ? "No models pulled." : "Ollama is not reachable." })])]);
 
       $("statusDot").className = "dot " + (s.ready ? "ok" : "bad");
@@ -567,14 +572,14 @@
     return api("/api/recipe").then(function (r) {
       state.recipe = r;
       text("rModel", r.model || "—");
-      text("rDigest", r.recorded_digest || "—");
+      text("rDigest", r.recorded_digest || (r.exists ? "not set yet; the next run adopts it" : "set from your Ollama when the Recipe is created"));
       text("rPath", r.path + (r.exists ? "" : " (created on first save or run)"));
       text("rRerun", r.rerun); text("rEditable", r.editable_file);
       $("rLocked").replaceChildren.apply($("rLocked"), (r.bound_files.length ? r.bound_files : ["(created with the Recipe)"]).map(function (f) { return el("li", { text: f }); }));
       var proof = state.proof, chip = $("rChip");
       var models = (state.setup && state.setup.ollama.models) || [];
       var live = models.filter(function (x) { return x.name === r.model; })[0];
-      if (live && live.digest !== r.recorded_digest) { chip.className = "chip chip--bad"; chip.textContent = "Digest differs"; }
+      if (live && r.recorded_digest && live.digest !== r.recorded_digest) { chip.className = "chip chip--warn"; chip.textContent = "Model changed"; }
       else if (!proof) { chip.className = "chip"; chip.textContent = "Not proven here yet"; }
       else if (proof.verdict === "pass" && proof.setup && proof.setup.model === r.model && proof.setup.model_digest === r.recorded_digest) { chip.className = "chip chip--ok"; chip.textContent = "Proven"; }
       else { chip.className = "chip chip--warn"; chip.textContent = "Needs a rerun"; }

@@ -66,14 +66,24 @@ class DiscoverTests(unittest.TestCase):
                                    "path": which(name), "version": "1.0" if which(name) else None}):
             return discover.discover(self.recipe, which=which, opener=opener)
 
-    def test_no_recipe_uses_shipped_default_and_flags_digest_mismatch(self):
+    def test_no_recipe_is_ready_whatever_digest_shipped(self):
+        """Regression: v0.2.0 treated the shipped digest as everyone's model."""
         model, digest = shipped_model()
         doc = self.run_discover(fake_ollama([(model, OTHER)]))
         self.assertEqual(doc["schema"], discover.SCHEMA)
         self.assertEqual(doc["recipe"]["source"], "shipped default")
-        self.assertFalse(doc["ready"])
-        self.assertEqual([b["code"] for b in doc["blockers"]], ["digest_mismatch"])
+        self.assertTrue(doc["ready"], doc["blockers"])
+        self.assertEqual((doc["blockers"], doc["notes"]), ([], []))
         self.assertEqual(doc["recipe"]["live_digest"], OTHER)
+
+    def test_changed_model_is_a_note_not_a_blocker(self):
+        model, _ = shipped_model()
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(self.recipe)
+        doc = self.run_discover(fake_ollama([(model, OTHER)]))
+        self.assertTrue(doc["ready"], doc["blockers"])
+        self.assertEqual([n["code"] for n in doc["notes"]], ["model_changed"])
+        self.assertEqual(doc["recipe"]["recorded_digest"], GOOD)
 
     def test_matching_digest_and_tools_is_ready(self):
         model, digest = shipped_model()
@@ -141,6 +151,9 @@ class LabServer:
 
 class LabApiTests(unittest.TestCase):
     def setUp(self):
+        patcher = mock.patch.object(reality, "_local_model_digest", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.runs = str(base / "runs")
@@ -206,6 +219,7 @@ class LabApiTests(unittest.TestCase):
         local = selection["profiles"]["local-ollama"]
         self.assertEqual(local["models"]["pi"], "qwen3:14b")
         self.assertEqual(local["model_digest"], OTHER)
+        self.assertEqual(local["baseline_digest"], OTHER)
         reality._validate_recipe(self.recipe.resolve())  # the run's own gate
 
     def test_set_model_refuses_unknown_or_partial_digest_models(self):
