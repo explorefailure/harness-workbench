@@ -9,6 +9,9 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## 0.2.0 — 2026-11-07
 
+- Pin the release build backend to setuptools 84.1.0, clearing the low-severity
+  Windows legacy-wheel path-escape advisory affecting the previous 83.0.0 pin.
+
 - Include the upstream-pinned Anthropic SDK extra in the owned Hermes runtime
   and verify its dependency profile before execution. Pin sessions with --in
   and test relative file operations and native working directories to prevent

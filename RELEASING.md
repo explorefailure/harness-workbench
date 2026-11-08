@@ -90,7 +90,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check \
-  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
+  'build==1.5.0' 'setuptools==84.1.0' 'twine==7.0.0'
 GITLEAKS_VERSION=8.30.1
 test "$(gitleaks version)" = "$GITLEAKS_VERSION"
 gitleaks git --no-banner --redact=100 --log-opts='--all' "$SOURCE_REPO"
@@ -283,7 +283,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check \
-  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
+  'build==1.5.0' 'setuptools==84.1.0' 'twine==7.0.0'
 ```
 
 This clone needs its own environment. The venv, the pinned release toolchain,
