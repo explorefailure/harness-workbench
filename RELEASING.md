@@ -1,27 +1,25 @@
 # Releasing Harness Workbench
 
-> **Adapter follow-up, 2026-10-31:** [v0.1.0 was published on 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0).
-> The literal 0.1.0 promotion below is historical and must not be reused for the
-> current uncommitted adapter work. Select an unused version and update the
-> version/tag commands and conformance record before a new release gate. Current
-> local builds still report 0.1.0; they are development snapshots, not replacement
-> release assets. See [remaining adapter gates](docs/model-provider-plan.md#remaining-validation-and-documentation-gaps).
+> **0.2.0 preparation, 2026-11-07:** [v0.1.0 was published on 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0).
+> The commands below now target the unused `0.2.0` / `v0.2.0` identity. The
+> source version alone does not make that release public; every gate in this
+> procedure still applies.
 
 This is the maintainer procedure for a GitHub release. A build on a laptop is
 not a release. A version is public only after its tag and GitHub release exist.
+The historical 0.1.0 procedure and evidence remain in
+[`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md).
 The current candidate policy is:
 
 | Stage | Python package version | Git tag | GitHub release |
 |---|---|---|---|
-| first candidate | `0.1.0rc1` | `v0.1.0-rc.1` | prerelease — **published 2026-08-12** |
-| second candidate | `0.1.0rc2` | `v0.1.0-rc.2` | prerelease — **published 2026-08-25** |
-| current final promotion | `0.1.0` | `v0.1.0` | full release — not yet created |
+| first public release | `0.1.0` | `v0.1.0` | full release — **published 2026-08-25** |
+| current promotion | `0.2.0` | `v0.2.0` | full release — not yet created |
 
-A candidate that has already been published is history: never retarget its tag
-or reuse its number. `0.1.0rc2` exists because the source gained public API
-after `0.1.0rc1` shipped — a new importable module, `harness_workbench.capture`.
-The final promotion carries the verified rc2 contents into a new commit and
-new build; candidate evidence does not transfer to final bytes.
+A version that has already been published is history: never retarget its tag or
+reuse its number. The 0.2.0 promotion carries the merged builder integrations,
+Reality Check, and reviewed live certification into a new release commit and
+new build. PR and certification evidence does not transfer to release bytes.
 
 Tags are signed, annotated, immutable, and must point at the exact commit whose
 source produced the uploaded files. Never move or reuse a failed tag; fix the
@@ -56,11 +54,10 @@ release-gate actions, not changes this procedure or a local commit can perform.
 
 ## 1. Prepare a clean release commit
 
-First turn the preparation branch into a release commit: change the README
-status from "preparing" to an accurate final-candidate statement, move the
-candidate changelog entries under `## 0.1.0 — YYYY-MM-DD` with the date of this
-release commit, and review
-[`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md).
+First turn the preparation branch into a release commit: keep the README status
+as an accurate unreleased-candidate statement, move the candidate changelog
+entries under `## 0.2.0 — YYYY-MM-DD` with the date of this release commit, and
+review [`docs/release-conformance-0.2.0.md`](docs/release-conformance-0.2.0.md).
 That record must continue to say that no final GitHub release exists yet and must
 not promote preparation self-runs to release evidence. Commit the release-only
 edits.
@@ -93,7 +90,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check \
-  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
+  'build==1.5.0' 'setuptools==84.1.0' 'twine==7.0.0'
 GITLEAKS_VERSION=8.30.1
 test "$(gitleaks version)" = "$GITLEAKS_VERSION"
 gitleaks git --no-banner --redact=100 --log-opts='--all' "$SOURCE_REPO"
@@ -162,8 +159,8 @@ this check pass; start another fresh clone.
 For the current final promotion, these variables and their agreement check are exact:
 
 ```sh
-VERSION=0.1.0
-TAG=v0.1.0
+VERSION=0.2.0
+TAG=v0.2.0
 test "$(PYTHONPATH=src python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
@@ -260,9 +257,9 @@ gate. Only a commit that already passed step 2 gets pushed.
 
 ```sh
 cd "$SOURCE_REPO"
-git push origin "$RELEASE_COMMIT":refs/heads/release/0.1.0
+git push origin "$RELEASE_COMMIT":refs/heads/release/0.2.0
 git fetch origin
-test "$(git rev-parse 'origin/release/0.1.0^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release/0.2.0^{commit}')" = "$RELEASE_COMMIT"
 ```
 
 Now re-run the gate against what GitHub actually serves. Step 2 proved the
@@ -276,7 +273,7 @@ test ! -e hwb-release-remote
 git clone https://github.com/explorefailure/harness-workbench.git hwb-release-remote
 cd hwb-release-remote
 git fetch --tags origin
-test "$(git rev-parse 'origin/release/0.1.0^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release/0.2.0^{commit}')" = "$RELEASE_COMMIT"
 git checkout --detach "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_COMMIT")"
@@ -286,7 +283,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check \
-  'build==1.5.0' 'setuptools==83.0.0' 'twine==7.0.0'
+  'build==1.5.0' 'setuptools==84.1.0' 'twine==7.0.0'
 ```
 
 This clone needs its own environment. The venv, the pinned release toolchain,
@@ -361,9 +358,9 @@ The tag-triggered CI job repeats tag-to-package agreement with read-only GitHub
 permissions. Wait for every tag run to pass before creating the release. If
 the local tag has not been pushed, delete it locally and fix the source. If it
 has been pushed, do not move it: leave the failed candidate documented, increment
-the candidate number to the next unused `0.1.0rcN` with its matching
-`v0.1.0-rc.N` tag, and restart at step 1. Never reuse or retarget a candidate
-number that has been pushed, whether or not its release was created.
+choose the next unused version and matching tag, document the failed tag, and
+restart at step 1. Never reuse or retarget a tag that has been pushed, whether
+or not its release was created.
 
 ## 5. Create the GitHub release
 
@@ -400,7 +397,7 @@ Stop and mark the release with a clear warning if uploaded bytes or first-run
 behavior differ. Never replace assets silently.
 
 After the downloaded bytes pass, finalize the release copy of
-`docs/release-conformance-0.1.0.md` with the exact release commit, tag and
+`docs/release-conformance-0.2.0.md` with the exact release commit, tag and
 verification, run URLs, setting/route evidence, asset filenames and SHA-256
 values, downloaded-asset result, assessor/approver, and residual limitations.
 Publish that finalized copy beside the assets or in the GitHub release body.
@@ -412,5 +409,5 @@ an author-side run.
 ## 6. Close the final promotion
 
 Only after the final GitHub release and downloaded assets pass verification may
-the README say that v0.1.0 is released. Publishing to a package index is a
+the README say that v0.2.0 is released. Publishing to a package index is a
 separate, explicitly authorized operation and is not part of this procedure.

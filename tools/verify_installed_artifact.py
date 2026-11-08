@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 
-PINNED_BUILD_BACKEND = "83.0.0"
+PINNED_BUILD_BACKEND = "84.1.0"
 
 
 def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:

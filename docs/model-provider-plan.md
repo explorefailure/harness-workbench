@@ -59,10 +59,10 @@ for validation; genuine hosted-account validation requires actual access.
 
 ## Working constraints
 
-The documentation and implementation work remain local and uncommitted until
-the user asks otherwise. Do not push. Research experiments remain local and
-separate from supported adapter source. No merge, public release or website
-publication is authorized by this plan.
+The implementation has been reviewed and merged. Research experiments and
+bulky live evidence remain local unless repository policy explicitly selects
+them. Public release still requires the versioned source, artifact, hosted-CI,
+tag, and downloaded-asset gates in `RELEASING.md`.
 
 ## Progress
 
@@ -375,15 +375,14 @@ their own measured scope.
 
 Read-only metadata confirmed [v0.1.0 was already published on 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0),
 with a wheel, source archive and checksums; local tag target is
-`773d2b10fa4500ff24e8fdf9ae1a911185ad8f2a`. Current local source still reports
-0.1.0, but that release cannot contain these uncommitted adapter changes.
-Do not reuse its number/tag/assets or advertise installing 0.1.0 as this work.
+`773d2b10fa4500ff24e8fdf9ae1a911185ad8f2a`. The merged source now reports
+0.2.0; the published 0.1.0 release does not contain these adapter changes.
+Do not reuse the 0.1.0 tag/assets or advertise installing 0.1.0 as this work.
 
-Before versioned instructions replace checkout installation: choose an unused
-version, review and commit exact sources, update historical release procedure
-variables/conformance records, run the pinned clean source/artifact gates and
+Before versioned instructions replace checkout installation: commit the exact
+0.2.0 release source, run the pinned clean source/artifact gates and
 fresh required platform/security checks, verify exact published/downloaded
-artifact identity, and obtain separate release authorization. Current wheel and
+artifact identity, and complete the authorized release. Current wheel and
 source install checks are development evidence, not the complete release gate;
 fresh native installs now have local Linux and macOS arm64 evidence; uncached
 backend resolution has local Linux evidence as recorded above. Earlier scans remain historical; new draft scans

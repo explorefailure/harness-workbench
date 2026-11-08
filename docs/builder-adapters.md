@@ -27,11 +27,11 @@ A compatible model can still choose the wrong files, make a bad edit or fail
 checks. Neither a fixture pass nor one repair establishes universal compatibility
 or model quality. Workbench records execution and evaluates declared checks.
 
-## Current working draft
+## Current release candidate
 
-These integrations are unreleased. The provider/check changes are local and
-uncommitted; an older published package or the existing PR head does not include
-them. Install the working checkout to try them.
+These integrations are merged on `main` and prepared for 0.2.0, but remain
+unreleased until the signed tag, GitHub assets, and downloaded-artifact checks
+pass. Install the working checkout to try them before publication.
 
 | Harness | Pinned runtime | Model selection | Detailed guide |
 | --- | --- | --- | --- |
@@ -924,9 +924,9 @@ from this cancellation evidence. Commands, failures and audits are retained
 under the local `outputs/opencode-cleanup-fix/` evidence bundle.
 
 The [existing v0.1.0 release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
-predates these adapters. Local development artifacts still report 0.1.0; do not
-use that public version as installation instructions for this work. An unused
-version and fresh exact-candidate release/platform/artifact gates are required.
+predates these adapters. Source on `main` now reports 0.2.0, but that version is
+not public until its release gates and GitHub publication complete. Do not use
+the public 0.1.0 package as installation instructions for this work.
 The [implementation plan](model-provider-plan.md#remaining-validation-and-documentation-gaps)
 records the concrete blocked actions and remaining installation limits. Commands,
 results, failures and source hashes are retained in the local `validation-gaps/`

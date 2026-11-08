@@ -3875,7 +3875,7 @@ class TestPackageIdentity(unittest.TestCase):
         self.assertEqual(["LICENSE", "NOTICE"], project["license-files"])
         self.assertEqual([{"name": "Garrett Davis"}], project["maintainers"])
         self.assertEqual(
-            ["build==1.5.0", "setuptools==83.0.0", "twine==7.0.0"],
+            ["build==1.5.0", "setuptools==84.1.0", "twine==7.0.0"],
             project["optional-dependencies"]["release"],
         )
         self.assertEqual(
@@ -4232,7 +4232,8 @@ class TestTheDocsDescribeThisCode(unittest.TestCase):
         bad = []
         for root, dirs, files in os.walk(DOCS):
             dirs[:] = [d for d in dirs
-                       if d not in (".git", "build", "dist", "__pycache__")]
+                       if d not in (".git", "build", "dist", "node_modules",
+                                    "__pycache__")]
             for f in files:
                 if not f.endswith(".md"):
                     continue

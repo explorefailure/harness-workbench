@@ -7,12 +7,17 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-07
+
+- Pin the release build backend to setuptools 84.1.0, clearing the low-severity
+  Windows legacy-wheel path-escape advisory affecting the previous 83.0.0 pin.
+
 - Include the upstream-pinned Anthropic SDK extra in the owned Hermes runtime
   and verify its dependency profile before execution. Pin sessions with --in
   and test relative file operations and native working directories to prevent
   parent Git discovery from moving a task out of its retained fixture.
 
-- Add local working support for native Pi model/provider configuration, named
+- Add native Pi model/provider configuration, named
   API-key references across Pi/OpenCode/Hermes, selected native provider routes,
   credential-redacted capture and independently bounded task checks with separate
   results. Hosted accounts, other native protocols and fresh platform validation
@@ -46,7 +51,7 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 - Add the `hwb-pi` builder CLI: materialize an owned workspace, check exact
   runtime identity, run the deterministic repair example and capture custom
   workload specs without promoting the experimental cross-harness envelope.
-- Add a locked optional Pi 1.4.0 / Node 26.13.0 compatibility candidate alongside
+- Add a locked optional Pi 1.4.0 / Node 26.13.0 compatibility runtime alongside
   the original Pi 0.84.1 / Node 22.22.3 baseline. Handle the bundled launcher,
   installation lock, system-message events and new structured repair results.
   Retain raw results; mask only validated bash elapsed time in the repair oracle.
@@ -114,6 +119,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 - Keep the cross-harness envelope, normalizers, pins, model profiles, and
   workload oracles experiment-local; this stabilization does not promote a
   new supported API.
+
+The reviewed 2026-11-07 certification passed adapter capture and the exact
+repair outcome 3/3 for Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent,
+and Pi, with zero timeouts. The release gate must still establish the exact
+tagged source and artifact bytes; certification does not transfer to them.
 
 ## 0.1.0 — 2026-08-25
 
