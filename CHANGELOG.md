@@ -7,6 +7,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: the OpenCode installer's GitHub API fallback sends `GITHUB_TOKEN` (or
+  `GH_TOKEN`) when set, so busy CI runners no longer hit the anonymous API rate
+  limit (HTTP 403). The token goes to api.github.com only, never across the
+  asset redirect. The OpenCode builder workflow passes its read-only token.
 - Add an optional thermal gate to the Ollama compatibility shim
   (`--thermal-probe`, `--cool-at`): each chat-completion request waits until
   the serving GPU reads at or below the threshold; unknown readings count as

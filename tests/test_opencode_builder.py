@@ -219,7 +219,10 @@ class RuntimeDownloadFallbackTests(unittest.TestCase):
 
         def urlopen(request, timeout=None):
             url = getattr(request, 'full_url', request)
-            calls.append((url, dict(getattr(request, 'headers', {}))))
+            headers = dict(getattr(request, 'headers', {}))
+            headers.update({'unredirected:' + k: v for k, v in
+                            getattr(request, 'unredirected_hdrs', {}).items()})
+            calls.append((url, headers))
             if url == self.URL:
                 if isinstance(direct, BaseException):
                     raise direct
@@ -248,6 +251,34 @@ class RuntimeDownloadFallbackTests(unittest.TestCase):
             self.assertEqual(b'archive-bytes', self.ir.download(self.URL))
         self.assertEqual('https://api.github.com/repos/acme/tool/releases/assets/42', calls[-1][0])
         self.assertEqual('application/octet-stream', calls[-1][1].get('Accept'))
+
+    def _fallback_calls(self, env):
+        from unittest import mock
+        listing = {'assets': [{'name': 'tool-linux-x64.tar.gz', 'id': 42}]}
+        urlopen, calls = self._opener(direct=self._http_error(504), listing=listing)
+        with mock.patch.object(self.ir.urllib.request, 'urlopen', urlopen), \
+                mock.patch.dict(self.ir.os.environ, env, clear=False), \
+                mock.patch('builtins.print'):
+            for name in ('GITHUB_TOKEN', 'GH_TOKEN'):
+                if name not in env:
+                    self.ir.os.environ.pop(name, None)
+            self.assertEqual(b'archive-bytes', self.ir.download(self.URL))
+        return calls
+
+    def test_api_fallback_sends_a_token_to_the_api_only_and_never_across_redirects(self):
+        calls = self._fallback_calls({'GITHUB_TOKEN': 'test-token'})
+        api_calls = [c for c in calls if c[0].startswith('https://api.github.com/')]
+        self.assertEqual(2, len(api_calls))
+        for _, headers in api_calls:
+            self.assertEqual('Bearer test-token', headers.get('unredirected:Authorization'))
+            self.assertNotIn('Authorization', headers)
+        direct = [c for c in calls if c[0] == self.URL]
+        self.assertNotIn('unredirected:Authorization', direct[0][1])
+
+    def test_api_fallback_without_a_token_stays_anonymous(self):
+        calls = self._fallback_calls({})
+        for _, headers in calls:
+            self.assertFalse(any('authorization' in k.lower() for k in headers))
 
     def test_client_errors_and_unknown_assets_do_not_hide_the_failure(self):
         import urllib.error

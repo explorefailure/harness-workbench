@@ -22,6 +22,21 @@ def _read_bounded(request):
         return response.read(ARCHIVE_LIMIT + 1)
 
 
+def _api_request(url, accept):
+    """A GitHub API request, authenticated when GITHUB_TOKEN or GH_TOKEN is set.
+
+    Unauthenticated API calls share a 60-per-hour budget per IP address, which
+    busy CI runners exhaust (HTTP 403 "rate limit exceeded"). The token is an
+    unredirected header: the asset endpoint redirects to a separate storage
+    host, and the token must reach api.github.com only.
+    """
+    request = urllib.request.Request(url, headers={'Accept': accept})
+    token = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
+    if token:
+        request.add_unredirected_header('Authorization', f'Bearer {token}')
+    return request
+
+
 def _api_asset_request(url):
     """The same release asset through GitHub's API download route.
 
@@ -33,16 +48,16 @@ def _api_asset_request(url):
     if match is None:
         return None
     owner, repo, tag, name = match.groups()
-    listing = urllib.request.Request(
+    listing = _api_request(
         f'https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}',
-        headers={'Accept': 'application/vnd.github+json'})
+        'application/vnd.github+json')
     with urllib.request.urlopen(listing, timeout=60) as response:
         release = json.loads(response.read(4_194_305)[:4_194_304])
     for item in release.get('assets', []) if isinstance(release, dict) else []:
         if isinstance(item, dict) and item.get('name') == name and isinstance(item.get('id'), int):
-            return urllib.request.Request(
+            return _api_request(
                 f'https://api.github.com/repos/{owner}/{repo}/releases/assets/{item["id"]}',
-                headers={'Accept': 'application/octet-stream'})
+                'application/octet-stream')
     return None
 
 
