@@ -15,6 +15,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   the baseline instead of refusing the run. Recipes created by 0.2.0 are
   repaired on their next run. The certified adapter and certification
   profiles are unchanged and still enforce their reviewed digest.
+- Add an optional thermal gate to the Ollama compatibility shim
+  (`--thermal-probe`, `--cool-at`): each chat-completion request waits until
+  the serving GPU reads at or below the threshold; unknown readings count as
+  hot. `--no-tool-bridge` forwards chat bodies unchanged.
 - Fix: the OpenCode builder's `install_runtime.py` no longer fails when
   github.com's release-download route answers a 5xx (observed as a persistent,
   per-asset HTTP 504 for the pinned OpenCode 1.19.5 assets). It retries the

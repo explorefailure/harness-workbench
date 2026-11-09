@@ -59,6 +59,24 @@ The shim exists for Ollama's stricter post-tool message alternation. It adds a
 continuation user turn only after a real assistant tool call and repeats the
 original task so local models do not mistake that turn for a new session.
 
+On a GPU that runs hot, the shim can also hold each chat-completion request
+until the serving GPU has cooled. Give it a command that prints the temperature
+in whole degrees Celsius; a request proceeds once a reading is at or below
+`--cool-at` (default 78). An unreadable temperature counts as hot, and model
+listings are never held. Waiting counts against the subject's own time bound.
+With `--no-tool-bridge` it forwards chat bodies unchanged, for runtimes that
+already accept post-tool turns:
+
+```sh
+python3.11 ollama_compat_proxy.py --listen-port 21435 \
+  --upstream http://127.0.0.1:11434 \
+  --thermal-probe 'ssh gpu-host nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits' \
+  --cool-at 78
+```
+
+The gate spaces calls apart; it cannot cool a single long call. Keep a
+separate watchdog that stops the workload if the GPU stays too hot.
+
 `harness_workbench` must be importable: the adapters take bounded capture,
 credential redaction, manifests and digests from `harness_workbench.capture`
 rather than carrying a second copy of them. Installing the package (which is
