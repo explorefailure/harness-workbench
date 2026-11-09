@@ -22,6 +22,14 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   certification refuses to plan while they are configured. Remove the
   machine-specific Ollama profile and its setup notes from the shipped tree.
 
+- Fix: `hwb try coding/python-bug-fix` no longer stops as INVALID when this
+  machine's `gpt-oss:20b` digest differs from the one shipped in the package.
+  A Recipe's model baseline (`baseline_digest`) now comes from this machine's
+  Ollama; before each run the live digest is recorded as the checked
+  `model_digest`, and the result's `model_change` reports any difference from
+  the baseline instead of refusing the run. Recipes created by 0.2.0 are
+  repaired on their next run. The certified adapter and certification
+  profiles are unchanged and still enforce their reviewed digest.
 - Add an optional thermal gate to the Ollama compatibility shim
   (`--thermal-probe`, `--cool-at`): each chat-completion request waits until
   the serving GPU reads at or below the threshold; unknown readings count as
