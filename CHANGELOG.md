@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Add an optional thermal gate to the Ollama compatibility shim
+  (`--thermal-probe`, `--cool-at`): each chat-completion request waits until
+  the serving GPU reads at or below the threshold; unknown readings count as
+  hot. `--no-tool-bridge` forwards chat bodies unchanged.
+
 ## 0.2.0 — 2026-11-07
 
 - Pin the release build backend to setuptools 84.1.0, clearing the low-severity
