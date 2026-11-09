@@ -7,6 +7,12 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: the OpenCode builder's `install_runtime.py` no longer fails when
+  github.com's release-download route answers a 5xx (observed as a persistent,
+  per-asset HTTP 504 for the pinned OpenCode 1.19.5 assets). It retries the
+  same release asset through the GitHub API download route; the pinned archive
+  and binary SHA-256 checks are unchanged.
+
 ## 0.2.0 — 2026-11-07
 
 - Pin the release build backend to setuptools 84.1.0, clearing the low-severity
