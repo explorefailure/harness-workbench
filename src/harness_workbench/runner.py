@@ -100,6 +100,9 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+_RUN_ID_ATTEMPTS = 16
+
+
 class HarnessError(Exception):
     """The harness broke. Distinct from a step exiting non-zero."""
 
@@ -114,14 +117,26 @@ class Recorder:
         # has second resolution -- so back-to-back runs collided. Both
         # precedents add an opaque component: run.mjs uses a uuid slice,
         # Inspect a trailing id. Found by running it twice quickly.
-        self.run_id = "%s-%s-%s" % (_stamp(), short(spec.digest),
-                                    uuid.uuid4().hex[:4])
-        self.run_dir = os.path.join(root, self.run_id)
-        _lifecycle_checkpoint("before_run_directory", self.run_dir)
-        try:
-            os.makedirs(self.run_dir, exist_ok=False)
-        except FileExistsError:
-            raise HarnessError("run directory already exists: %s" % self.run_dir)
+        #
+        # The suffix is only 16 bits, and a steady campaign makes several
+        # same-spec runs inside one second, so the birthday bound bites: the
+        # test suite alone forms same-second groups of 50+ runs. The mkdir is
+        # the atomic claim, so a collision redraws the suffix rather than
+        # failing the run. The id format is unchanged.
+        stamp, digest = _stamp(), short(spec.digest)
+        for _ in range(_RUN_ID_ATTEMPTS):
+            self.run_id = "%s-%s-%s" % (stamp, digest, uuid.uuid4().hex[:4])
+            self.run_dir = os.path.join(root, self.run_id)
+            _lifecycle_checkpoint("before_run_directory", self.run_dir)
+            try:
+                os.makedirs(self.run_dir, exist_ok=False)
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise HarnessError("run directory already exists: %s "
+                               "(no free run id after %d attempts)"
+                               % (self.run_dir, _RUN_ID_ATTEMPTS))
         self._attempts = open(os.path.join(self.run_dir, "attempts.jsonl"),
                               "a", encoding="utf-8")
         _lifecycle_checkpoint("run_directory_created", self.run_dir)
