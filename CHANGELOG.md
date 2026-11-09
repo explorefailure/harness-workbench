@@ -15,6 +15,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   the baseline instead of refusing the run. Recipes created by 0.2.0 are
   repaired on their next run. The certified adapter and certification
   profiles are unchanged and still enforce their reviewed digest.
+- Fix: the OpenCode builder's `install_runtime.py` no longer fails when
+  github.com's release-download route answers a 5xx (observed as a persistent,
+  per-asset HTTP 504 for the pinned OpenCode 1.19.5 assets). It retries the
+  same release asset through the GitHub API download route; the pinned archive
+  and binary SHA-256 checks are unchanged.
 
 ## 0.2.0 — 2026-11-07
 
