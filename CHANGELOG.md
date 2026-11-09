@@ -12,6 +12,12 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   SHA-256 and the llama.cpp build as its baseline and reports later changes
   to either without refusing the run. Ollama stays the default profile.
 
+- `hwb setup` and the Lab (`hwb lab`) accept `--profile local-llamacpp`.
+  Discovery reads llama-server's `/props`, blocks when the server is down,
+  serves a different alias, or loads a GGUF not named by its SHA-256, and notes
+  a changed llama.cpp build. The Lab page names the runtime it found instead of
+  assuming Ollama; the setup document gains a `runtime` block.
+
 - Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
   committed default for the live subjects: upstream `llama-server` on loopback
   serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF

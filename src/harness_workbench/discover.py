@@ -5,15 +5,15 @@ machine attempt `coding/python-bug-fix` right now, and if not, what is
 missing?  Discovery never writes, installs, pulls, or starts anything.
 
 It deliberately probes the same things a real run will use -- `pi` and `node`
-on PATH, the Ollama endpoint declared by the `local-ollama` profile, and the
-digest rule the adapter enforces -- so "ready" predicts what the run will
+on PATH, the model runtime the chosen profile declares (Ollama for
+`local-ollama`, llama-server for `local-llamacpp`), and the digest rule the
+adapter enforces -- so "ready" predicts what the run will
 check instead of describing the machine in general.  It is still a prediction:
 the run itself remains the only evidence.
 """
 from __future__ import annotations
 
 import json
-import os
 import platform
 import shutil
 import subprocess
@@ -23,11 +23,13 @@ from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from . import __version__
+from . import __version__, reality
 
 SCHEMA = "hwb-setup/v0.1"
 CHECK = "coding/python-bug-fix"
-PROFILE = "local-ollama"
+PROFILE = reality.DEFAULT_RECIPE_PROFILE
+PROFILES = reality.RECIPE_PROFILES
+_CONTENT_ADDRESSED_GGUF = reality._CONTENT_ADDRESSED_GGUF
 _PROBE_TIMEOUT = 5
 
 
@@ -41,6 +43,11 @@ def _tags_url(base_url: str) -> str:
     if endpoint.endswith("/v1"):
         endpoint = endpoint[:-3]
     return endpoint + "/api/tags"
+
+
+def _endpoint(base_url: str) -> str:
+    endpoint = base_url.rstrip("/")
+    return endpoint[:-3] if endpoint.endswith("/v1") else endpoint
 
 
 def _sysctl(name: str) -> Optional[str]:
@@ -117,35 +124,88 @@ def ollama(base_url: str, opener=urlopen) -> dict[str, Any]:
     return {"reachable": True, "url": url, "models": models, "error": None}
 
 
-def recipe_state(recipe_dir: Path) -> dict[str, Any]:
-    """The model a run would use: the Recipe's, or the shipped default."""
+def llamacpp(base_url: str, opener=urlopen) -> dict[str, Any]:
+    """Read the one model a llama-server serves, from its /props endpoint.
+
+    llama.cpp has no digest of its own: a model counts as identified only when
+    the served GGUF is named by its SHA-256, the rule the adapter enforces.
+    """
+    url = _endpoint(base_url) + "/props"
+    try:
+        with opener(url, timeout=_PROBE_TIMEOUT) as response:
+            payload = json.load(response)
+    except (URLError, OSError, ValueError) as error:
+        return {"reachable": False, "url": url, "models": [], "build": None,
+                "error": str(error)}
+    if not isinstance(payload, dict):
+        return {"reachable": False, "url": url, "models": [], "build": None,
+                "error": "llama-server returned an unexpected /props document"}
+    name = str(payload.get("model_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = _CONTENT_ADDRESSED_GGUF.fullmatch(name)
+    alias = payload.get("model_alias")
+    build = payload.get("build_info")
+    models = [{
+        "name": alias,
+        "digest": match.group(1) if match else "",
+        "size_bytes": None,
+    }] if isinstance(alias, str) and alias else []
+    return {"reachable": True, "url": url, "models": models,
+            "build": build if isinstance(build, str) and build else None, "error": None}
+
+
+def runtime(state: dict[str, Any], opener=urlopen) -> dict[str, Any]:
+    """The runtime block for a Recipe state: one shape for Ollama and llama.cpp."""
+    kind = state.get("runtime") or "ollama"
+    if kind == "llama.cpp":
+        block = llamacpp(state["base_url"] or "http://127.0.0.1:8081/v1", opener=opener)
+        label = "llama.cpp"
+    else:
+        block = ollama(state["base_url"] or "http://127.0.0.1:11434/v1", opener=opener)
+        block["build"] = None
+        label = "Ollama"
+    return {"kind": kind, "label": label, **block}
+
+
+def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
+    """The model a run would use: the Recipe's, or the shipped default.
+
+    An existing Recipe keeps the profile it was made with; `profile` only
+    chooses which shipped profile a new Recipe would start from.
+    """
     selection_path = recipe_dir / "model_selection.json"
     exists = (recipe_dir / "recipe.json").is_file()
     source = "recipe" if exists else "shipped default"
+    name = profile
     try:
         selection = (json.loads(selection_path.read_text(encoding="utf-8"))
                      if exists else _shipped_selection())
-        local = selection["profiles"][PROFILE]
+        name = str(selection["active"]) if exists else profile
+        local = selection["profiles"][name]
         model = str(local["models"]["pi"])
         # A Recipe's reference is its baseline (this machine's digest when the
         # Recipe was made or the model was chosen).  The shipped default has no
         # meaningful baseline: a new Recipe takes the live digest.
         digest = str(local.get("baseline_digest") or "") if exists else ""
+        build = str(local.get("baseline_runtime_build") or "") if exists else ""
         base_url = str(local["base_url"])
+        kind = "llama.cpp" if local.get("runtime") == "llama.cpp" else "ollama"
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {"path": str(recipe_dir), "exists": exists, "source": source,
-                "model": None, "recorded_digest": None, "base_url": None,
-                "error": f"model selection unreadable: {error}"}
+                "profile": name, "runtime": None,
+                "model": None, "recorded_digest": None, "recorded_build": None,
+                "base_url": None, "error": f"model selection unreadable: {error}"}
     return {"path": str(recipe_dir), "exists": exists, "source": source,
-            "model": model, "recorded_digest": digest, "base_url": base_url,
-            "error": None}
+            "profile": name, "runtime": kind,
+            "model": model, "recorded_digest": digest, "recorded_build": build,
+            "base_url": base_url, "error": None}
 
 
-def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[str, Any]:
+def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
+             opener=urlopen) -> dict[str, Any]:
     """Return the setup document used by `hwb setup` and the Lab."""
-    recipe = recipe_state(recipe_dir)
-    base = recipe["base_url"] or "http://127.0.0.1:11434/v1"
-    inventory = ollama(base, opener=opener)
+    recipe = recipe_state(recipe_dir, profile)
+    inventory = runtime(recipe, opener=opener)
+    label = inventory["label"]
     tools = {name: tool(name, which=which) for name in ("pi", "node")}
 
     blockers: list[dict[str, str]] = []
@@ -159,26 +219,40 @@ def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[st
         blockers.append({"code": "node_missing",
                          "message": "Node.js (`node`) was not found on PATH; Pi needs it."})
     live_digest = None
+    llama = inventory["kind"] == "llama.cpp"
     if not inventory["reachable"]:
-        blockers.append({"code": "ollama_unreachable",
-                         "message": f"Ollama did not answer at {inventory['url']}."})
+        blockers.append({"code": "llamacpp_unreachable" if llama else "ollama_unreachable",
+                         "message": f"{label} did not answer at {inventory['url']}."})
     elif recipe["model"]:
         match = next((m for m in inventory["models"] if m["name"] == recipe["model"]), None)
         if match is None:
-            blockers.append({"code": "model_missing",
-                             "message": f"Ollama does not have {recipe['model']!r}."})
+            served = ", ".join(str(m["name"]) for m in inventory["models"]) or "nothing"
+            blockers.append({"code": "model_missing", "message": (
+                f"llama-server serves {served}, not {recipe['model']!r}; start it with "
+                f"--alias {recipe['model']}." if llama
+                else f"Ollama does not have {recipe['model']!r}.")})
+        elif llama and not match["digest"]:
+            blockers.append({"code": "model_not_content_addressed", "message": (
+                "llama-server's model file is not named by its SHA-256, so the run "
+                "cannot identify it; serve a GGUF named sha256-<digest> or <digest>.gguf.")})
         else:
             live_digest = match["digest"]
             if recipe["exists"] and not recipe["recorded_digest"]:
                 notes.append({"code": "baseline_pending",
                               "message": "The Recipe has no model baseline yet; the next run "
-                                         "adopts Ollama's current digest."})
+                                         f"adopts {label}'s current digest."})
             elif recipe["exists"] and live_digest != recipe["recorded_digest"]:
                 notes.append({"code": "model_changed",
                               "message": (f"{recipe['model']!r} changed since the Recipe's "
                                           "baseline. The run will proceed and record the new "
                                           "digest; re-prove before relying on earlier results.")})
+            if (llama and recipe["exists"] and recipe["recorded_build"]
+                    and inventory["build"] and inventory["build"] != recipe["recorded_build"]):
+                notes.append({"code": "build_changed", "message": (
+                    f"llama.cpp is now {inventory['build']}; the Recipe's baseline is "
+                    f"{recipe['recorded_build']}. The run will proceed and record it.")})
     recipe["live_digest"] = live_digest
+    recipe["live_build"] = inventory["build"]
 
     return {
         "schema": SCHEMA,
@@ -189,15 +263,17 @@ def discover(recipe_dir: Path, *, which=shutil.which, opener=urlopen) -> dict[st
         "machine": machine(),
         "python": {"version": platform.python_version(), "executable": sys.executable},
         "workbench": {"version": __version__},
-        "ollama": inventory,
+        "runtime": inventory,
+        # Kept for clients of the first setup schema; same block for Ollama.
+        "ollama": inventory if not llama else None,
         "tools": tools,
         "recipe": recipe,
         "note": "Discovery predicts readiness; only a run produces evidence.",
     }
 
 
-def default_recipe_dir() -> Path:
-    return Path(os.getcwd()) / ".hwb" / "recipes" / "coding-python-bug-fix"
+def default_recipe_dir(profile: str = PROFILE) -> Path:
+    return reality._default_recipe(profile)
 
 
 def print_setup(doc: dict[str, Any]) -> None:
@@ -207,13 +283,14 @@ def print_setup(doc: dict[str, Any]) -> None:
     print(f"  Machine   {m.get('model') or m['system']} · {m.get('cpu') or m['arch']}"
           + (f" · {mem / 2**30:.0f} GB" if mem else ""))
     print(f"  Python    {doc['python']['version']} · Workbench {doc['workbench']['version']}")
-    o = doc["ollama"]
-    print(f"  Ollama    {'reachable' if o['reachable'] else 'not reachable'} at {o['url']}"
-          + (f" · {len(o['models'])} model(s)" if o["reachable"] else ""))
+    o = doc["runtime"]
+    print(f"  {o['label']:<9} {'reachable' if o['reachable'] else 'not reachable'} at {o['url']}"
+          + (f" · {len(o['models'])} model(s)" if o["reachable"] else "")
+          + (f" · build {o['build']}" if o.get("build") else ""))
     for t in doc["tools"].values():
         print(f"  {t['name']:<9} {t['version'] or 'found' if t['found'] else 'not found'}")
     r = doc["recipe"]
-    print(f"  Model     {r['model'] or 'unknown'} ({r['source']})")
+    print(f"  Model     {r['model'] or 'unknown'} ({r['source']}, {r.get('profile')})")
     print("Ready" if doc["ready"] else "Not ready")
     for b in doc["blockers"]:
         print(f"  - {b['message']}")

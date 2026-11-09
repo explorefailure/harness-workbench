@@ -51,9 +51,12 @@ class Lab:
     def __init__(self, runs_root: str, recipe_dir: Path, *,
                  run_check: Callable[..., dict[str, Any]] = reality.run_check,
                  discover: Callable[..., dict[str, Any]] = discovermod.discover,
-                 opener=urlopen):
+                 opener=urlopen, profile: str = discovermod.PROFILE):
+        if profile not in discovermod.PROFILES:
+            raise LabError(1, f"unknown profile {profile!r}")
         self.runs_root = runs_root
         self.recipe_dir = recipe_dir
+        self.profile = profile
         self._run_check = run_check
         self._discover = discover
         self._opener = opener
@@ -63,7 +66,7 @@ class Lab:
 
     # -- discovery ---------------------------------------------------------
     def setup(self) -> dict[str, Any]:
-        return self._discover(self.recipe_dir, opener=self._opener)
+        return self._discover(self.recipe_dir, profile=self.profile, opener=self._opener)
 
     # -- runs --------------------------------------------------------------
     def start_run(self) -> dict[str, Any]:
@@ -81,7 +84,7 @@ class Lab:
     def _execute(self, job: dict[str, Any]) -> None:
         try:
             result = self._run_check(reality.CHECK, runs_root=self.runs_root,
-                                     recipe_dir=str(self.recipe_dir))
+                                     recipe_dir=str(self.recipe_dir), profile=self.profile)
             update = {"state": "done", "result": result,
                       "run_id": Path(result["record"]).name}
         except reality.RealityError as error:
@@ -155,30 +158,34 @@ class Lab:
         return state
 
     def set_model(self, model: Any) -> dict[str, Any]:
-        """Select a local model and record its current Ollama digest."""
+        """Select a local model and record its current digest (and llama.cpp build)."""
         if not isinstance(model, str) or not model or len(model) > 200:
-            raise LabError(400, "Send {\"model\": \"<ollama model name>\"}.")
-        state = discovermod.recipe_state(self.recipe_dir)
-        inventory = discovermod.ollama(state["base_url"] or "http://127.0.0.1:11434/v1",
-                                       opener=self._opener)
+            raise LabError(400, "Send {\"model\": \"<model name>\"}.")
+        state = discovermod.recipe_state(self.recipe_dir, self.profile)
+        inventory = discovermod.runtime(state, opener=self._opener)
+        label = inventory["label"]
         if not inventory["reachable"]:
-            raise LabError(503, f"Ollama did not answer at {inventory['url']}.")
+            raise LabError(503, f"{label} did not answer at {inventory['url']}.")
         match = next((m for m in inventory["models"] if m["name"] == model), None)
         if match is None or len(match["digest"]) != 64:
-            raise LabError(422, f"Ollama has no model {model!r} with a full digest.")
+            raise LabError(422, f"{label} serves no model {model!r} with a full digest.")
         with self._lock:
             if self._job and self._job["state"] == "running":
                 raise LabError(409, "Wait for the running check before changing the model.")
             try:
-                reality.prepare_recipe(self.recipe_dir.resolve())
+                reality.prepare_recipe(self.recipe_dir.resolve(),
+                                       None if state["exists"] else self.profile)
                 path = self.recipe_dir / reality.EDITABLE_RECIPE_FILE
                 selection = json.loads(path.read_text(encoding="utf-8"))
-                local = selection["profiles"]["local-ollama"]
+                local = selection["profiles"][selection["active"]]
                 local["models"]["pi"] = model
                 # Choosing a model sets the person's baseline; the run itself
-                # refreshes the checked digest to whatever Ollama serves then.
+                # refreshes the checked digest to whatever the runtime serves then.
                 local["baseline_digest"] = match["digest"]
                 local["model_digest"] = match["digest"]
+                if inventory.get("build") and local.get("runtime") == "llama.cpp":
+                    local["baseline_runtime_build"] = inventory["build"]
+                    local["runtime_build"] = inventory["build"]
                 path.write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
                 reality._validate_recipe(self.recipe_dir.resolve())
             except (reality.RealityError, OSError, ValueError, KeyError, TypeError) as error:
@@ -264,9 +271,11 @@ def make_server(lab: Lab, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
     return server
 
 
-def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bool) -> int:
-    recipe = Path(recipe_dir).expanduser() if recipe_dir else discovermod.default_recipe_dir()
-    lab = Lab(runs_root, recipe)
+def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bool,
+          profile: str = discovermod.PROFILE) -> int:
+    recipe = (Path(recipe_dir).expanduser() if recipe_dir
+              else discovermod.default_recipe_dir(profile))
+    lab = Lab(runs_root, recipe, profile=profile)
     try:
         server = make_server(lab, port)
     except OSError as error:
@@ -275,6 +284,7 @@ def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bo
     print(f"Harness Workbench Lab (MVP) on {url}")
     print(f"  runs   {os.path.abspath(runs_root)}")
     print(f"  recipe {recipe}")
+    print(f"  profile {profile} (for a new Recipe)")
     print("  localhost only; press Ctrl-C to stop", flush=True)
     if open_browser:
         webbrowser.open(url)

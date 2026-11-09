@@ -93,8 +93,9 @@ def cmd_setup(args) -> int:
 
     from . import discover
 
-    recipe = Path(args.recipe).expanduser() if args.recipe else discover.default_recipe_dir()
-    doc = discover.discover(recipe)
+    recipe = (Path(args.recipe).expanduser() if args.recipe
+              else discover.default_recipe_dir(args.profile))
+    doc = discover.discover(recipe, profile=args.profile)
     if args.json:
         json.dump(doc, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -107,7 +108,8 @@ def cmd_lab(args) -> int:
     from . import lab
 
     try:
-        return lab.serve(args.root, args.recipe, args.port, not args.no_browser)
+        return lab.serve(args.root, args.recipe, args.port, not args.no_browser,
+                         args.profile)
     except lab.LabError as error:
         return _fail(str(error))
 
@@ -876,6 +878,9 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--recipe", default=None,
                     help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
     st.add_argument("--json", action="store_true", help="print the setup document as JSON")
+    st.add_argument("--profile", default="local-ollama",
+                    choices=("local-ollama", "local-llamacpp"),
+                    help="model profile to check for a new Recipe (default: local-ollama)")
     st.set_defaults(func=cmd_setup)
 
     lb = command("lab")
@@ -885,6 +890,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
     lb.add_argument("--no-browser", action="store_true",
                     help="do not open a browser window")
+    lb.add_argument("--profile", default="local-ollama",
+                    choices=("local-ollama", "local-llamacpp"),
+                    help="model profile for a new Recipe (default: local-ollama)")
     lb.set_defaults(func=cmd_lab)
 
     sj = command("subjects")

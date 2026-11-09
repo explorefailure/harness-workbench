@@ -152,7 +152,8 @@ hwb try coding/python-bug-fix --profile local-llamacpp
 unreleased local web GUI, `hwb lab`, opens a localhost page for the same check:
 discover your setup, run it, read the proof, choose the Recipe's model, and
 browse sealed runs. It has no step-by-step progress yet and is not hardened
-for anything beyond a single local user.
+for anything beyond a single local user. Both `hwb setup` and `hwb lab` accept
+`--profile local-llamacpp` to check and run against a local llama-server.
 
 Not ready to run a model? The [no-model example](#explore-without-a-model)
 lets you inspect a deterministic failure-and-retry experiment first.
