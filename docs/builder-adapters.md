@@ -103,7 +103,10 @@ endpoint and the alias it was started with (`--alias`), and start it with
 `{"mode":"local","base_url":"http://127.0.0.1:8081/v1","model":"qwen3.8:27b"}`.
 On 2026-11-08 the OpenCode builder's repair passed its capture and independent
 outcome checks this way with OpenCode 1.19.5, llama.cpp v0.9.0 and
-`qwen3.8:27b`. The Pi and Hermes builders were not tried against llama.cpp.
+`qwen3.8:27b`. The Pi builder (Pi 1.4.0, Node 26.13.0) passed the same repair
+through `hwb-pi configure --base-url http://127.0.0.1:8081/v1 --model
+qwen3.8:27b` with an independent `unittest` check. The Hermes builder was not
+tried against llama.cpp.
 
 For an authenticated compatible Chat Completions endpoint:
 
