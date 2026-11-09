@@ -97,6 +97,14 @@ For an unauthenticated endpoint, edit `provider` in `adapter_config.json`:
 {"mode":"local","base_url":"http://127.0.0.1:11434/v1","model":"YOUR_MODEL_ID"}
 ```
 
+A local llama.cpp `llama-server` works the same way: use its OpenAI-compatible
+endpoint and the alias it was started with (`--alias`), and start it with
+`--jinja` so tool calls use the GGUF's chat template. For example,
+`{"mode":"local","base_url":"http://127.0.0.1:8081/v1","model":"qwen3.8:27b"}`.
+On 2026-11-08 the OpenCode builder's repair passed its capture and independent
+outcome checks this way with OpenCode 1.19.5, llama.cpp v0.9.0 and
+`qwen3.8:27b`. The Pi and Hermes builders were not tried against llama.cpp.
+
 For an authenticated compatible Chat Completions endpoint:
 
 ```json

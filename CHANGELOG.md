@@ -18,6 +18,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   a changed llama.cpp build. The Lab page names the runtime it found instead of
   assuming Ollama; the setup document gains a `runtime` block.
 
+- Document local llama.cpp endpoints for the builder adapters. The OpenCode
+  builder's repair passed against `llama-server` (OpenCode 1.19.5, llama.cpp
+  v0.9.0, `qwen3.8:27b`); Pi and Hermes builders are untried there.
+
 - Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
   committed default for the live subjects: upstream `llama-server` on loopback
   serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF
