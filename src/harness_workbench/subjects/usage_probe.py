@@ -59,9 +59,12 @@ class ProbeError(RuntimeError):
 
 def active_profile() -> tuple[str, dict[str, Any]]:
     """The profile `model_selection.json` selects, so the URL is never a guess."""
-    selection = json.loads(
-        (HERE / "model_selection.json").read_text(encoding="utf-8")
-    )
+    import adapters  # one loader, so local profiles resolve identically
+
+    try:
+        selection = adapters._model_selection()
+    except adapters.AdapterError as error:
+        raise ProbeError(str(error)) from error
     name = os.environ.get("HWB_MODEL_PROFILE", str(selection["active"]))
     try:
         return name, selection["profiles"][name]

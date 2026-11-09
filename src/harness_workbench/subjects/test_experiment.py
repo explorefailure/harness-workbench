@@ -204,7 +204,9 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(Path(plan["commands"]["provider_route_canary"][1]).is_absolute())
 
     def test_route_canary_plan_is_zero_call_exact_three_and_absolute(self) -> None:
-        with mock.patch.object(route_canary.shutil, "which", return_value=None):
+        # Gateway route bounds; the committed default is local, so name the profile.
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "opencode-go"}), \
+                mock.patch.object(route_canary.shutil, "which", return_value=None):
             plan = route_canary.build_plan(route_canary.DEFAULT_LIMITS)
         self.assertFalse(plan["live"])
         self.assertEqual(0, plan["model_calls_authorized"])
@@ -223,14 +225,14 @@ class CommonTests(unittest.TestCase):
     def test_route_canary_plan_accepts_digest_bound_local_profile(self) -> None:
         profile = {
             "kind": "local",
-            "base_url": "http://127.0.0.1:21435/v1",
+            "base_url": "http://127.0.0.1:8081/v1",
             "identity_strength": "local_content_digest",
             "verify_digest": True,
             "model_digest": "a" * 64,
             "models": {subject: "local-agent" for subject in route_canary.SUBJECTS},
         }
         with mock.patch.object(
-            adapters, "_active_profile", return_value=("ark1", profile)
+            adapters, "_active_profile", return_value=("local-gpu", profile)
         ), mock.patch.object(route_canary.shutil, "which", return_value=None):
             plan = route_canary.build_plan(route_canary.DEFAULT_LIMITS)
         self.assertEqual("local", plan["profile"]["kind"])
@@ -238,12 +240,12 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(0, plan["model_calls_authorized"])
 
     def test_comparator_honors_the_selected_model_profile(self) -> None:
-        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "local-ollama"}):
             name, profile = comparator._active_model_profile()
-        self.assertEqual("ark1-qwen38", name)
+        self.assertEqual("local-ollama", name)
         self.assertEqual("local_content_digest", profile["identity_strength"])
         self.assertEqual(
-            "7c439d5c1f940e7c163f59ba2eebea89e3bde8849409cb54eb343ac9fe640b46",
+            adapters._model_selection()["profiles"]["local-ollama"]["model_digest"],
             profile["model_digest"],
         )
 
@@ -398,11 +400,11 @@ class CommonTests(unittest.TestCase):
             "identity_strength": "local_content_digest",
         }
         with mock.patch.object(
-            adapters, "_active_profile", return_value=("ark1", profile)
+            adapters, "_active_profile", return_value=("local-gpu", profile)
         ):
             plan = certify.build_plan(certify.DEFAULT_LIMITS)
         route = plan["call_breakdown"]["provider_route_canary"]
-        self.assertEqual("ark1", route["profile"])
+        self.assertEqual("local-gpu", route["profile"])
         self.assertEqual("local", route["kind"])
         self.assertEqual("local_content_digest", route["identity_strength"])
         self.assertIn("profile_aware_route_canary", plan["stages"])
@@ -619,6 +621,12 @@ class CommonTests(unittest.TestCase):
     def test_route_canary_stops_after_first_failed_route_and_keeps_post_evidence(
         self,
     ) -> None:
+        digest = mock.patch.object(
+            adapters, "_verify_local_digest",
+            side_effect=lambda profile, model: profile.get("model_digest"),
+        )
+        digest.start()
+        self.addCleanup(digest.stop)
         with mock.patch.object(
             route_canary.shutil, "which", return_value=sys.executable
         ):
@@ -1802,14 +1810,16 @@ class CommonTests(unittest.TestCase):
             recertify.build_plan(("claude",), "repair", 4)
 
     def test_hermes_repair_gets_latency_headroom_without_widening_write(self) -> None:
-        self.assertEqual(120, subject_runner.timeout_seconds("hermes", "write"))
-        self.assertEqual(180, subject_runner.timeout_seconds("hermes", "repair"))
-        self.assertEqual(120, subject_runner.timeout_seconds("claude", "repair"))
+        # Gateway latency envelopes; local profiles get their own bound (next test).
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "opencode-go"}):
+            self.assertEqual(120, subject_runner.timeout_seconds("hermes", "write"))
+            self.assertEqual(180, subject_runner.timeout_seconds("hermes", "repair"))
+            self.assertEqual(120, subject_runner.timeout_seconds("claude", "repair"))
 
     def test_local_model_profile_can_override_default_and_gets_cpu_offload_headroom(self) -> None:
-        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "ark1-qwen38"}):
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "local-ollama"}):
             name, profile = adapters._active_profile()
-            self.assertEqual("ark1-qwen38", name)
+            self.assertEqual("local-ollama", name)
             self.assertEqual("local", profile["kind"])
             self.assertEqual(
                 subject_runner.LOCAL_MODEL_TIMEOUT_SECONDS,
@@ -1825,12 +1835,158 @@ class CommonTests(unittest.TestCase):
         }]}).encode())
         with mock.patch.object(adapters, "urlopen", return_value=payload) as opened:
             digest = adapters._verify_ollama_digest(
-                "qwen3.8:27b", "http://127.0.0.1:21434/v1"
+                "qwen3.8:27b", "http://127.0.0.1:11434/v1"
             )
         self.assertEqual("sha256:content", digest)
         self.assertEqual(
-            "http://127.0.0.1:21434/api/tags", opened.call_args.args[0]
+            "http://127.0.0.1:11434/api/tags", opened.call_args.args[0]
         )
+
+    LLAMACPP_DIGEST = "f" * 64
+
+    def _llamacpp_props(self, **overrides: Any) -> io.BytesIO:
+        props = {
+            "model_alias": "qwen3.8:27b",
+            "model_path": "/models/blobs/sha256-" + self.LLAMACPP_DIGEST,
+            "build_info": "b12110-cd959bae9",
+        }
+        props.update(overrides)
+        return io.BytesIO(json.dumps(props).encode())
+
+    def test_llamacpp_digest_is_the_content_addressed_file_name(self) -> None:
+        for path in (
+            "/models/blobs/sha256-" + self.LLAMACPP_DIGEST,
+            "/models/" + self.LLAMACPP_DIGEST + ".gguf",
+            "C:\\models\\sha256-" + self.LLAMACPP_DIGEST,
+        ):
+            with self.subTest(path=path), mock.patch.object(
+                adapters, "urlopen", return_value=self._llamacpp_props(model_path=path)
+            ) as opened:
+                digest = adapters._verify_llamacpp_digest(
+                    "qwen3.8:27b", "http://127.0.0.1:8081/v1",
+                    "b12110-cd959bae9",
+                )
+            self.assertEqual(self.LLAMACPP_DIGEST, digest)
+            self.assertEqual("http://127.0.0.1:8081/props", opened.call_args.args[0])
+
+    def test_llamacpp_refuses_unaddressed_file_wrong_alias_or_build(self) -> None:
+        cases = {
+            "not content-addressed": {"model_path": "/models/qwen3.8-Q4_K_M.gguf"},
+            "not the selected model": {"model_alias": "other-model"},
+            "does not match declared runtime_build": {"build_info": "b9999-deadbeef"},
+        }
+        for message, overrides in cases.items():
+            with self.subTest(message=message), mock.patch.object(
+                adapters, "urlopen", return_value=self._llamacpp_props(**overrides)
+            ), self.assertRaisesRegex(adapters.AdapterError, message):
+                adapters._verify_llamacpp_digest(
+                    "qwen3.8:27b", "http://127.0.0.1:8081/v1",
+                    "b12110-cd959bae9",
+                )
+
+    def test_local_digest_dispatches_on_runtime_and_defaults_to_ollama(self) -> None:
+        with mock.patch.object(
+            adapters, "_verify_ollama_digest", return_value="o" * 64
+        ) as ollama, mock.patch.object(
+            adapters, "_verify_llamacpp_digest", return_value="l" * 64
+        ) as llamacpp:
+            base = {"base_url": "http://127.0.0.1:1/v1"}
+            self.assertEqual("o" * 64, adapters._verify_local_digest(base, "m"))
+            self.assertEqual("l" * 64, adapters._verify_local_digest(
+                {**base, "runtime": "llama.cpp", "runtime_build": "b1"}, "m"
+            ))
+            llamacpp.assert_called_once_with("m", "http://127.0.0.1:1/v1", "b1")
+            ollama.assert_called_once_with("m", "http://127.0.0.1:1/v1")
+            with self.assertRaisesRegex(adapters.AdapterError, "unsupported local"):
+                adapters._verify_local_digest({**base, "runtime": "vllm"}, "m")
+
+    def test_committed_default_is_the_digest_bound_build_pinned_llamacpp_profile(self) -> None:
+        selection = adapters._model_selection()
+        self.assertEqual("local-llamacpp", selection["active"])
+        profile = selection["profiles"]["local-llamacpp"]
+        self.assertEqual("llama.cpp", profile["runtime"])
+        self.assertEqual("local", profile["kind"])
+        self.assertIs(True, profile["verify_digest"])
+        self.assertEqual("local_content_digest", profile["identity_strength"])
+        self.assertRegex(profile["model_digest"], r"^[0-9a-f]{64}$")
+        self.assertTrue(profile["runtime_build"])
+        self.assertEqual("http://127.0.0.1:8081/v1", profile["base_url"])
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "local-llamacpp"}):
+            self.assertEqual(
+                subject_runner.LOCAL_MODEL_TIMEOUT_SECONDS,
+                subject_runner.timeout_seconds("hermes", "repair"),
+            )
+
+    def test_route_canary_refuses_an_unknown_local_runtime(self) -> None:
+        profile = {
+            "kind": "local", "runtime": "vllm",
+            "base_url": "http://127.0.0.1:1/v1",
+            "identity_strength": "local_content_digest", "verify_digest": True,
+            "model_digest": "a" * 64,
+            "models": {subject: "m" for subject in route_canary.SUBJECTS},
+        }
+        with mock.patch.object(
+            adapters, "_active_profile", return_value=("x", profile)
+        ), self.assertRaisesRegex(ValueError, "content-digest verification"):
+            route_canary._active_route()
+
+    def _overlay(self, payload: object) -> str:
+        directory = tempfile.mkdtemp(prefix="hwb-profiles-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, True))
+        path = Path(directory) / "profiles.json"
+        path.write_text(
+            payload if isinstance(payload, str) else json.dumps(payload),
+            encoding="utf-8",
+        )
+        return str(path)
+
+    def test_local_profiles_add_names_without_touching_committed_ones(self) -> None:
+        mine = {"kind": "local", "base_url": "http://127.0.0.1:9/v1",
+                "api_key_env": "K", "identity_strength": "local_content_digest",
+                "models": {"pi": "m"}}
+        path = self._overlay({"profiles": {"my-gpu": mine}})
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILES": path}):
+            selection = adapters._model_selection()
+            self.assertEqual(mine, selection["profiles"]["my-gpu"])
+            self.assertEqual("local-llamacpp", selection["active"])
+            with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILE": "my-gpu"}):
+                self.assertEqual(("my-gpu", mine), adapters._active_profile())
+                self.assertEqual(("my-gpu", mine), usage_probe.active_profile())
+        self.assertNotIn("my-gpu", adapters._model_selection()["profiles"])
+
+    def test_local_profiles_refuse_redefinition_and_malformed_files(self) -> None:
+        cases = {
+            "may not redefine committed profiles: local-llamacpp":
+                {"profiles": {"local-llamacpp": {"kind": "local"}}},
+            "must hold an object of profiles": {"profiles": ["x"]},
+            "is unreadable": "{not json",
+        }
+        for message, payload in cases.items():
+            with self.subTest(message=message), mock.patch.dict(
+                os.environ, {"HWB_MODEL_PROFILES": self._overlay(payload)}
+            ), self.assertRaisesRegex(adapters.AdapterError, message):
+                adapters._model_selection()
+
+    def test_certification_and_route_canary_refuse_local_profiles(self) -> None:
+        path = self._overlay({"profiles": {}})
+        with mock.patch.dict(os.environ, {"HWB_MODEL_PROFILES": path}):
+            with self.assertRaisesRegex(ValueError, "committed profiles only"):
+                certify.build_plan(certify.DEFAULT_LIMITS)
+            with self.assertRaisesRegex(ValueError, "committed profiles only"):
+                route_canary.build_plan(route_canary.DEFAULT_LIMITS)
+
+    def test_committed_local_profiles_name_only_loopback_endpoints(self) -> None:
+        # Operator machines belong in HWB_MODEL_PROFILES, never in the shipped tree.
+        from urllib.parse import urlsplit
+
+        committed = json.loads(
+            (adapters.HERE / "model_selection.json").read_text(encoding="utf-8")
+        )
+        for name, profile in committed["profiles"].items():
+            if profile.get("kind") == "local":
+                with self.subTest(profile=name):
+                    host = urlsplit(profile["base_url"]).hostname
+                    self.assertIn(host, {"127.0.0.1", "localhost", "::1"})
 
     def test_shim_without_tool_bridge_forwards_chat_bodies_unchanged(self) -> None:
         seen: list[bytes] = []
@@ -7766,7 +7922,7 @@ class _EchoHandler(BaseHTTPRequestHandler):
 
 
 class CommandConstructionTests(unittest.TestCase):
-    """Exercise argv construction without requiring vendor CLIs on the host."""
+    """Exercise argv construction without vendor CLIs or a live model runtime."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -7777,6 +7933,15 @@ class CommandConstructionTests(unittest.TestCase):
         )
         executable.start()
         self.addCleanup(executable.stop)
+        # The committed default is a local, digest-verified profile; answer the
+        # runtime's digest query with the declared digest instead of the network.
+        digest = mock.patch.object(
+            adapters,
+            "_verify_local_digest",
+            side_effect=lambda profile, model: profile["model_digest"],
+        )
+        digest.start()
+        self.addCleanup(digest.stop)
 
 
 class ClaudeGuardWiringTests(CommandConstructionTests):

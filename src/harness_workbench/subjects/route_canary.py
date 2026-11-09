@@ -172,6 +172,7 @@ def _active_route() -> tuple[str, dict[str, Any]]:
         or profile.get("identity_strength") != "local_content_digest"
         or type(profile.get("model_digest")) is not str
         or len(profile["model_digest"]) != 64
+        or profile.get("runtime", "ollama") not in adapters.LOCAL_RUNTIMES
     ):
         raise ValueError("local route canary requires content-digest verification")
     return name, profile
@@ -226,6 +227,7 @@ def build_plan(
 ) -> dict[str, Any]:
     """Describe the three-route canary while authorizing zero model calls."""
     _validate_limits(limits)
+    adapters.refuse_local_profiles("the route canary")
     profile_name, profile = _active_route()
     scanner, scanner_digest = _scanner(required=require_live_prerequisites)
     if not GITLEAKS_CONFIG.is_file():
@@ -555,8 +557,8 @@ def execute(
     if profile.get("kind") == "local":
         for subject in SUBJECTS:
             model = str(profile["models"][subject])
-            local_digests[subject] = adapters._verify_ollama_digest(
-                model, str(profile["base_url"])
+            local_digests[subject] = adapters._verify_local_digest(
+                profile, model
             )
         report["local_model_digests"] = local_digests
     credential_name = str(profile["api_key_env"])
