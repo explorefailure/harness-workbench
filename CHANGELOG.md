@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb try coding/python-bug-fix --profile local-llamacpp` runs the Reality
+  Check on a local llama.cpp server. The Recipe records the served GGUF's
+  SHA-256 and the llama.cpp build as its baseline and reports later changes
+  to either without refusing the run. Ollama stays the default profile.
+
 - Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
   committed default for the live subjects: upstream `llama-server` on loopback
   serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF
