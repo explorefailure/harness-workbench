@@ -183,40 +183,48 @@ class OwnershipTests(unittest.TestCase):
         self.assertTrue(result['passed'], result)
         self.assertEqual(20, sum(sig == signal.SIGKILL for _, sig in actions))
 
-    def _expire_mid_poll(self, phase):
-        """Children ignore SIGTERM; the chosen phase's deadline passes inside a poll."""
+    def _expire_mid_poll(self, phases):
+        """Children ignore SIGTERM; the chosen phases' deadlines pass mid-poll.
+
+        No wall-clock race: child discovery moves that phase's own deadline into
+        the past, so the next budget check raises exactly as a slow poll would.
+        Each cleanup phase owns a fresh budget, so its index names the phase
+        (0 = SIGTERM, 1 = SIGKILL).
+        """
         backend = FakeBackend()
         self.child(backend)
         tracker = self.tracker(backend)
         tracker.observe()
-        state = {"signum": None, "expired": False}
+        budgets, expired = [], []
 
         def stop(identity, signum, budget=None):
-            state["signum"] = signum
-            if signum == signal.SIGKILL and phase == signal.SIGTERM:
+            if signum == signal.SIGKILL:
                 backend.processes.pop(identity.pid)
 
         original = backend.children
 
-        def slow_children(pid, budget=None):
-            if state["signum"] == phase and not state["expired"]:
-                state["expired"] = True
-                time.sleep(.08)  # past the .05 grace, mid-observation
+        def expiring_children(pid, budget=None):
+            if budget is not None and not any(budget is b for b in budgets):
+                budgets.append(budget)
+            phase = next(i for i, b in enumerate(budgets) if b is budget)
+            if phase in phases and phase not in expired:
+                expired.append(phase)
+                budget.deadline = time.monotonic() - 1
             return original(pid, budget)
 
         with patch.object(tracker, '_signal', side_effect=stop), \
-                patch.object(backend, 'children', side_effect=slow_children):
-            result = tracker.cleanup(.05)
-        self.assertTrue(state["expired"])
+                patch.object(backend, 'children', side_effect=expiring_children):
+            result = tracker.cleanup(5.0)
+        self.assertEqual(sorted(phases), expired)
         return result
 
     def test_sigterm_grace_expiring_mid_poll_escalates_without_error(self):
-        result = self._expire_mid_poll(signal.SIGTERM)
+        result = self._expire_mid_poll({0})
         self.assertTrue(result['passed'], result)
         self.assertEqual([], result['errors'])
 
     def test_sigkill_deadline_expiring_mid_poll_still_fails_closed(self):
-        result = self._expire_mid_poll(signal.SIGKILL)
+        result = self._expire_mid_poll({0, 1})
         self.assertFalse(result['passed'])
         self.assertIn('cleanup phase failed', ' '.join(result['errors']))
 
