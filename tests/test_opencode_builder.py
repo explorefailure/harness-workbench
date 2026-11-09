@@ -199,5 +199,70 @@ class OpenCodeBuilderTests(unittest.TestCase):
             self.assertFalse((dest / 'runtime').exists())
 
 
+
+class RuntimeDownloadFallbackTests(unittest.TestCase):
+    """The installer survives a 5xx on github.com's release-download route."""
+
+    URL = 'https://github.com/acme/tool/releases/download/v1.0/tool-linux-x64.tar.gz'
+
+    def setUp(self):
+        from harness_workbench.opencode_builder import install_runtime
+        self.ir = install_runtime
+
+    def _http_error(self, code):
+        import urllib.error
+        return urllib.error.HTTPError(self.URL, code, 'error', {}, None)
+
+    def _opener(self, *, direct, listing=None, payload=b'archive-bytes'):
+        import io
+        calls = []
+
+        def urlopen(request, timeout=None):
+            url = getattr(request, 'full_url', request)
+            calls.append((url, dict(getattr(request, 'headers', {}))))
+            if url == self.URL:
+                if isinstance(direct, BaseException):
+                    raise direct
+                return io.BytesIO(direct)
+            if url.endswith('/releases/tags/v1.0'):
+                return io.BytesIO(json.dumps(listing).encode())
+            if url.endswith('/releases/assets/42'):
+                return io.BytesIO(payload)
+            raise AssertionError(url)
+        return urlopen, calls
+
+    def test_direct_route_is_used_when_it_works(self):
+        from unittest import mock
+        urlopen, calls = self._opener(direct=b'direct-bytes')
+        with mock.patch.object(self.ir.urllib.request, 'urlopen', urlopen):
+            self.assertEqual(b'direct-bytes', self.ir.download(self.URL))
+        self.assertEqual(1, len(calls))
+
+    def test_server_error_falls_back_to_the_api_asset_route(self):
+        from unittest import mock
+        listing = {'assets': [{'name': 'other.zip', 'id': 7},
+                              {'name': 'tool-linux-x64.tar.gz', 'id': 42}]}
+        urlopen, calls = self._opener(direct=self._http_error(504), listing=listing)
+        with mock.patch.object(self.ir.urllib.request, 'urlopen', urlopen), \
+                mock.patch('builtins.print'):
+            self.assertEqual(b'archive-bytes', self.ir.download(self.URL))
+        self.assertEqual('https://api.github.com/repos/acme/tool/releases/assets/42', calls[-1][0])
+        self.assertEqual('application/octet-stream', calls[-1][1].get('Accept'))
+
+    def test_client_errors_and_unknown_assets_do_not_hide_the_failure(self):
+        import urllib.error
+        from unittest import mock
+        for direct, listing in ((self._http_error(404), None),
+                                (self._http_error(503), {'assets': []})):
+            urlopen, _ = self._opener(direct=direct, listing=listing)
+            with self.subTest(code=direct.code), \
+                    mock.patch.object(self.ir.urllib.request, 'urlopen', urlopen), \
+                    self.assertRaises(urllib.error.HTTPError):
+                self.ir.download(self.URL)
+
+    def test_non_release_urls_never_fall_back(self):
+        self.assertIsNone(self.ir._api_asset_request('https://example.com/tool.tar.gz'))
+
+
 if __name__ == '__main__':
     unittest.main()
