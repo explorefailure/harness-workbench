@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: descendant cleanup no longer reports failure when the SIGTERM grace
+  expires in the middle of a poll. That expiry is the expected escalation to
+  SIGKILL, which observes the tree afresh; before, a run with SIGTERM-ignoring
+  descendants could record a false "cleanup failed" depending on timing.
+  Expiry during the SIGKILL phase still fails closed.
 - Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
   committed default for the live subjects: upstream `llama-server` on loopback
   serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF

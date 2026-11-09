@@ -35,7 +35,19 @@ class FakeBackend:
         return value
 
 
+# Outside every synthetic PID range below. Production rejects the REAL
+# os.getpid() as a root or child, so a test process whose own PID happens to
+# fall inside a fake table (small PIDs are common in containers) used to fail
+# for reasons unrelated to the code under test.
+FAKE_SELF_PID = 4_000_037
+
+
 class OwnershipTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(tree.os, "getpid", return_value=FAKE_SELF_PID)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def tracker(self, backend):
         with patch.object(tree, "_backend", return_value=backend):
             return tree.ObservedProcessTree(101)
@@ -161,12 +173,52 @@ class OwnershipTests(unittest.TestCase):
             if signum == signal.SIGKILL:
                 backend.processes.pop(identity.pid)
 
+        # One shared grace per phase, not one per child: 20 children with a
+        # grace each would take ~5 s in the SIGTERM phase alone. 50 ms left no
+        # margin for a paused CI VM to finish the fake bookkeeping.
         start = time.monotonic()
         with patch.object(tracker, '_signal', side_effect=stop):
-            result = tracker.cleanup(.05)
-        self.assertLess(time.monotonic() - start, .6)
+            result = tracker.cleanup(.25)
+        self.assertLess(time.monotonic() - start, 1.0)
         self.assertTrue(result['passed'], result)
         self.assertEqual(20, sum(sig == signal.SIGKILL for _, sig in actions))
+
+    def _expire_mid_poll(self, phase):
+        """Children ignore SIGTERM; the chosen phase's deadline passes inside a poll."""
+        backend = FakeBackend()
+        self.child(backend)
+        tracker = self.tracker(backend)
+        tracker.observe()
+        state = {"signum": None, "expired": False}
+
+        def stop(identity, signum, budget=None):
+            state["signum"] = signum
+            if signum == signal.SIGKILL and phase == signal.SIGTERM:
+                backend.processes.pop(identity.pid)
+
+        original = backend.children
+
+        def slow_children(pid, budget=None):
+            if state["signum"] == phase and not state["expired"]:
+                state["expired"] = True
+                time.sleep(.08)  # past the .05 grace, mid-observation
+            return original(pid, budget)
+
+        with patch.object(tracker, '_signal', side_effect=stop), \
+                patch.object(backend, 'children', side_effect=slow_children):
+            result = tracker.cleanup(.05)
+        self.assertTrue(state["expired"])
+        return result
+
+    def test_sigterm_grace_expiring_mid_poll_escalates_without_error(self):
+        result = self._expire_mid_poll(signal.SIGTERM)
+        self.assertTrue(result['passed'], result)
+        self.assertEqual([], result['errors'])
+
+    def test_sigkill_deadline_expiring_mid_poll_still_fails_closed(self):
+        result = self._expire_mid_poll(signal.SIGKILL)
+        self.assertFalse(result['passed'])
+        self.assertIn('cleanup phase failed', ' '.join(result['errors']))
 
     def test_candidate_traversal_has_one_work_budget(self):
         backend = FakeBackend()
