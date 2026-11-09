@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from . import features, interrupt, runner, spec as specmod, subject_tree
 from .canon import canon_bytes, digest_file
@@ -30,6 +32,78 @@ BLIND_SPOTS = (
 )
 MODEL_DIGEST_CONTRACT = "recorded_digest_not_pinned_reproduction"
 EDITABLE_RECIPE_FILE = "model_selection.json"
+
+
+def _local_model_digest(model: str, base_url: str) -> Optional[str]:
+    """The digest this machine's Ollama serves for ``model``, or None.
+
+    A Recipe's model baseline comes from the person's own setup, never from
+    the digest some other machine happened to ship with the package.
+    """
+    endpoint = base_url.rstrip("/")
+    if endpoint.endswith("/v1"):
+        endpoint = endpoint[:-3]
+    try:
+        with urlopen(endpoint + "/api/tags", timeout=3) as response:
+            payload = json.load(response)
+    except (URLError, OSError, ValueError):
+        return None
+    for item in payload.get("models", []) if isinstance(payload, dict) else []:
+        if isinstance(item, dict) and item.get("name") == model:
+            digest = item.get("digest")
+            if isinstance(digest, str) and len(digest) == 64:
+                return digest
+    return None
+
+
+def refresh_live_digest(destination: Path) -> None:
+    """Point the Recipe's checked digest at what this machine serves now.
+
+    The shared adapter (a certified, hash-bound file) refuses a run whose live
+    digest differs from ``model_digest``.  A Recipe records rather than pins,
+    so before each run ``model_digest`` is set to the live digest and the
+    person's reference stays in ``baseline_digest``; `model_change` then
+    reports any difference without refusing.  If Ollama cannot be read,
+    nothing changes and the adapter's own check still fails the run.
+    """
+    path = destination / EDITABLE_RECIPE_FILE
+    try:
+        selection = json.loads(path.read_text(encoding="utf-8"))
+        local = selection["profiles"]["local-ollama"]
+        model, base_url = str(local["models"]["pi"]), str(local["base_url"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RealityError(f"editable model selection is malformed: {error}") from error
+    live = _local_model_digest(model, base_url)
+    if not live:
+        return
+    baseline = local.get("baseline_digest")
+    changed = local.get("model_digest") != live
+    if not (isinstance(baseline, str) and len(baseline) == 64):
+        local["baseline_digest"] = live  # first readable digest becomes the baseline
+        changed = True
+    if changed:
+        local["model_digest"] = live
+        _write_json(path, selection)
+
+
+def model_change(recipe_dir: Path, setup: dict[str, Any]) -> dict[str, Any]:
+    """Compare the digest a run recorded with the Recipe's model baseline.
+
+    Informational only: it never changes a verdict.  A different digest means
+    the result applies to the recorded model, and the Recipe needs re-proof
+    before its earlier result is relied on.
+    """
+    baseline = None
+    try:
+        selection = json.loads((recipe_dir / EDITABLE_RECIPE_FILE).read_text(encoding="utf-8"))
+        value = selection["profiles"]["local-ollama"].get("baseline_digest")
+        baseline = value if isinstance(value, str) and len(value) == 64 else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        baseline = None
+    observed = setup.get("model_digest") if isinstance(setup, dict) else None
+    observed = observed if isinstance(observed, str) and len(observed) == 64 else None
+    matches = None if baseline is None or observed is None else baseline == observed
+    return {"recipe_baseline": baseline, "recorded": observed, "matches_baseline": matches}
 
 
 class RealityError(ValueError):
@@ -163,6 +237,11 @@ def prepare_recipe(destination: Path) -> tuple[Path, bool]:
     local = selection["profiles"]["local-ollama"]
     local["identity_strength"] = "recorded_local_content_digest"
     local["digest_contract"] = MODEL_DIGEST_CONTRACT
+    # Baseline from this machine's Ollama, never the digest the package
+    # shipped; empty when Ollama cannot be read now (the first run adopts it).
+    live = _local_model_digest(str(local["models"]["pi"]), str(local["base_url"])) or ""
+    local["baseline_digest"] = live
+    local["model_digest"] = live
     _write_json(selection_path, selection)
     _write_json(destination / SPEC_NAME, _spec())
     required_files = _required_inputs(_spec())
@@ -344,6 +423,7 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
         raise RealityError(f"unknown Reality Check: {check}")
     destination = (Path(recipe_dir).expanduser() if recipe_dir else _default_recipe()).resolve()
     spec_path, created = prepare_recipe(destination)
+    refresh_live_digest(destination)
     specification_value = json.loads(spec_path.read_text(encoding="utf-8"))
     effective_digests = _file_digests(
         destination, _required_inputs(specification_value) + [RECIPE_NAME, SPEC_NAME]
@@ -369,6 +449,7 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
         "schema": RESULT_SCHEMA,
         "job": CHECK,
         **verified,
+        "model_change": model_change(destination, verified.get("setup", {})),
         "record": str(run_dir),
         "recipe": str(destination),
         "recipe_created": created,
@@ -378,6 +459,21 @@ def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str
         "blind_spots": list(BLIND_SPOTS),
         "rerun": f"hwb try {CHECK} --recipe {destination}",
     }
+
+
+def _model_line(change: dict[str, Any]) -> str:
+    recorded, baseline = change.get("recorded"), change.get("recipe_baseline")
+    if not recorded:
+        return "Model digest: not observed in this run"
+    if not baseline:
+        return (f"Model digest: recorded {recorded[:12]}; the Recipe has no baseline yet "
+                "(Ollama was not readable when it was created)")
+    if change.get("matches_baseline"):
+        return f"Model digest: recorded {recorded[:12]}; matches the Recipe's baseline"
+    return (f"Model digest: recorded {recorded[:12]}; the Recipe's baseline is {baseline[:12]}. "
+            "The model changed since the Recipe was made, so this result applies to the "
+            "recorded digest. Re-prove before relying on earlier results; set baseline_digest "
+            f"in {EDITABLE_RECIPE_FILE} to adopt the new model.")
 
 
 def print_result(result: dict[str, Any]) -> None:
@@ -405,7 +501,7 @@ def print_result(result: dict[str, Any]) -> None:
     print(f"\nSealed record: {result['record']}")
     print(f"Recipe: {result['recipe']}")
     print(f"Recipe integrity: {result['recipe_contract']}")
-    print("Model digest: live digest recorded; historical pin not enforced")
+    print(_model_line(result.get("model_change") or {}))
     print(f"Rerun: {result['rerun']}")
     print("\nExplicit blind spots")
     for item in result["blind_spots"]:

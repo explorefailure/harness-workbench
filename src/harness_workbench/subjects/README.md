@@ -20,19 +20,25 @@ use their existing authenticated clients. DeepSeek Harness uses the official
 `dsh` headless profile with temporary `HOME`, `DSH_HOME`, and XDG directories.
 Which model runs is declared in `model_selection.json`, which is the model
 authority; `pin.json`'s `ollama` block is only the optional local profile's
-content pin and says so. The committed active profile is **`opencode-go`**.
-DeepSeek Harness, Hermes, and Pi runs under that profile require a valid
-`HWB_OPENCODE_KEY`, outbound network access to the declared remote gateway,
-and permission to make a potentially paid or spend-bearing model call. The
-adapter refuses to run when that key is absent; it does not substitute a
-placeholder for a gateway credential. The gateway model is a label the
-service promises to honour rather than a digest, and `identity_strength` in
-the declaration records that weaker identity.
+content pin and says so. The committed active profile is the local
+**`local-llamacpp`**: DeepSeek Harness, Hermes, and Pi run against upstream
+llama.cpp's `llama-server` on loopback port 8081, serving the public
+`qwen3.8:27b` Q4_K_M weights. Its identity is the SHA-256 of that GGUF file, so
+the same bytes have the same identity on every machine. It needs no credential
+and makes no metered call. Select another profile with `HWB_MODEL_PROFILE`
+rather than editing the committed default.
+
+`opencode-go` remains available as an optional remote gateway profile. Runs
+under it require a valid `HWB_OPENCODE_KEY`, outbound network access to the
+declared remote gateway, and permission to make a potentially paid or
+spend-bearing model call. The adapter refuses to run when that key is absent;
+it does not substitute a placeholder for a gateway credential. The gateway
+model is a label the service promises to honour rather than a digest, and
+`identity_strength` in the declaration records that weaker identity.
 
 Hermes is pinned to official stable `0.20.5` / `v2026.8.19`, including the
 annotated tag object, peeled source commit, dependency lock, and launcher. It
-therefore makes a remote API call through the active gateway profile in the
-configuration shipped here. It gets a temporary `HERMES_HOME`, and only its
+calls whichever OpenAI-compatible route the active profile declares. It gets a temporary `HERMES_HOME`, and only its
 workload toolsets are enabled. The Hermes source checkout defaults to
 `~/.hermes/hermes-agent`; set `HERMES_AGENT_ROOT` if it is installed elsewhere
 and put that checkout's matching environment ahead of any older `hermes` on
@@ -43,33 +49,67 @@ endpoint does not authenticate. (`qwen3.5:9b` was the earlier local pin and is
 no longer selected for any subject.) `dsh_patch.yml` retains workspace
 confinement while making DeepSeek runs noninteractive.
 
-`ark1-qwen38` is the remote-local profile used for the low-memory canary. Set
-`HWB_MODEL_PROFILE=ark1-qwen38` rather than editing the committed default. Its
-27B model may offload layers to CPU RAM; local profiles therefore receive a
-20-minute subject bound. Forward Ark1's loopback Ollama port to local port
-21434, then run the compatibility shim on 21435:
+### The default llama.cpp profile
+
+`local-llamacpp` declares `"runtime": "llama.cpp"` (a profile without
+`runtime` means Ollama) and pins `runtime_build` to the server's `build_info`,
+`b12110-cd959bae9` (llama.cpp v0.9.0). Any byte-identical copy of the GGUF
+works when it is named by its own SHA-256. One way to get it is Ollama's public
+library, whose blob store already names layers that way:
 
 ```sh
-ssh -N -L 21434:127.0.0.1:11434 ark1
-python3.11 ollama_compat_proxy.py --upstream http://127.0.0.1:21434
-HWB_MODEL_PROFILE=ark1-qwen38 python3.11 runner.py --subject hermes
+ollama pull qwen3.8:27b
+llama-server -m ~/.ollama/models/blobs/sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d \
+  --alias qwen3.8:27b -c 65536 --jinja -fa on \
+  --host 127.0.0.1 --port 8081 --temp 1 --top-k 20 --top-p 0.95 --min-p 0
+python3.11 runner.py --subject hermes --workload repair
 ```
 
-The shim exists for Ollama's stricter post-tool message alternation. It adds a
-continuation user turn only after a real assistant tool call and repeats the
-original task so local models do not mistake that turn for a new session.
+(Ollama's system service keeps blobs under its own data directory instead of
+`~/.ollama`.) llama.cpp publishes no content digest, so identity comes from
+`/props`: the served alias must equal the selected model, `build_info` must
+equal the declared `runtime_build`, and the loaded file must be named by its
+SHA-256 (`sha256-<digest>` or `<digest>.gguf`); that name is the recorded
+`model_digest`. A file under any other name is refused. The name is trusted as
+Ollama's own digest is trusted; the bytes are not rehashed on every run.
+`--jinja` uses the GGUF's own chat template, which accepts post-tool turns
+without the compatibility shim below. The 27B model may offload layers to CPU
+RAM; local profiles therefore receive a 20-minute subject bound. If the model
+runs on another machine, forward that machine's loopback port to local 8081
+yourself; the endpoint the profile names is always local.
+
+### Your own endpoints
+
+Keep profiles for your own machines outside the repository. Point
+`HWB_MODEL_PROFILES` at a JSON file of the form `{"profiles": {"name": {...}}}`
+using the same fields as `model_selection.json`, then select one with
+`HWB_MODEL_PROFILE`. Local profiles may only add new names; redefining a
+committed profile is refused. Certification and the route canary refuse to
+plan while `HWB_MODEL_PROFILES` is set, so certified evidence always comes from
+a committed, reviewable profile.
+
+### Ollama compatibility shim and thermal gate
+
+`ollama_compat_proxy.py` exists for Ollama's stricter post-tool message
+alternation. It adds a continuation user turn only after a real assistant tool
+call and repeats the original task so local models do not mistake that turn
+for a new session. Run it between a subject and an Ollama endpoint:
+
+```sh
+python3.11 ollama_compat_proxy.py --listen-port 21435 --upstream http://127.0.0.1:11434
+```
 
 On a GPU that runs hot, the shim can also hold each chat-completion request
 until the serving GPU has cooled. Give it a command that prints the temperature
 in whole degrees Celsius; a request proceeds once a reading is at or below
 `--cool-at` (default 78). An unreadable temperature counts as hot, and model
 listings are never held. Waiting counts against the subject's own time bound.
-With `--no-tool-bridge` it forwards chat bodies unchanged, for runtimes that
-already accept post-tool turns:
+With `--no-tool-bridge` it forwards chat bodies unchanged, which suits
+llama.cpp:
 
 ```sh
-python3.11 ollama_compat_proxy.py --listen-port 21435 \
-  --upstream http://127.0.0.1:11434 \
+python3.11 ollama_compat_proxy.py --listen-port 8081 \
+  --upstream http://127.0.0.1:18081 --no-tool-bridge \
   --thermal-probe 'ssh gpu-host nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits' \
   --cool-at 78
 ```
@@ -626,9 +666,9 @@ receipt-path-only fabrication; stronger resistance to a hostile subject needs
 an operating-system isolation boundary outside this adapter.
 
 Do not put secrets in prompts, arguments, or fixtures. Agent behavior remains
-nondeterministic. The active `opencode-go` profile is a remote service whose
-model label does not content-pin the served model; only the optional
-`local-ollama` profile pins local model bytes. These are discovery runs, not
+nondeterministic. The active `local-llamacpp` profile and the optional
+`local-ollama` profile pin local model bytes by content digest; the optional
+`opencode-go` gateway's model label does not content-pin the served model. These are discovery runs, not
 confirmation runs.
 
 ## GitHub release readiness

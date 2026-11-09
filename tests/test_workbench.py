@@ -445,6 +445,38 @@ class TestFailureSemantics(Base):
         self.assertIn("canonical", str(cm.exception))
         self.assertIn("record.json", str(cm.exception))
 
+    def test_run_id_collision_redraws_the_suffix(self):
+        # A steady campaign makes same-spec runs inside one second, so the
+        # 16-bit suffix can repeat. That must not fail the run.
+        from unittest import mock
+        sp = specmod.load(self.spec([], name="collide.json"))
+        same = mock.Mock(hex="c0ffee" + "0" * 26)
+        fresh = mock.Mock(hex="beef" + "0" * 28)
+        with mock.patch.object(runner, "_stamp", return_value="20260101T000000Z"), \
+                mock.patch.object(runner.uuid, "uuid4",
+                                  side_effect=[same, same, fresh]):
+            first = runner.Recorder(self.runs, sp)
+            second = runner.Recorder(self.runs, sp)
+        first._attempts.close()
+        second._attempts.close()
+        self.assertTrue(first.run_id.endswith("-c0ff"))
+        self.assertTrue(second.run_id.endswith("-beef"))
+        self.assertTrue(os.path.isdir(second.run_dir))
+        self.assertRegex(second.run_id, r"^\d{8}T\d{6}Z-[0-9a-f]{6}-[0-9a-f]{4}$")
+
+    def test_run_id_collision_fails_loudly_when_every_draw_collides(self):
+        from unittest import mock
+        sp = specmod.load(self.spec([], name="collide-all.json"))
+        same = mock.Mock(hex="c0ffee" + "0" * 26)
+        with mock.patch.object(runner, "_stamp", return_value="20260101T000000Z"), \
+                mock.patch.object(runner.uuid, "uuid4", return_value=same):
+            first = runner.Recorder(self.runs, sp)
+            first._attempts.close()
+            with self.assertRaises(runner.HarnessError) as cm:
+                runner.Recorder(self.runs, sp)
+        self.assertIn("run directory already exists", str(cm.exception))
+        self.assertEqual(os.listdir(self.runs), [first.run_id])
+
     def test_nonzero_exit_is_data_not_an_error(self):
         p = os.path.join(self.tmp, "fail.sh")
         with open(p, "w") as fh:

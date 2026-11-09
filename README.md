@@ -284,7 +284,10 @@ through the adapter's supported routes. Choose your model and provider before
 running live experiments; copied configurations may contain a preset route.
 Hosted APIs may require credentials, network access, and paid usage.
 See the [subject guide](src/harness_workbench/subjects/README.md) for setup
-and supported options, including the `local-ollama` profile. The optional
+and supported options, including the `local-ollama` profile. The committed
+default, `local-llamacpp`, runs the public `qwen3.8:27b` weights on a local
+llama.cpp server, pinned by the GGUF file's SHA-256; select another profile,
+or one of your own, with `HWB_MODEL_PROFILE`. The optional
 `opencode-go` API route uses `HWB_OPENCODE_KEY` and requires outbound network
 access; paid usage may apply. Choose the route that suits your setup.
 

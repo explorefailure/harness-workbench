@@ -216,6 +216,7 @@ def build_plan(
 ) -> dict[str, Any]:
     """Describe an exact recut while authorizing no model calls."""
     _validate_limits(limits)
+    adapters.refuse_local_profiles("certification")
     apparatus = _offline_apparatus(
         require_live_prerequisites=require_live_prerequisites
     )
