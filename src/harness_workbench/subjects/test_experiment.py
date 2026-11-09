@@ -11,8 +11,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 import urllib.error
 import urllib.request
@@ -1829,6 +1831,109 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(
             "http://127.0.0.1:21434/api/tags", opened.call_args.args[0]
         )
+
+    def test_shim_without_tool_bridge_forwards_chat_bodies_unchanged(self) -> None:
+        seen: list[bytes] = []
+
+        class Recorder(_EchoHandler):
+            def do_POST(self) -> None:
+                seen.append(self.rfile.read(int(self.headers["Content-Length"])))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+        body = json.dumps({"messages": [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "tool_calls": [{"id": "1"}]},
+            {"role": "tool", "tool_call_id": "1", "content": "ok"},
+        ]}).encode()
+        for bridge, expect_unchanged in ((False, True), (True, False)):
+            upstream = ThreadingHTTPServer(("127.0.0.1", 0), Recorder)
+            proxy = ThreadingHTTPServer(("127.0.0.1", 0), ollama_compat_proxy.handler(
+                f"http://127.0.0.1:{upstream.server_address[1]}", bridge=bridge
+            ))
+            for server in (upstream, proxy):
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                self.addCleanup(server.server_close)
+                self.addCleanup(server.shutdown)
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{proxy.server_address[1]}/v1/chat/completions",
+                data=body, headers={"Content-Type": "application/json"}, method="POST",
+            ), timeout=5).read()
+            self.assertEqual(expect_unchanged, seen[-1] == body)
+
+    def _gate(self, outputs: list[object]) -> tuple[Any, list[float], list[str]]:
+        sleeps: list[float] = []
+        logs: list[str] = []
+
+        def run(_argv: list[str]) -> Any:
+            return outputs.pop(0)
+
+        gate = ollama_compat_proxy.ThermalGate(
+            ["probe"], 78, 5.0, run=run, sleep=sleeps.append,
+            clock=lambda: 10.0 * len(sleeps), log=logs.append,
+        )
+        return gate, sleeps, logs
+
+    def test_thermal_gate_releases_immediately_when_cool(self) -> None:
+        gate, sleeps, logs = self._gate([(0, "61\n")])
+        self.assertEqual({"waited_seconds": 0.0, "readings": [61]}, gate.wait())
+        self.assertEqual([], sleeps)
+        self.assertEqual([], logs)
+
+    def test_thermal_gate_holds_until_at_or_below_threshold(self) -> None:
+        gate, sleeps, logs = self._gate([(0, "86\n"), (0, "80"), (0, "78, extra")])
+        result = gate.wait()
+        self.assertEqual([86, 80, 78], result["readings"])
+        self.assertEqual([5.0, 5.0], sleeps)
+        self.assertEqual(20.0, result["waited_seconds"])
+        self.assertIn("released at 78C", logs[-1])
+
+    def test_thermal_gate_treats_unknown_readings_as_hot(self) -> None:
+        gate, sleeps, _logs = self._gate([
+            (255, ""), (0, "N/A"), None, (0, ""), (0, "70"),
+        ])
+        self.assertEqual([None, None, None, None, 70], gate.wait()["readings"])
+        self.assertEqual(4, len(sleeps))
+
+    def test_thermal_gate_probe_uses_the_capture_primitive(self) -> None:
+        reading = ollama_compat_proxy._bounded_probe(
+            [sys.executable, "-c", "print(64)"]
+        )
+        self.assertEqual((0, "64\n"), reading)
+        self.assertIsNone(ollama_compat_proxy._bounded_probe(
+            ["/nonexistent/hwb-thermal-probe"]
+        ))
+
+    def test_thermal_gate_holds_only_chat_completions(self) -> None:
+        class Gate:
+            calls = 0
+
+            def wait(self) -> None:
+                Gate.calls += 1
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), _EchoHandler)
+        proxy = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            ollama_compat_proxy.handler(
+                f"http://127.0.0.1:{upstream.server_address[1]}", Gate()
+            ),
+        )
+        for server in (upstream, proxy):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{proxy.server_address[1]}"
+        urllib.request.urlopen(base + "/v1/models", timeout=5).read()
+        self.assertEqual(0, Gate.calls)
+        request = urllib.request.Request(
+            base + "/v1/chat/completions",
+            data=json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        urllib.request.urlopen(request, timeout=5).read()
+        self.assertEqual(1, Gate.calls)
 
     def test_ollama_compat_bridge_only_repairs_real_post_tool_turns(self) -> None:
         untouched = json.dumps({"messages": [{"role": "tool", "content": "ok"}]}).encode()
@@ -7638,6 +7743,26 @@ class GuardHookTests(unittest.TestCase):
         )
         self.assertEqual("block", denied["action"])
         self.assertTrue(denied["message"])
+
+
+class _EchoHandler(BaseHTTPRequestHandler):
+    """Minimal upstream for proxy tests: answers every request with `{}`."""
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _reply(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length:
+            self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    do_GET = _reply
+    do_POST = _reply
 
 
 class CommandConstructionTests(unittest.TestCase):
