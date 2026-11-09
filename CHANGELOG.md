@@ -7,6 +7,21 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
+  committed default for the live subjects: upstream `llama-server` on loopback
+  serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF
+  file's SHA-256. The `opencode-go` gateway stays available as an optional
+  profile and is no longer implied to be required.
+
+- Add llama.cpp as a local model runtime. A profile may declare
+  `"runtime": "llama.cpp"` with a pinned `runtime_build`; identity is read from
+  `llama-server`'s `/props` and requires a GGUF named by its SHA-256.
+
+- Let operators keep their own profiles outside the repository with
+  `HWB_MODEL_PROFILES`; local profiles may only add new names, and
+  certification refuses to plan while they are configured. Remove the
+  machine-specific Ollama profile and its setup notes from the shipped tree.
+
 - Add an optional thermal gate to the Ollama compatibility shim
   (`--thermal-probe`, `--cool-at`): each chat-completion request waits until
   the serving GPU reads at or below the threshold; unknown readings count as

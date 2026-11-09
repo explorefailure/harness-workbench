@@ -303,8 +303,48 @@ def _verify_identity(subject: str) -> dict[str, Any]:
     }
 
 
+LOCAL_PROFILES_ENV = "HWB_MODEL_PROFILES"
+
+
 def _model_selection() -> dict[str, Any]:
-    return json.loads((HERE / "model_selection.json").read_text(encoding="utf-8"))
+    """The committed selection plus optional profiles kept outside the repo.
+
+    `HWB_MODEL_PROFILES` may name a JSON file `{"profiles": {...}}` describing
+    the operator's own endpoints. Its profiles are added under new names only:
+    redefining a committed profile is refused, so local configuration can never
+    masquerade as the shipped one. The committed `active` default is unchanged;
+    select a local profile with `HWB_MODEL_PROFILE`. Certification refuses to
+    plan while the overlay is set.
+    """
+    selection = json.loads((HERE / "model_selection.json").read_text(encoding="utf-8"))
+    overlay_path = os.environ.get(LOCAL_PROFILES_ENV)
+    if not overlay_path:
+        return selection
+    try:
+        overlay = json.loads(Path(overlay_path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise AdapterError(f"{LOCAL_PROFILES_ENV} is unreadable: {error}") from None
+    profiles = overlay.get("profiles") if isinstance(overlay, dict) else None
+    if not isinstance(profiles, dict) or not all(
+        isinstance(profile, dict) for profile in profiles.values()
+    ):
+        raise AdapterError(f"{LOCAL_PROFILES_ENV} must hold an object of profiles")
+    clashes = sorted(set(profiles) & set(selection["profiles"]))
+    if clashes:
+        raise AdapterError(
+            f"{LOCAL_PROFILES_ENV} may not redefine committed profiles: "
+            + ", ".join(clashes)
+        )
+    selection["profiles"] = {**selection["profiles"], **profiles}
+    return selection
+
+
+def refuse_local_profiles(purpose: str) -> None:
+    """Certification evidence may only come from committed, reviewable profiles."""
+    if os.environ.get(LOCAL_PROFILES_ENV):
+        raise ValueError(
+            f"{purpose} uses committed profiles only; unset {LOCAL_PROFILES_ENV}"
+        )
 
 
 def _active_profile() -> tuple[str, dict[str, Any]]:
@@ -320,7 +360,8 @@ def _resolve_model(subject: str) -> dict[str, str]:
     """Resolve the model for a configurable subject and say how strong its identity is.
 
     A local model is content-addressed, so its digest is verified against the
-    live Ollama inventory. A gateway model is only a label: the service promises
+    live runtime (Ollama's inventory, or the content-addressed file a llama.cpp
+    server reports it loaded). A gateway model is only a label: the service promises
     to route it, and nothing here can prove which weights answered. The two must
     never be reported as the same strength.
     """
@@ -351,15 +392,73 @@ def _resolve_model(subject: str) -> dict[str, str]:
             raise AdapterError(
                 f"profile {name!r} has no valid expected model digest"
             )
-        observed_digest = _verify_ollama_digest(
-            model, str(profile["base_url"])
-        )
+        observed_digest = _verify_local_digest(profile, model)
         if observed_digest != expected_digest:
             raise AdapterError(
-                f"Ollama model digest does not match profile {name!r}"
+                f"{_runtime_label(profile)} model digest does not match profile {name!r}"
             )
         resolved["model_digest"] = observed_digest
     return resolved
+
+
+LOCAL_RUNTIMES = ("ollama", "llama.cpp")
+_CONTENT_ADDRESSED_GGUF = re.compile(r"(?:sha256[-:])?([0-9a-f]{64})(?:\.gguf)?")
+
+
+def _runtime_label(profile: dict[str, Any]) -> str:
+    return "llama.cpp" if profile.get("runtime") == "llama.cpp" else "Ollama"
+
+
+def _verify_local_digest(profile: dict[str, Any], model: str) -> str:
+    """Return the live content digest of a local model from its declared runtime.
+
+    `runtime` defaults to Ollama so existing profiles keep their meaning.
+    """
+    runtime = profile.get("runtime", "ollama")
+    base_url = str(profile["base_url"])
+    if runtime == "ollama":
+        return _verify_ollama_digest(model, base_url)
+    if runtime == "llama.cpp":
+        build = profile.get("runtime_build")
+        return _verify_llamacpp_digest(
+            model, base_url, None if build is None else str(build)
+        )
+    raise AdapterError(f"unsupported local model runtime {runtime!r}")
+
+
+def _verify_llamacpp_digest(
+    model: str, base_url: str, expected_build: str | None = None
+) -> str:
+    """Read identity from llama-server's /props without trusting a model label.
+
+    llama.cpp publishes no content digest, so the served file must be named by
+    its own SHA-256 (as Ollama's blob store already names GGUF layers). The
+    digest is that name; the alias must equal the selected model, and a declared
+    `runtime_build` must equal the server's build_info.
+    """
+    endpoint = base_url.rstrip("/")
+    if endpoint.endswith("/v1"):
+        endpoint = endpoint[:-3]
+    with urlopen(endpoint + "/props", timeout=3) as response:
+        payload = json.load(response)
+    alias = payload.get("model_alias")
+    if alias != model:
+        raise AdapterError(
+            f"llama.cpp serves {alias!r}, not the selected model {model!r}"
+        )
+    if expected_build is not None and payload.get("build_info") != expected_build:
+        raise AdapterError(
+            f"llama.cpp build {payload.get('build_info')!r} does not match "
+            f"declared runtime_build {expected_build!r}"
+        )
+    name = str(payload.get("model_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = _CONTENT_ADDRESSED_GGUF.fullmatch(name)
+    if match is None:
+        raise AdapterError(
+            "llama.cpp model file is not content-addressed; serve a GGUF named "
+            "by its SHA-256 (for example sha256-<digest> or <digest>.gguf)"
+        )
+    return match.group(1)
 
 
 def _verify_ollama_digest(model: str, base_url: str) -> str:

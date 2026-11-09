@@ -1,6 +1,6 @@
 {
   "schema": "cross-harness-model-selection/v0.1",
-  "active": "opencode-go",
+  "active": "local-llamacpp",
   "comment": [
     "Model selection is declared here so 'which model' is one frozen experiment",
     "input rather than a value buried in three different harness config files.",
@@ -10,18 +10,26 @@
     "Record the strength; do not pretend a gateway label is a digest."
   ],
   "profiles": {
-    "ark1-qwen38": {
+    "local-llamacpp": {
       "kind": "local",
-      "base_url": "http://127.0.0.1:21435/v1",
+      "runtime": "llama.cpp",
+      "runtime_build": "b12110-cd959bae9",
+      "comment": [
+        "Upstream llama.cpp llama-server (v0.9.0) on loopback, started with --jinja",
+        "and --alias qwen3.8:27b. llama.cpp exposes no digest, so model_digest is the",
+        "SHA-256 that names the served GGUF: the model layer of Ollama's public",
+        "qwen3.8:27b (Q4_K_M), or any byte-identical copy named by its hash."
+      ],
+      "base_url": "http://127.0.0.1:8081/v1",
       "api_key_env": "HWB_LOCAL_KEY",
-      "api_key_placeholder": "ark1-ollama-local-placeholder",
+      "api_key_placeholder": "llamacpp-local-placeholder",
       "identity_strength": "local_content_digest",
       "verify_digest": true,
-      "model_digest": "7c439d5c1f940e7c163f59ba2eebea89e3bde8849409cb54eb343ac9fe640b46",
+      "model_digest": "f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d",
       "models": {
-        "deepseek": "qwen3.8-agent-64k:latest",
-        "hermes": "qwen3.8-agent-64k:latest",
-        "pi": "qwen3.8-agent-64k:latest"
+        "deepseek": "qwen3.8:27b",
+        "hermes": "qwen3.8:27b",
+        "pi": "qwen3.8:27b"
       },
       "subject_key_env": {
         "deepseek": "HWB_LOCAL_KEY",

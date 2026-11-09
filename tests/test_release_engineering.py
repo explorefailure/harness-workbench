@@ -986,7 +986,12 @@ class TestReleaseSurfaces(unittest.TestCase):
             (ROOT / "src" / "harness_workbench" / "subjects"
              / "model_selection.json").read_text(encoding="utf-8")
         )
-        self.assertEqual("opencode-go", selection["active"])
+        self.assertEqual("local-llamacpp", selection["active"])
+        active = selection["profiles"]["local-llamacpp"]
+        self.assertEqual("local", active["kind"])
+        self.assertEqual("llama.cpp", active["runtime"])
+        self.assertEqual("local_content_digest", active["identity_strength"])
+        self.assertIs(True, active["verify_digest"])
         self.assertEqual("gateway", selection["profiles"]["opencode-go"]["kind"])
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -996,6 +1001,8 @@ class TestReleaseSurfaces(unittest.TestCase):
         for surface in (readme, subject_readme):
             with self.subTest(surface="root" if surface is readme else "subjects"):
                 self.assertIn("`opencode-go`", surface)
+                self.assertIn("`local-llamacpp`", surface)
+                self.assertIn("`HWB_MODEL_PROFILE`", surface)
                 self.assertIn("`HWB_OPENCODE_KEY`", surface)
                 self.assertIn("outbound network", surface)
                 self.assertRegex(surface, r"paid|spend")
