@@ -884,8 +884,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_setup)
 
     lb = command("lab")
-    lb.add_argument("--port", type=int, default=8765,
-                    help="localhost port (default: 8765)")
+    lb.add_argument("--port", type=int, default=0,
+                    help="localhost port; fails if taken (default: a free port per launch)")
     lb.add_argument("--recipe", default=None,
                     help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
     lb.add_argument("--no-browser", action="store_true",

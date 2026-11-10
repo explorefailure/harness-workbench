@@ -58,6 +58,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   `coding/python-bug-fix`: platform, memory, Ollama models, `pi` and `node`,
   and whether the Recipe's recorded model digest matches Ollama's.
 - `hwb try --json` prints the Reality Check result document unchanged.
+- `hwb lab` security: a per-launch secret token (URL, then an HttpOnly
+  SameSite=Strict cookie, or `Authorization: Bearer` for scripts), an exact
+  Host allowlist against DNS rebinding, and a same-origin check, all in one
+  guard in front of every route. It binds a free port per launch by default;
+  `--port` fails if the port is taken and never shares or takes over a port.
 - `hwb lab` (MVP) serves a localhost web GUI for the same check: Discover, Try,
   Proof, Recipe (model choice records Ollama's current digest) and History
   (verdicts re-derived from sealed records). No live progress yet; the local
