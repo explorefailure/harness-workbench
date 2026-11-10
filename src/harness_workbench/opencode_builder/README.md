@@ -64,7 +64,9 @@ hwb-opencode demo . --opencode ./runtime/opencode --output repair.result.json
 Initialization performs no downloads and refuses existing destinations, including
 symlinks. The explicit installer downloads OpenCode 1.19.5 from official GitHub
 release assets, checks archive and binary SHA-256, and writes only NEW runtime/.
-It extracts only the expected executable. doctor checks binary identity BEFORE
+It extracts only the expected executable. If the release-download route answers
+a 5xx, it retries through the GitHub API; set `GITHUB_TOKEN` to avoid the
+anonymous API rate limit (the token is sent to api.github.com only). doctor checks binary identity BEFORE
 executing a bounded version probe. Your global OpenCode install is untouched.
 
 The default demo starts a bounded scripted OpenAI-compatible server on an
