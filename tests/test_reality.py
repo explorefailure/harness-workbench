@@ -421,5 +421,140 @@ class RealityCheckTests(unittest.TestCase):
             self.assertNotIn("[freeze] DRIFT", diagnostics.getvalue())
 
 
+
+class RealityLlamaCppRecipeTests(unittest.TestCase):
+    DIGEST = "a" * 64
+    BUILD = "b12110-cd959bae9"
+
+    def setUp(self):
+        # Neither runtime may be contacted by a test.
+        for name, value in (("_local_model_digest", None),
+                            ("_llamacpp_identity", (self.DIGEST, self.BUILD))):
+            patcher = mock.patch.object(reality, name, return_value=value)
+            setattr(self, name.strip("_"), patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def _profile(self, destination):
+        selection = json.loads((destination / "model_selection.json").read_text(
+            encoding="utf-8"))
+        return selection["active"], selection["profiles"][selection["active"]]
+
+    def test_new_llamacpp_recipe_records_file_digest_and_build(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination, "local-llamacpp")
+            name, local = self._profile(destination)
+            self.assertEqual("local-llamacpp", name)
+            self.assertEqual("llama.cpp", local["runtime"])
+            self.assertEqual(self.DIGEST, local["baseline_digest"])
+            self.assertEqual(self.DIGEST, local["model_digest"])
+            self.assertEqual(self.BUILD, local["baseline_runtime_build"])
+            self.assertEqual(self.BUILD, local["runtime_build"])
+            manifest = json.loads((destination / "recipe.json").read_text(encoding="utf-8"))
+            self.assertEqual("local-llamacpp", manifest["model_profile"])
+            self.local_model_digest.assert_not_called()
+            reality.prepare_recipe(destination)  # reopens through validation
+
+    def test_new_build_and_model_are_recorded_and_reported_never_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination, "local-llamacpp")
+            self.llamacpp_identity.return_value = ("b" * 64, "b12200-0000000")
+            reality.refresh_live_digest(destination)
+            _, local = self._profile(destination)
+            self.assertEqual("b" * 64, local["model_digest"])
+            self.assertEqual(self.DIGEST, local["baseline_digest"])
+            self.assertEqual("b12200-0000000", local["runtime_build"])
+            self.assertEqual(self.BUILD, local["baseline_runtime_build"])
+            change = reality.model_change(destination, {"model_digest": "b" * 64})
+            self.assertIs(False, change["matches_baseline"])
+            self.assertEqual({"recipe_baseline": self.BUILD, "recorded": "b12200-0000000",
+                              "matches_baseline": False}, change["runtime_build"])
+
+    def test_unreadable_llamacpp_leaves_the_recipe_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination, "local-llamacpp")
+            before = (destination / "model_selection.json").read_bytes()
+            self.llamacpp_identity.return_value = (None, None)
+            reality.refresh_live_digest(destination)
+            self.assertEqual(before, (destination / "model_selection.json").read_bytes())
+
+    def test_ollama_recipes_keep_their_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            name, local = self._profile(destination)
+            self.assertEqual("local-ollama", name)
+            self.assertNotIn("baseline_runtime_build", local)
+            self.assertNotIn("runtime_build", reality.model_change(destination, {}))
+            self.llamacpp_identity.assert_not_called()
+
+    def test_existing_recipe_refuses_a_different_profile_and_unknown_profiles(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination)
+            with self.assertRaisesRegex(reality.RealityError, "uses local-ollama"):
+                reality.prepare_recipe(destination, "local-llamacpp")
+            with self.assertRaisesRegex(reality.RealityError, "unknown Recipe profile"):
+                reality.prepare_recipe(Path(td) / "other", "opencode-go")
+
+    def test_recipe_profile_must_match_its_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            reality.prepare_recipe(destination, "local-llamacpp")
+            path = destination / "model_selection.json"
+            selection = json.loads(path.read_text(encoding="utf-8"))
+            selection["active"] = "local-ollama"
+            selection["profiles"]["local-ollama"].update(
+                digest_contract=reality.MODEL_DIGEST_CONTRACT)
+            path.write_text(json.dumps(selection), encoding="utf-8")
+            with self.assertRaisesRegex(reality.RealityError, "Recipe profile changed"):
+                reality.prepare_recipe(destination)
+
+    def test_default_recipe_directory_is_separate_per_profile(self):
+        self.assertNotEqual(reality._default_recipe(),
+                            reality._default_recipe("local-llamacpp"))
+        self.assertEqual(reality._default_recipe(),
+                         reality._default_recipe("local-ollama"))
+
+
+    def test_build_line_reports_only_llamacpp_build_changes(self):
+        self.assertIsNone(reality._build_line({"recorded": "x"}))
+        same = {"runtime_build": {"recorded": self.BUILD, "recipe_baseline": self.BUILD,
+                                  "matches_baseline": True}}
+        self.assertEqual(f"llama.cpp build: {self.BUILD}", reality._build_line(same))
+        moved = {"runtime_build": {"recorded": "b2", "recipe_baseline": self.BUILD,
+                                   "matches_baseline": False}}
+        self.assertIn("Re-prove", reality._build_line(moved))
+
+class LlamaCppIdentityParsingTests(unittest.TestCase):
+    def _identity(self, **props):
+        body = io.BytesIO(json.dumps({
+            "model_alias": "qwen3.8:27b",
+            "model_path": "/blobs/sha256-" + "c" * 64,
+            "build_info": "b12110-cd959bae9", **props,
+        }).encode())
+        with mock.patch.object(reality, "urlopen", return_value=body) as opened:
+            result = reality._llamacpp_identity("qwen3.8:27b", "http://127.0.0.1:8081/v1")
+        self.assertEqual("http://127.0.0.1:8081/props", opened.call_args.args[0])
+        return result
+
+    def test_content_addressed_file_and_build(self):
+        self.assertEqual(("c" * 64, "b12110-cd959bae9"), self._identity())
+
+    def test_wrong_alias_reads_as_unknown(self):
+        self.assertEqual((None, None), self._identity(model_alias="other"))
+
+    def test_unaddressed_file_gives_no_digest(self):
+        self.assertEqual((None, "b12110-cd959bae9"),
+                         self._identity(model_path="/models/qwen.gguf"))
+
+    def test_unreachable_server_reads_as_unknown(self):
+        with mock.patch.object(reality, "urlopen", side_effect=OSError("refused")):
+            self.assertEqual((None, None), reality._llamacpp_identity(
+                "qwen3.8:27b", "http://127.0.0.1:8081/v1"))
+
+
 if __name__ == "__main__":
     unittest.main()

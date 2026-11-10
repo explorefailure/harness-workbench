@@ -74,6 +74,7 @@ def cmd_try(args) -> int:
             args.check,
             runs_root=args.root,
             recipe_dir=args.recipe,
+            profile=args.profile,
         )
     except reality.RealityError as error:
         return _fail(str(error))
@@ -834,6 +835,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Reality Check to run")
     tr.add_argument("--recipe", default=None,
                     help="Recipe directory (default: ./.hwb/recipes/<check>)")
+    tr.add_argument("--profile", default=None,
+                    choices=("local-ollama", "local-llamacpp"),
+                    help="model profile for a new Recipe (default: local-ollama)")
     tr.set_defaults(func=cmd_try)
 
     sj = command("subjects")

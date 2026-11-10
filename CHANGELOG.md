@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb try coding/python-bug-fix --profile local-llamacpp` runs the Reality
+  Check on a local llama.cpp server. The Recipe records the served GGUF's
+  SHA-256 and the llama.cpp build as its baseline and reports later changes
+  to either without refusing the run. Ollama stays the default profile.
+
 - Fix: descendant cleanup no longer reports failure when the SIGTERM grace
   expires in the middle of a poll. That expiry is the expected escalation to
   SIGKILL, which observes the tree afresh; before, a run with SIGTERM-ignoring

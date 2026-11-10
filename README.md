@@ -137,6 +137,16 @@ No Workbench specification needs to be written. The check selects the
 `local-ollama` profile, creates its disposable repair workspace, and retains
 an ordinary sealed Workbench record under `runs/`.
 
+To run it on a local llama.cpp server instead, start `llama-server` as the
+[subject guide](src/harness_workbench/subjects/README.md) describes and add
+`--profile local-llamacpp`. That Recipe is kept separately under
+`.hwb/recipes/coding-python-bug-fix-local-llamacpp` and records the served
+GGUF's SHA-256 and the llama.cpp build:
+
+```sh
+hwb try coding/python-bug-fix --profile local-llamacpp
+```
+
 Not ready to run a model? The [no-model example](#explore-without-a-model)
 lets you inspect a deterministic failure-and-retry experiment first.
 
