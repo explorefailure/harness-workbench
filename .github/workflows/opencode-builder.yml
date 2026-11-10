@@ -23,6 +23,7 @@ jobs:
       - name: Create owned workspace and install pinned official runtime
         env:
           PYTHONPATH: src
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python -m harness_workbench._opencode_cli init "$RUNNER_TEMP/opencode-builder"
           python "$RUNNER_TEMP/opencode-builder/install_runtime.py"
