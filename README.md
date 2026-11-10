@@ -147,6 +147,15 @@ GGUF's SHA-256 and the llama.cpp build:
 hwb try coding/python-bug-fix --profile local-llamacpp
 ```
 
+`hwb setup` checks first whether this machine can run the check, and
+`hwb try --json` prints the result document instead of the summary. An
+unreleased local web GUI, `hwb lab`, opens a localhost page for the same check:
+discover your setup, run it, read the proof, choose the Recipe's model, and
+browse sealed runs. It listens on 127.0.0.1 only, on a free port chosen per
+launch, and every request needs that launch's secret token, which is in the URL
+it prints and opens. It has no step-by-step progress yet. Both `hwb setup` and `hwb lab` accept
+`--profile local-llamacpp` to check and run against a local llama-server.
+
 Not ready to run a model? The [no-model example](#explore-without-a-model)
 lets you inspect a deterministic failure-and-retry experiment first.
 

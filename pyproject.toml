@@ -126,6 +126,8 @@ harness_workbench = [
     "subjects/repair_fixture/*.py",
     "subjects/replay_fixtures/*.json",
     "reality_checks/*.json",
+    # `hwb lab` (MVP) serves this single static page; it is data, not a module.
+    "lab_static/*.html",
 ]
 
 [tool.setuptools.dynamic]

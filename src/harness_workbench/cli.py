@@ -78,8 +78,40 @@ def cmd_try(args) -> int:
         )
     except reality.RealityError as error:
         return _fail(str(error))
-    reality.print_result(result)
+    if getattr(args, "json", False):
+        # The result document unchanged, so a GUI or script reads exactly what
+        # the terminal summary is printed from.
+        json.dump(result, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        reality.print_result(result)
     return 0 if result["verdict"] == "pass" else 1
+
+
+def cmd_setup(args) -> int:
+    from pathlib import Path
+
+    from . import discover
+
+    recipe = (Path(args.recipe).expanduser() if args.recipe
+              else discover.default_recipe_dir(args.profile))
+    doc = discover.discover(recipe, profile=args.profile)
+    if args.json:
+        json.dump(doc, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        discover.print_setup(doc)
+    return 0 if doc["ready"] else 1
+
+
+def cmd_lab(args) -> int:
+    from . import lab
+
+    try:
+        return lab.serve(args.root, args.recipe, args.port, not args.no_browser,
+                         args.profile)
+    except lab.LabError as error:
+        return _fail(str(error))
 
 
 def cmd_subjects(args) -> int:
@@ -838,7 +870,30 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--profile", default=None,
                     choices=("local-ollama", "local-llamacpp"),
                     help="model profile for a new Recipe (default: local-ollama)")
+    tr.add_argument("--json", action="store_true",
+                    help="print the result document as JSON instead of the summary")
     tr.set_defaults(func=cmd_try)
+
+    st = command("setup")
+    st.add_argument("--recipe", default=None,
+                    help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
+    st.add_argument("--json", action="store_true", help="print the setup document as JSON")
+    st.add_argument("--profile", default="local-ollama",
+                    choices=("local-ollama", "local-llamacpp"),
+                    help="model profile to check for a new Recipe (default: local-ollama)")
+    st.set_defaults(func=cmd_setup)
+
+    lb = command("lab")
+    lb.add_argument("--port", type=int, default=0,
+                    help="localhost port; fails if taken (default: a free port per launch)")
+    lb.add_argument("--recipe", default=None,
+                    help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
+    lb.add_argument("--no-browser", action="store_true",
+                    help="do not open a browser window")
+    lb.add_argument("--profile", default="local-ollama",
+                    choices=("local-ollama", "local-llamacpp"),
+                    help="model profile for a new Recipe (default: local-ollama)")
+    lb.set_defaults(func=cmd_lab)
 
     sj = command("subjects")
     # No positional: every id-taking positional has to be visible to the
