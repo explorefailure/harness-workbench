@@ -724,7 +724,10 @@ class BoundedRunTests(unittest.TestCase):
                     f"signal.signal(signal.SIGTERM, lambda *_: "
                     f"(os.write({descriptor}, b'x' * 4096), exit(0))); "
                     "time.sleep(30)",
-                    timeout=0.3,
+                    # The SIGTERM handler must be installed before the
+                    # timeout fires; 0.3 s raced interpreter start-up on
+                    # slow macOS runners.
+                    timeout=2.0,
                     stdout_limit=128,
                     stderr_limit=128,
                     termination_grace=1.0,

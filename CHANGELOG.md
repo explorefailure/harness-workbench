@@ -12,6 +12,15 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   SHA-256 and the llama.cpp build as its baseline and reports later changes
   to either without refusing the run. Ollama stays the default profile.
 
+- Fix: descendant cleanup no longer reports failure when the SIGTERM grace
+  expires in the middle of a poll. That expiry is the expected escalation to
+  SIGKILL, which observes the tree afresh; before, a run with SIGTERM-ignoring
+  descendants could record a false "cleanup failed" depending on timing.
+  Expiry during the SIGKILL phase still fails closed.
+- Fix: the OpenCode installer's GitHub API fallback sends `GITHUB_TOKEN` (or
+  `GH_TOKEN`) when set, so busy CI runners no longer hit the anonymous API rate
+  limit (HTTP 403). The token goes to api.github.com only, never across the
+  asset redirect. The OpenCode builder workflow passes its read-only token.
 - Make a local, digest-pinned llama.cpp profile, `local-llamacpp`, the
   committed default for the live subjects: upstream `llama-server` on loopback
   serving the public `qwen3.8:27b` Q4_K_M weights, identified by the GGUF
