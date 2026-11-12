@@ -105,6 +105,14 @@
   .checklist li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; }
   .checklist li[data-ok="1"]::before { content: "✓"; font-weight: 700; color: #356f34; }
   .checklist li[data-ok="0"]::before { content: "✕"; font-weight: 700; color: #a23f2e; }
+  .phases { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+  .phases li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; color: var(--muted); }
+  .phases li::before { content: "○"; }
+  .phases li[data-s="done"] { color: var(--ink); }
+  .phases li[data-s="done"]::before { content: "✓"; font-weight: 700; color: var(--green); }
+  .phases li[data-s="active"] { color: var(--ink); font-weight: 600; }
+  .phases li[data-s="active"]::before { content: "●"; color: var(--amber); }
+  #tRunning .note { margin: 12px 0 0; }
 
   .blockers { border-radius: 14px; padding: 18px 20px; background: var(--coral-soft); display: grid; gap: 10px; }
   .blockers ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
@@ -291,7 +299,10 @@
           <div id="tRunning" hidden>
             <div class="actions"><span class="pulse" aria-hidden="true"></span><span class="label">Running</span></div>
             <div class="elapsed" id="tElapsed" aria-live="off">0:00</div>
-            <p class="note">Step-by-step progress is not available yet. The verdict appears here when the sealed record is complete.</p>
+            <ol class="phases" id="tPhases" aria-label="Run progress"></ol>
+            <p class="note" id="tActivity" hidden></p>
+            <p class="note" id="tExpect"></p>
+            <p class="note">The agent works inside one sealed process, so Workbench sees what it did only when that process ends. The verdict appears when the record is complete.</p>
           </div>
           <div id="tDone" hidden>
             <span class="label">Finished</span>
@@ -520,23 +531,53 @@
     else { chip.className = "chip"; chip.textContent = "Idle"; text("tryTag", ""); }
     if (state.recipe) text("tCmd", state.recipe.rerun);
   }
+  var PHASE_LABELS = {
+    recipe: "Check the Recipe", model_identity: "Confirm the model's identity",
+    run_started: "Open a sealed run record", agent: "Prove it fails, agent works, test again",
+    verifying: "Verify the record"
+  };
+  function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function renderProgress() {
+    var job = state.job;
+    if (!job || !job.phases) return;
+    var at = job.phases.indexOf(job.phase);
+    $("tPhases").replaceChildren.apply($("tPhases"), job.phases.map(function (p, i) {
+      var s = job.state === "done" || i < at ? "done" : i === at ? "active" : "pending";
+      return el("li", { "data-s": s, text: PHASE_LABELS[p] || p });
+    }));
+    var a = job.activity;
+    $("tActivity").hidden = !a;
+    if (a) text("tActivity", a.available
+      ? "Model activity: " + a.tokens_since_start.toLocaleString() + " tokens generated since the run began (" + a.source + "; counts " + a.scope + ")."
+      : "Model activity unavailable: " + a.reason + ".");
+    text("tExpect", job.previous_duration ? "The last run on this Lab took " + clock(job.previous_duration) + "." : "A run usually takes a few minutes.");
+  }
   function tick() {
     if (!state.job || state.job.state !== "running") return;
-    var s = Math.max(0, Math.floor(Date.now() / 1000 - state.job.started_at));
-    text("tElapsed", Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"));
+    text("tElapsed", clock(Date.now() / 1000 - state.job.started_at));
+  }
+  /* Keep only the newest event sequence seen for this job; the next poll
+     asks for events after it. Phases render from job.phase, not the events. */
+  function adopt(job) {
+    var prev = state.job, entries = (job.events && job.events.entries) || [];
+    var last = prev && prev.id === job.id && prev.seen ? prev.seen : 0;
+    entries.forEach(function (e) { if (e.sequence > last) last = e.sequence; });
+    job.seen = last; delete job.events;
+    state.job = job;
   }
   function pollJob() {
-    api("/api/runs/current").then(function (job) {
+    var after = state.job && state.job.id && state.job.seen ? "?after=" + state.job.seen : "";
+    api("/api/runs/current" + after).then(function (job) {
       if (job.state === "idle") { state.job = null; syncTry(); return; }
-      state.job = job; syncTry(); tick();
-      if (job.state === "running") { if (!state.poll) { state.poll = setInterval(pollJob, 2000); state.timer = setInterval(tick, 1000); } return; }
+      adopt(job); syncTry(); tick(); renderProgress();
+      if (job.state === "running") { if (!state.poll) { state.poll = setInterval(pollJob, 1000); state.timer = setInterval(tick, 1000); } return; }
       clearInterval(state.poll); clearInterval(state.timer); state.poll = state.timer = null;
       if (job.state === "done") { renderProof(job.result, false); loadRuns(); loadRecipe(); }
     }).catch(function () {});
   }
   function startRun() {
     $("tRun").disabled = true;
-    api("/api/runs", { method: "POST", body: {} }).then(function (job) { state.job = job; syncTry(); pollJob(); })
+    api("/api/runs", { method: "POST", body: {} }).then(function (job) { adopt(job); syncTry(); renderProgress(); pollJob(); })
       .catch(function (e) { state.job = { state: "failed", error: e.message }; syncTry(); });
   }
   $("tRun").addEventListener("click", startRun);
