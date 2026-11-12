@@ -1074,6 +1074,16 @@ def execute(
     return report, 0 if report["passed"] and scan["passed"] else 1
 
 
+def stale_freeze_locks(root: Path | None = None) -> list[str]:
+    """Freeze-lock baselines left beside the specs by an earlier run.
+
+    Every draw of a live run is compared against these, so any left over from
+    before a certified byte changed make all fifteen draws report drift and the
+    whole run ineligible, after its model calls are spent.
+    """
+    return sorted(path.name for path in (root or HERE).glob("repair_*.freeze.lock"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -1101,6 +1111,14 @@ def main() -> int:
     parser.add_argument("--credential-file", type=Path)
     parser.add_argument("--hermes-root", type=Path)
     args = parser.parse_args()
+    if args.live:
+        locks = stale_freeze_locks()
+        if locks:
+            parser.error(
+                "move these freeze locks out of the subjects directory before a "
+                "live run; they hold an earlier run's baselines and would make "
+                "every draw report drift: " + ", ".join(locks)
+            )
     try:
         plan = build_plan(
             _limits(args.max), require_live_prerequisites=args.live
