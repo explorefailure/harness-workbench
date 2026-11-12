@@ -172,7 +172,7 @@ class Lab:
 
     def _execute(self, job: dict[str, Any], stop_run: threading.Event) -> None:
         stop = threading.Event()
-        if self.profile == "local-llamacpp":
+        if self._runtime() == "llama.cpp":
             threading.Thread(target=self._sample_activity, args=(job, stop),
                              daemon=True).start()
         try:
@@ -192,6 +192,16 @@ class Lab:
             self._emit(job, "completed", "succeeded" if job["state"] == "done" else "failed")
             if job["state"] == "done":
                 self._last_duration = job["finished_at"] - job["started_at"]
+
+    def _runtime(self) -> Optional[str]:
+        """The runtime this run will use, decided by the profile, not its name.
+
+        Owner overlay profiles may serve llama.cpp under any name.
+        """
+        try:
+            return discovermod.recipe_state(self.recipe_dir, self.profile).get("runtime")
+        except Exception:
+            return None
 
     def _sample_activity(self, job: dict[str, Any], stop: threading.Event) -> None:
         """Track llama-server's generated-token count while the run lasts."""

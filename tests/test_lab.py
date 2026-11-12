@@ -794,6 +794,35 @@ class LabProgressTests(unittest.TestCase):
         # reason, not hidden behind the last good count.
         self.assertIn("--metrics", the_lab.current()["activity"]["reason"])
 
+    def _sampled(self, profile):
+        """Whether a run under `profile` starts the llama.cpp activity sampler."""
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        with mock.patch.object(lab.Lab, "_sample_activity") as sampler:
+            the_lab = self.lab(run_check, profile=profile)
+            the_lab.start_run()
+            self.assertTrue(self.finished(the_lab))
+        # The sampler thread starts before the check runs, so by the time the
+        # run has finished the decision has been made: no timing involved.
+        return sampler.called
+
+    def test_activity_follows_the_runtime_not_the_profile_name(self):
+        # An owner overlay profile serving llama.cpp under another name gets
+        # token activity too; a name check would silently skip it.
+        overlay = Path(self.tmp.name) / "profiles.json"
+        overlay.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local", "runtime": "llama.cpp",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "models": {"pi": "small-coder:1.5b"},
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {reality.LOCAL_PROFILES_ENV: str(overlay)}):
+            self.assertTrue(self._sampled("metal-small"))
+        self.assertTrue(self._sampled("local-llamacpp"))
+
+    def test_an_ollama_run_samples_no_llamacpp_activity(self):
+        self.assertFalse(self._sampled("local-ollama"))
+
     def test_llamacpp_activity_reports_a_rising_count(self):
         # Driven synchronously: each /metrics read first records what the
         # sampler reported after the previous read, so no timing is involved.
