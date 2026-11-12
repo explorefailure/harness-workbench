@@ -412,6 +412,9 @@ class LabSecurityTests(unittest.TestCase):
 
 
 class LabPortTests(unittest.TestCase):
+    def test_lab_cli_distinguishes_an_omitted_profile(self):
+        self.assertIsNone(cli.build_parser().parse_args(["lab"]).profile)
+
     def test_default_port_is_os_assigned_and_differs_per_launch(self):
         self.assertEqual(0, lab.DEFAULT_PORT)
         recipe = Path(tempfile.mkdtemp()) / "r"
@@ -449,6 +452,29 @@ class LabPortTests(unittest.TestCase):
         for port in (-1, 65536, "8765", True):
             with self.subTest(port=port), self.assertRaises(lab.LabError):
                 lab.make_server(lab.Lab("runs", recipe), port=port)
+
+    def test_startup_names_profile_from_existing_recipe(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        recipe = Path(root.name) / "recipe"
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(recipe)
+
+        class Server:
+            server_address = (lab.HOST, 1234)
+            lab_token = "token"
+
+            def serve_forever(self):
+                pass
+
+            def server_close(self):
+                pass
+
+        output = io.StringIO()
+        with mock.patch.object(lab, "make_server", return_value=Server()), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(0, lab.serve("runs", str(recipe), 0, False))
+        self.assertIn("profile local-ollama (from existing Recipe)", output.getvalue())
 
 
 class LabApiTests(unittest.TestCase):
@@ -574,7 +600,7 @@ class LabApiTests(unittest.TestCase):
             created = lab.Lab(self.runs, self.recipe, profile="metal-small")
         self.assertEqual("metal-small", created.profile)
 
-    def test_lab_reopens_embedded_owner_profile_without_overlay(self):
+    def test_lab_reopens_embedded_owner_profile_when_profile_is_omitted(self):
         recipe = Path(self.tmp.name) / "embedded-recipe"
         path = Path(self.tmp.name) / "profiles.json"
         path.write_text(json.dumps({"profiles": {"metal-small": {
@@ -590,6 +616,24 @@ class LabApiTests(unittest.TestCase):
             reality.prepare_recipe(recipe, "metal-small")
         reopened = lab.Lab(self.runs, recipe)
         self.assertEqual("metal-small", reopened.profile)
+
+    def test_lab_accepts_matching_explicit_profile_for_existing_recipe(self):
+        recipe = Path(self.tmp.name) / "matching-recipe"
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(recipe)
+        reopened = lab.Lab(self.runs, recipe, profile="local-ollama")
+        self.assertEqual("local-ollama", reopened.profile)
+
+    def test_lab_refuses_different_explicit_profile_for_existing_recipe(self):
+        recipe = Path(self.tmp.name) / "different-recipe"
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(recipe)
+        with self.assertRaises(lab.LabError) as refused:
+            lab.Lab(self.runs, recipe, profile="local-llamacpp")
+        self.assertIn("local-ollama", str(refused.exception))
+        self.assertIn("local-llamacpp", str(refused.exception))
+        self.assertIn("omit --profile", str(refused.exception))
+        self.assertIn("--recipe", str(refused.exception))
 
     def test_tampered_recipe_opens_with_blocker_and_run_fails(self):
         recipe = Path(self.tmp.name) / "tampered-recipe"

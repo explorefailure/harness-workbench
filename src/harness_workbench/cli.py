@@ -890,7 +890,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
     lb.add_argument("--no-browser", action="store_true",
                     help="do not open a browser window")
-    lb.add_argument("--profile", default="local-ollama",
+    lb.add_argument("--profile", default=None,
                     help="local model profile for a new Recipe (default: local-ollama; "
                          "owner profiles may come from HWB_MODEL_PROFILES)")
     lb.set_defaults(func=cmd_lab)
