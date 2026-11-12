@@ -1,6 +1,7 @@
 """User-facing Reality Checks composed from ordinary Workbench machinery."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -38,7 +39,64 @@ EDITABLE_RECIPE_FILE = "model_selection.json"
 # setup.  llama.cpp is opt-in with `hwb try --profile local-llamacpp`.
 RECIPE_PROFILES = ("local-ollama", "local-llamacpp")
 DEFAULT_RECIPE_PROFILE = "local-ollama"
+LOCAL_PROFILES_ENV = "HWB_MODEL_PROFILES"
+_PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _CONTENT_ADDRESSED_GGUF = re.compile(r"(?:sha256[-:])?([0-9a-f]{64})(?:\.gguf)?")
+
+
+def _shipped_selection() -> dict[str, Any]:
+    path = Path(subject_tree.subjects_root()) / "model_selection.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _available_selection() -> dict[str, Any]:
+    """Committed profiles plus owner-side additions used by Reality Checks.
+
+    The certified subject adapter independently applies the same no-redefinition
+    rule.  A selected owner profile is copied into the Recipe's one editable
+    file, so a retained Recipe remains self-describing without the overlay.
+    """
+    selection = _shipped_selection()
+    overlay_path = os.environ.get(LOCAL_PROFILES_ENV)
+    if not overlay_path:
+        return selection
+    try:
+        overlay = json.loads(Path(overlay_path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RealityError(f"{LOCAL_PROFILES_ENV} is unreadable: {error}") from None
+    profiles = overlay.get("profiles") if isinstance(overlay, dict) else None
+    if not isinstance(profiles, dict) or not all(
+        isinstance(name, str) and isinstance(profile, dict)
+        for name, profile in profiles.items()
+    ):
+        raise RealityError(f"{LOCAL_PROFILES_ENV} must hold an object of profiles")
+    clashes = sorted(set(profiles) & set(selection["profiles"]))
+    if clashes:
+        raise RealityError(
+            f"{LOCAL_PROFILES_ENV} may not redefine committed profiles: "
+            + ", ".join(clashes)
+        )
+    for name in profiles:
+        if _PROFILE_NAME.fullmatch(name) is None:
+            raise RealityError(
+                f"{LOCAL_PROFILES_ENV} profile name {name!r} is unsafe; use letters, "
+                "digits, dot, underscore or hyphen"
+            )
+    selection["profiles"] = {**selection["profiles"], **copy.deepcopy(profiles)}
+    return selection
+
+
+def _local_profile_names(selection: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        name for name, profile in selection["profiles"].items()
+        if profile.get("kind") == "local"
+        and profile.get("runtime", "ollama") in {"ollama", "llama.cpp"}
+    )
+
+
+def available_recipe_profiles() -> tuple[str, ...]:
+    """Names that can create this local-runtime Reality Check."""
+    return _local_profile_names(_available_selection())
 
 
 def _local_model_digest(model: str, base_url: str) -> Optional[str]:
@@ -99,10 +157,10 @@ def _recipe_profile(selection: Any) -> tuple[str, dict[str, Any]]:
     name = selection.get("active") if isinstance(selection, dict) else None
     profiles = selection.get("profiles") if isinstance(selection, dict) else None
     profile = profiles.get(name) if isinstance(profiles, dict) else None
-    if name not in RECIPE_PROFILES or not isinstance(profile, dict):
-        raise RealityError(
-            "Recipe must keep one of these profiles active: " + ", ".join(RECIPE_PROFILES)
-        )
+    if (_PROFILE_NAME.fullmatch(name or "") is None or not isinstance(profile, dict)
+            or profile.get("kind") != "local"
+            or profile.get("runtime", "ollama") not in {"ollama", "llama.cpp"}):
+        raise RealityError("Recipe must keep a valid local runtime profile active")
     return str(name), profile
 
 
@@ -184,6 +242,8 @@ class RealityError(ValueError):
 
 
 def _default_recipe(profile: str = DEFAULT_RECIPE_PROFILE) -> Path:
+    if _PROFILE_NAME.fullmatch(profile) is None:
+        raise RealityError(f"unsafe Recipe profile name {profile!r}")
     name = "coding-python-bug-fix"
     if profile != DEFAULT_RECIPE_PROFILE:
         name += "-" + profile
@@ -306,10 +366,6 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
     is refused rather than silently ignored.
     """
     manifest_path = destination / RECIPE_NAME
-    if profile is not None and profile not in RECIPE_PROFILES:
-        raise RealityError(
-            f"unknown Recipe profile {profile!r}; choose one of: " + ", ".join(RECIPE_PROFILES)
-        )
     if destination.exists():
         if not manifest_path.is_file():
             raise RealityError(
@@ -325,12 +381,20 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
         return spec_path, False
     profile = profile or DEFAULT_RECIPE_PROFILE
 
+    available = _available_selection()
+    choices = _local_profile_names(available)
+    if profile not in choices:
+        raise RealityError(
+            f"unknown Recipe profile {profile!r}; choose one of these local profiles: "
+            + ", ".join(choices)
+        )
+
     destination.mkdir(parents=True)
     subject_tree.materialize(str(destination))
     selection_path = destination / "model_selection.json"
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     if profile not in selection.get("profiles", {}):
-        raise RealityError(f"shipped subject tree has no {profile} model profile")
+        selection["profiles"][profile] = copy.deepcopy(available["profiles"][profile])
     selection["active"] = profile
     local = selection["profiles"][profile]
     local["identity_strength"] = "recorded_local_content_digest"
@@ -567,6 +631,10 @@ def run_check(
         # record retains the effective value without baking a machine path
         # into the portable Recipe.
         environment = os.environ.copy()
+        # The selected owner profile has already been copied into the Recipe.
+        # Reapplying its creation-time overlay inside the certified adapter
+        # would look like an attempted redefinition of that embedded profile.
+        environment.pop(LOCAL_PROFILES_ENV, None)
         environment["HWB_PYTHON"] = sys.executable
         record = runner.execute(
             specification, loaded, runs_root, environment=environment,

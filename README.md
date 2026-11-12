@@ -147,6 +147,25 @@ GGUF's SHA-256 and the llama.cpp build:
 hwb try coding/python-bug-fix --profile local-llamacpp
 ```
 
+You can also select an owner-side local profile without adding machine-specific
+configuration to the repository. Point `HWB_MODEL_PROFILES` at the external
+profile file described in the [subject guide](src/harness_workbench/subjects/README.md#your-own-endpoints),
+then pass its name to setup and try:
+
+```sh
+export HWB_MODEL_PROFILES=/path/to/local-model-profiles.json
+hwb setup --profile metal-small
+hwb try coding/python-bug-fix --profile metal-small
+```
+
+Owner profiles cannot redefine committed profiles and must select a local
+Ollama or llama.cpp runtime. A new Recipe copies only the selected profile into
+its editable `model_selection.json`, including the actual model alias, endpoint
+and digest/build contract. The retained Recipe can therefore be inspected and
+rerun without pretending that a different committed model name was served.
+Certification still refuses `HWB_MODEL_PROFILES`; owner overlays are local
+runtime evidence, not committed certification inputs.
+
 `hwb setup` checks first whether this machine can run the check, and
 `hwb try --json` prints the result document instead of the summary. An
 unreleased local web GUI, `hwb lab`, opens a localhost page for the same check:

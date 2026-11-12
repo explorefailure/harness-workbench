@@ -88,8 +88,20 @@ class Lab:
                  run_check: Callable[..., dict[str, Any]] = reality.run_check,
                  discover: Callable[..., dict[str, Any]] = discovermod.discover,
                  opener=urlopen, profile: str = discovermod.PROFILE):
-        if profile not in discovermod.PROFILES:
-            raise LabError(1, f"unknown profile {profile!r}")
+        manifest = recipe_dir / reality.RECIPE_NAME
+        if manifest.is_file():
+            try:
+                reality._validate_recipe(recipe_dir.resolve())
+                profile = json.loads(manifest.read_text(encoding="utf-8"))["model_profile"]
+            except (reality.RealityError, OSError, ValueError, KeyError) as error:
+                raise LabError(1, f"invalid Recipe: {error}") from error
+        else:
+            try:
+                available = reality.available_recipe_profiles()
+            except reality.RealityError as error:
+                raise LabError(1, str(error)) from error
+            if profile not in available:
+                raise LabError(1, f"unknown profile {profile!r}")
         self.runs_root = runs_root
         self.recipe_dir = recipe_dir
         self.profile = profile
