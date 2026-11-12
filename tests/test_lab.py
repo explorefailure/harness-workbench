@@ -552,6 +552,21 @@ class LabApiTests(unittest.TestCase):
         self.assertFalse(runs[0]["reality_check"])
 
 
+class LabPageStyleTests(unittest.TestCase):
+    """Static checks on the Lab page that need no browser."""
+
+    def test_proof_evidence_text_wraps_inside_its_column(self):
+        # The sealed-record note holds a full filesystem path with no spaces.
+        # Unwrappable text sets the grid column's minimum width, so it spilled
+        # into the next column and scrolled the page sideways on a phone.
+        import re
+        css = (ROOT / "src" / "harness_workbench" / "lab_static" / "index.html").read_text()
+        for selector in (".ev .v", ".ev .note"):
+            rules = re.findall(r"^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", css, re.M)
+            self.assertTrue(any("overflow-wrap: anywhere" in r for r in rules),
+                            f"{selector} must allow wrapping anywhere")
+
+
 class CliTests(unittest.TestCase):
     def test_try_json_prints_the_result_document(self):
         result = {"schema": reality.RESULT_SCHEMA, "verdict": "pass", "facts": []}
