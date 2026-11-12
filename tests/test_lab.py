@@ -129,6 +129,30 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual("local-llamacpp", doc["recipe"]["profile"])
         self.assertEqual("c" * 64, doc["recipe"]["live_digest"])
 
+    def test_owner_overlay_profile_drives_setup_with_its_actual_alias(self):
+        overlay = Path(self.tmp.name) / "profiles.json"
+        overlay.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local",
+            "runtime": "llama.cpp",
+            "runtime_build": "b12110-cd959bae9",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "api_key_env": "HWB_LOCAL_KEY",
+            "identity_strength": "local_content_digest",
+            "verify_digest": True,
+            "model_digest": "c" * 64,
+            "models": {"pi": "qwen2.5-coder:1.5b"},
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(overlay),
+        }):
+            doc = self.run_discover(
+                fake_llamacpp(alias="qwen2.5-coder:1.5b"), profile="metal-small"
+            )
+        self.assertTrue(doc["ready"], doc["blockers"])
+        self.assertEqual("metal-small", doc["recipe"]["profile"])
+        self.assertEqual("qwen2.5-coder:1.5b", doc["recipe"]["model"])
+        self.assertEqual("c" * 64, doc["recipe"]["live_digest"])
+
     def test_llamacpp_blocks_unreachable_wrong_alias_and_unaddressed_file(self):
         cases = {
             "llamacpp_unreachable": dead_ollama,
@@ -538,6 +562,34 @@ class LabApiTests(unittest.TestCase):
     def test_unknown_lab_profile_is_refused(self):
         with self.assertRaises(lab.LabError):
             lab.Lab(self.runs, self.recipe, profile="opencode-go")
+
+    def test_lab_accepts_owner_overlay_profile(self):
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local", "runtime": "llama.cpp",
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(path),
+        }):
+            created = lab.Lab(self.runs, self.recipe, profile="metal-small")
+        self.assertEqual("metal-small", created.profile)
+
+    def test_lab_reopens_embedded_owner_profile_without_overlay(self):
+        recipe = Path(self.tmp.name) / "embedded-recipe"
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local", "runtime": "llama.cpp",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "verify_digest": True,
+            "models": {"pi": "small-coder:1.5b"},
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(path),
+        }), mock.patch.object(reality, "_llamacpp_identity",
+                              return_value=("c" * 64, "b12110-cd959bae9")):
+            reality.prepare_recipe(recipe, "metal-small")
+        reopened = lab.Lab(self.runs, recipe)
+        self.assertEqual("metal-small", reopened.profile)
 
     def test_run_detail_rejects_bad_and_missing_ids(self):
         self.assertEqual(self.srv.json("/api/runs/..%2Fetc")[0], 400)

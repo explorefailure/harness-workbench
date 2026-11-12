@@ -250,10 +250,15 @@ class RealityCheckTests(unittest.TestCase):
 
             def execute(specification, loaded, runs_root, environment=None, observer=None):
                 seen["python"] = environment.get("HWB_PYTHON")
+                seen["overlay"] = environment.get(reality.LOCAL_PROFILES_ENV)
                 seen["declared"] = specification.env
                 return {"run_id": "run-id"}
 
-            with mock.patch.object(reality.runner, "execute", side_effect=execute), \
+            overlay = root / "profiles.json"
+            overlay.write_text('{"profiles": {}}', encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                     reality.LOCAL_PROFILES_ENV: str(overlay),
+                 }), mock.patch.object(reality.runner, "execute", side_effect=execute), \
                  mock.patch.object(reality, "verify_run", return_value={
                      "verdict": "pass", "facts": [], "changed_files": [],
                      "errors": [], "setup": {},
@@ -264,6 +269,7 @@ class RealityCheckTests(unittest.TestCase):
                     recipe_dir=str(root / "recipe"),
                 )
             self.assertEqual(sys.executable, seen["python"])
+            self.assertIsNone(seen["overlay"])
             self.assertEqual(["HWB_PYTHON"], seen["declared"])
             self.assertNotIn("HWB_PYTHON", os.environ)
 
@@ -466,6 +472,75 @@ class RealityLlamaCppRecipeTests(unittest.TestCase):
         selection = json.loads((destination / "model_selection.json").read_text(
             encoding="utf-8"))
         return selection["active"], selection["profiles"][selection["active"]]
+
+    def _overlay(self, root: Path, profiles: object) -> Path:
+        path = root / "profiles.json"
+        path.write_text(json.dumps({"profiles": profiles}), encoding="utf-8")
+        return path
+
+    def test_owner_overlay_profile_is_copied_into_a_self_describing_recipe(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            profile = {
+                "kind": "local",
+                "runtime": "llama.cpp",
+                "runtime_build": self.BUILD,
+                "base_url": "http://127.0.0.1:8081/v1",
+                "api_key_env": "HWB_LOCAL_KEY",
+                "identity_strength": "local_content_digest",
+                "verify_digest": True,
+                "model_digest": "",
+                "models": {"pi": "small-coder:1.5b"},
+            }
+            overlay = self._overlay(root, {"metal-small": profile})
+            destination = root / "recipe"
+            with mock.patch.dict(os.environ, {
+                reality.LOCAL_PROFILES_ENV: str(overlay),
+            }):
+                reality.prepare_recipe(destination, "metal-small")
+            name, local = self._profile(destination)
+            self.assertEqual("metal-small", name)
+            self.assertEqual("small-coder:1.5b", local["models"]["pi"])
+            self.assertEqual(self.DIGEST, local["model_digest"])
+            self.assertEqual(self.BUILD, local["runtime_build"])
+            manifest = json.loads((destination / reality.RECIPE_NAME).read_text())
+            self.assertEqual("metal-small", manifest["model_profile"])
+            # The retained Recipe no longer depends on the owner overlay file.
+            reality.prepare_recipe(destination)
+
+    def test_owner_overlays_cannot_redefine_committed_or_escape_recipe_paths(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cases = {
+                "may not redefine committed profiles": {
+                    "local-llamacpp": {"kind": "local"},
+                },
+                "profile name '../../escape' is unsafe": {
+                    "../../escape": {"kind": "local"},
+                },
+            }
+            for message, profiles in cases.items():
+                with self.subTest(message=message):
+                    overlay = self._overlay(root, profiles)
+                    with mock.patch.dict(os.environ, {
+                        reality.LOCAL_PROFILES_ENV: str(overlay),
+                    }), self.assertRaisesRegex(reality.RealityError, message):
+                        reality.prepare_recipe(root / ("recipe-" + str(len(message))),
+                                               next(iter(profiles)))
+
+    def test_gateway_overlay_is_not_a_reality_check_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            overlay = self._overlay(root, {
+                "remote": {"kind": "gateway", "models": {"pi": "hosted"}},
+            })
+            with mock.patch.dict(os.environ, {
+                reality.LOCAL_PROFILES_ENV: str(overlay),
+            }):
+                self.assertNotIn("remote", reality.available_recipe_profiles())
+                with self.assertRaisesRegex(reality.RealityError,
+                                            "unknown Recipe profile"):
+                    reality.prepare_recipe(root / "recipe", "remote")
 
     def test_new_llamacpp_recipe_records_file_digest_and_build(self):
         with tempfile.TemporaryDirectory() as td:

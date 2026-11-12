@@ -34,8 +34,7 @@ _PROBE_TIMEOUT = 5
 
 
 def _shipped_selection() -> dict[str, Any]:
-    path = Path(__file__).resolve().parent / "subjects" / "model_selection.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    return reality._available_selection()
 
 
 def _tags_url(base_url: str) -> str:
@@ -223,7 +222,7 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
         build = str(local.get("baseline_runtime_build") or "") if exists else ""
         base_url = str(local["base_url"])
         kind = "llama.cpp" if local.get("runtime") == "llama.cpp" else "ollama"
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, reality.RealityError) as error:
         return {"path": str(recipe_dir), "exists": exists, "source": source,
                 "profile": name, "runtime": None,
                 "model": None, "recorded_digest": None, "recorded_build": None,
