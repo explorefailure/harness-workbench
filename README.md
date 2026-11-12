@@ -178,7 +178,9 @@ process, so the Lab sees what it did only when that ends. Both `hwb setup` and
 `hwb lab` accept `--profile local-llamacpp` to check and run against a local
 llama-server. With that profile, a llama-server started with `--metrics` also
 reports how many tokens the model has generated during the run. The count covers
-every client of that server, not only the run.
+every client of that server, not only the run. An existing Recipe keeps the
+profile it was made with: `hwb lab` uses it when `--profile` is omitted and
+refuses a different `--profile`.
 
 Not ready to run a model? The [no-model example](#explore-without-a-model)
 lets you inspect a deterministic failure-and-retry experiment first.

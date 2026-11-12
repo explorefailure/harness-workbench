@@ -210,6 +210,8 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
     source = "recipe" if exists else "shipped default"
     name = profile
     try:
+        if exists:
+            reality._validate_recipe(recipe_dir.resolve())
         selection = (json.loads(selection_path.read_text(encoding="utf-8"))
                      if exists else _shipped_selection())
         name = str(selection["active"]) if exists else profile
@@ -226,7 +228,7 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
         return {"path": str(recipe_dir), "exists": exists, "source": source,
                 "profile": name, "runtime": None,
                 "model": None, "recorded_digest": None, "recorded_build": None,
-                "base_url": None, "error": f"model selection unreadable: {error}"}
+                "base_url": None, "error": f"Recipe unreadable: {error}"}
     return {"path": str(recipe_dir), "exists": exists, "source": source,
             "profile": name, "runtime": kind,
             "model": model, "recorded_digest": digest, "recorded_build": build,
