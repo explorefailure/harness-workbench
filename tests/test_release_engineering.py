@@ -1466,17 +1466,26 @@ class TestReleaseSurfaces(unittest.TestCase):
         allowed = {
             "actions/checkout",
             "actions/setup-python",
+            # The Pi builder workflow pins two Node versions for Pi.
+            "actions/setup-node",
             "github/codeql-action/init",
             "github/codeql-action/analyze",
         }
         uses = []
         for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
             text = workflow.read_text(encoding="utf-8")
-            uses.extend(
-                re.findall(
-                    r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", text, re.MULTILINE
-                )
+            # A step that opens with `uses:` is written `- uses:`. Every
+            # `uses:` key must be matched, so the builder workflows are not
+            # skipped.
+            found = re.findall(
+                r"^\s*(?:-\s+)?uses:\s*([^@\s]+)@([^\s#]+)", text, re.MULTILINE
             )
+            self.assertEqual(
+                len(re.findall(r"^\s*(?:-\s+)?uses:", text, re.MULTILINE)),
+                len(found),
+                f"{workflow.name} has a `uses:` line this check cannot parse",
+            )
+            uses.extend(found)
         self.assertTrue(uses)
         for action, revision in uses:
             with self.subTest(action=action):
