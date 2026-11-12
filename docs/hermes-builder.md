@@ -123,6 +123,16 @@ This runs the shipped repair against your model and applies the strict reference
 oracle. The local Qwen 27B run passed that oracle; the placeholder model and
 endpoint above must be replaced and are not a claim about another server.
 
+The llama.cpp path was exercised separately on 2026-11-11 with Hermes Agent
+0.22.5 and `qwen3.8:27b` through a loopback OpenAI-compatible endpoint. The
+server was llama.cpp build 12110 (`cd959bae9`, reported as `0.9.0-dev`) with a
+65,536-token context. The capture and coding-repair outcome passed, native test
+command exits were `[1, 0]`, only `slugger.py` changed, final independent tests
+passed and the owned gateway stopped cleanly. The endpoint's `/api/show` probe
+returned 404, as expected for raw llama.cpp, without blocking the run. This is
+evidence for that model, task and server configuration only; it does not make
+llama.cpp an Ollama metadata endpoint or establish arbitrary task success.
+
 For an authenticated compatible endpoint, change `mode` to `compatible` and add
 `"api_key_env": "MY_MODEL_KEY"` inside `provider`. Set that environment variable
 before running; see the [credential example](builder-adapters.md#choose-a-model-in-opencode-or-hermes).
