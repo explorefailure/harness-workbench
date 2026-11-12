@@ -248,7 +248,7 @@ class RealityCheckTests(unittest.TestCase):
             root = Path(td)
             seen = {}
 
-            def execute(specification, loaded, runs_root, environment=None, observer=None):
+            def execute(specification, loaded, runs_root, environment=None, observer=None, stop=None):
                 seen["python"] = environment.get("HWB_PYTHON")
                 seen["overlay"] = environment.get(reality.LOCAL_PROFILES_ENV)
                 seen["declared"] = specification.env
@@ -274,7 +274,7 @@ class RealityCheckTests(unittest.TestCase):
             self.assertNotIn("HWB_PYTHON", os.environ)
 
     def test_reality_check_reports_each_phase_in_order(self):
-        def execute(specification, loaded, runs_root, environment=None, observer=None):
+        def execute(specification, loaded, runs_root, environment=None, observer=None, stop=None):
             observer("run_started", {"run_id": "run-id"})
             observer("step_started", {"step_id": reality.STEP_ID})
             observer("step_finished", {"step_id": reality.STEP_ID})

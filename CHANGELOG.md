@@ -7,6 +7,13 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: stopping `hwb lab` while a check is running no longer leaves the
+  agent's processes behind. Closing the terminal or `kill` (SIGHUP/SIGTERM)
+  used to end the Lab at once, while the subject runner and Pi kept running,
+  re-parented to init. The Lab now handles those like Ctrl-C: it stops the
+  check, waits up to 20 s for the record to be sealed, and says what happened.
+  The stopped attempt is marked `stopped` in the record and verifies as invalid,
+  never as a pass. `hwb try` and other callers are unchanged.
 - The Lab shows a run's progress: which phase the check is in (Recipe, model
   identity, run record, the agent's sealed process, verification), how long the
   last run took and, on `--profile local-llamacpp` with a llama-server started
