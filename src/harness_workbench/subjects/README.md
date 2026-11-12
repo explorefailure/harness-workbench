@@ -88,6 +88,16 @@ committed profile is refused. Certification and the route canary refuse to
 plan while `HWB_MODEL_PROFILES` is set, so certified evidence always comes from
 a committed, reviewable profile.
 
+The packaged Reality Check accepts the name of an added local Ollama or
+llama.cpp profile in `hwb setup --profile NAME`, `hwb try ... --profile NAME`
+and `hwb lab --profile NAME`. When a new Recipe is created, the selected owner
+profile is copied into that Recipe's editable `model_selection.json`; committed
+profiles remain unchanged and cannot be shadowed. This makes the Recipe
+self-describing and lets discovery show the actual served alias rather than a
+borrowed committed alias. The run uses that embedded copy and does not reapply
+the overlay inside the certified adapter. Gateway profiles are not eligible
+for this local Reality Check.
+
 ### Ollama compatibility shim and thermal gate
 
 `ollama_compat_proxy.py` exists for Ollama's stricter post-tool message

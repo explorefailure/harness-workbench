@@ -15,6 +15,9 @@ meets records written before they existed. Getting this wrong is silent:
                  look equal -- which corrupts exactly the ordering
                  comparisons the field was added for.
   timed_out      absent = the attempt did not time out. Safe to assume.
+  stopped        absent = nobody stopped the attempt early. Safe to assume.
+                 True = the caller's stop request ended it (e.g. the Lab
+                 shutting down mid-run); its exit and output are as observed.
   seam_timings   absent or empty = no hook was dispatched. Safe to assume.
   replicates     null = this run makes no reproduction claim. Safe.
   attempt_artifact_contract
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import subprocess
 import threading
@@ -462,6 +466,51 @@ def verify(run_dir: str) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- the loop
 
+STOP_GRACE_S = 10.0
+
+
+def _run_stoppable(argv, cwd, environment, timeout_s, stop: threading.Event):
+    """subprocess.run(capture_output=True, timeout=...) that `stop` can end.
+
+    The step gets its own session, so a terminal hangup or Ctrl-C reaches only
+    the caller, which then stops the step on purpose instead of the step dying
+    half-way and orphaning whatever it supervises. Stopping sends SIGTERM to
+    the step (a supervising step forwards it to its own children), then
+    SIGKILL to the step's whole process group after STOP_GRACE_S: a leftover
+    child that inherited the output pipes would otherwise keep the step's
+    capture open for as long as it lives. Returns
+    (exit_code, stdout, stderr, stopped).
+    """
+    proc = subprocess.Popen(argv, cwd=cwd, env=environment, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    stopped = threading.Event()
+
+    def watch() -> None:
+        while proc.poll() is None:
+            if stop.wait(0.2):
+                stopped.set()
+                proc.terminate()
+                try:
+                    proc.wait(STOP_GRACE_S)
+                except subprocess.TimeoutExpired:
+                    # Still unreaped, so its pid -- also its group id, since it
+                    # leads its own session -- cannot have been reused.
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                return
+
+    threading.Thread(target=watch, daemon=True).start()
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout_s, output=out, stderr=err)
+    return proc.returncode, out, err, stopped.is_set()
+
+
 def _notify(observer, event: str, detail: Dict[str, Any]) -> None:
     """Tell an optional progress observer what just happened.
 
@@ -480,6 +529,7 @@ def execute(
     spec, loaded, root: str,
     environment: Optional[Dict[str, str]] = None,
     observer: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    stop: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     # Before anything is created: an unresolvable reproduction claim must
     # fail without leaving a run directory behind.
@@ -510,6 +560,7 @@ def execute(
             t0 = time.monotonic()
             started = _utc()
             timed_out = False
+            was_stopped = False
             context_process = None
             timeout_s = (spec.step_timeout_ms / 1000.0
                          if spec.step_timeout_ms else None)
@@ -531,6 +582,9 @@ def execute(
                     out, err = proc.stdout, proc.stderr
                     context_process = {k: v for k, v in vars(proc).items()
                                        if k not in ("stdout", "stderr")}
+                elif stop is not None:
+                    exit_code, out, err, was_stopped = _run_stoppable(
+                        step.argv, spec.dir, environment, timeout_s, stop)
                 else:
                     proc = subprocess.run(step.argv, cwd=spec.dir,
                                           env=environment, capture_output=True,
@@ -562,6 +616,8 @@ def execute(
                 obs["attempt_context"] = {"schema": "hwb-attempt/v1", "process": context_process}
             if timed_out:
                 obs["timed_out"] = True
+            if was_stopped:
+                obs["stopped"] = True
             caused_by = rec.frames()
             if caused_by:                 # absent, not empty, with no wraps
                 obs["caused_by"] = caused_by

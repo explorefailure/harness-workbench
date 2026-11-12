@@ -129,6 +129,30 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual("local-llamacpp", doc["recipe"]["profile"])
         self.assertEqual("c" * 64, doc["recipe"]["live_digest"])
 
+    def test_owner_overlay_profile_drives_setup_with_its_actual_alias(self):
+        overlay = Path(self.tmp.name) / "profiles.json"
+        overlay.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local",
+            "runtime": "llama.cpp",
+            "runtime_build": "b12110-cd959bae9",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "api_key_env": "HWB_LOCAL_KEY",
+            "identity_strength": "local_content_digest",
+            "verify_digest": True,
+            "model_digest": "c" * 64,
+            "models": {"pi": "qwen2.5-coder:1.5b"},
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(overlay),
+        }):
+            doc = self.run_discover(
+                fake_llamacpp(alias="qwen2.5-coder:1.5b"), profile="metal-small"
+            )
+        self.assertTrue(doc["ready"], doc["blockers"])
+        self.assertEqual("metal-small", doc["recipe"]["profile"])
+        self.assertEqual("qwen2.5-coder:1.5b", doc["recipe"]["model"])
+        self.assertEqual("c" * 64, doc["recipe"]["live_digest"])
+
     def test_llamacpp_blocks_unreachable_wrong_alias_and_unaddressed_file(self):
         cases = {
             "llamacpp_unreachable": dead_ollama,
@@ -167,7 +191,7 @@ class LabServer:
         self.calls = []
         self.profiles = []
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             self.calls.append((check, runs_root, recipe_dir))
             self.profiles.append(profile)
             self.release.wait(5)
@@ -477,7 +501,7 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(self.srv.calls[0][2], str(self.recipe))
 
     def test_failed_run_is_reported_not_swallowed(self):
-        def boom(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def boom(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             raise reality.RealityError("recipe directory exists without recipe.json")
         self.srv.lab._run_check = boom
         self.srv.json("/api/runs", "POST", {})
@@ -538,6 +562,34 @@ class LabApiTests(unittest.TestCase):
     def test_unknown_lab_profile_is_refused(self):
         with self.assertRaises(lab.LabError):
             lab.Lab(self.runs, self.recipe, profile="opencode-go")
+
+    def test_lab_accepts_owner_overlay_profile(self):
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local", "runtime": "llama.cpp",
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(path),
+        }):
+            created = lab.Lab(self.runs, self.recipe, profile="metal-small")
+        self.assertEqual("metal-small", created.profile)
+
+    def test_lab_reopens_embedded_owner_profile_without_overlay(self):
+        recipe = Path(self.tmp.name) / "embedded-recipe"
+        path = Path(self.tmp.name) / "profiles.json"
+        path.write_text(json.dumps({"profiles": {"metal-small": {
+            "kind": "local", "runtime": "llama.cpp",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "verify_digest": True,
+            "models": {"pi": "small-coder:1.5b"},
+        }}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {
+            reality.LOCAL_PROFILES_ENV: str(path),
+        }), mock.patch.object(reality, "_llamacpp_identity",
+                              return_value=("c" * 64, "b12110-cd959bae9")):
+            reality.prepare_recipe(recipe, "metal-small")
+        reopened = lab.Lab(self.runs, recipe)
+        self.assertEqual("metal-small", reopened.profile)
 
     def test_run_detail_rejects_bad_and_missing_ids(self):
         self.assertEqual(self.srv.json("/api/runs/..%2Fetc")[0], 400)
@@ -641,7 +693,7 @@ class LabProgressTests(unittest.TestCase):
         return [entry["event"] for entry in view["events"]["entries"]]
 
     def test_a_run_reports_lifecycle_and_every_phase_in_backend_shape(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             for phase in reality.PROGRESS_PHASES:
                 progress(phase, {"run_id": "R7"} if phase == "run_started" else {})
             return {"verdict": "fail", "record": os.path.join(runs_root, "R7")}
@@ -676,7 +728,7 @@ class LabProgressTests(unittest.TestCase):
         self.assertNotIn("_events", view)
 
     def test_a_run_that_cannot_start_completes_as_failed(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             progress("recipe", {})
             raise reality.RealityError("recipe.json is missing")
 
@@ -692,7 +744,7 @@ class LabProgressTests(unittest.TestCase):
     def test_after_returns_only_newer_events_and_pages_past_the_limit(self):
         release = threading.Event()
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             release.wait(5)
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
@@ -713,7 +765,7 @@ class LabProgressTests(unittest.TestCase):
         self.assertTrue(self.finished(the_lab))
 
     def test_the_next_run_knows_how_long_the_last_one_took(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
         the_lab = self.lab(run_check)
@@ -726,7 +778,7 @@ class LabProgressTests(unittest.TestCase):
     def test_llamacpp_activity_reports_when_metrics_go_away(self):
         release = threading.Event()
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             release.wait(5)
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
@@ -790,13 +842,56 @@ class LabProgressTests(unittest.TestCase):
         self.assertEqual(1450, job["activity"]["tokens_since_start"])
 
     def test_ollama_runs_report_no_activity(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
         the_lab = self.lab(run_check, opener=fake_metrics([1]))
         the_lab.start_run()
         self.assertTrue(self.finished(the_lab))
         self.assertIsNone(the_lab.current()["activity"])
+
+
+class LabShutdownTests(unittest.TestCase):
+    """A Lab that is told to stop ends its running check first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.runs, self.recipe = str(base / "runs"), base / "recipe"
+
+    def lab(self, run_check):
+        return lab.Lab(self.runs, self.recipe, run_check=run_check, opener=dead_ollama,
+                       discover=lambda r, opener=None, profile=None: {"ready": True})
+
+    def test_shutdown_stops_the_running_check_and_returns_its_end(self):
+        seen = {}
+
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+            seen["stopped"] = stop.wait(5)
+            return {"verdict": "invalid", "record": os.path.join(runs_root, "R9")}
+
+        the_lab = self.lab(run_check)
+        the_lab.start_run()
+        final = the_lab.shutdown(wait=5)
+        self.assertTrue(seen["stopped"])
+        self.assertEqual(("done", "R9"), (final["state"], final["run_id"]))
+
+    def test_shutdown_with_nothing_running_does_nothing(self):
+        self.assertIsNone(self.lab(lambda *a, **k: None).shutdown(wait=0.1))
+
+    def test_a_check_that_will_not_stop_is_reported_as_running(self):
+        release = threading.Event()
+
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+            release.wait(5)  # ignores stop
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        the_lab = self.lab(run_check)
+        the_lab.start_run()
+        self.assertEqual("running", the_lab.shutdown(wait=0.2)["state"])
+        release.set()
+        self.assertTrue(wait_for(lambda: the_lab.current()["state"] == "done"))
 
 
 class LabProgressHttpTests(unittest.TestCase):

@@ -868,8 +868,8 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--recipe", default=None,
                     help="Recipe directory (default: ./.hwb/recipes/<check>)")
     tr.add_argument("--profile", default=None,
-                    choices=("local-ollama", "local-llamacpp"),
-                    help="model profile for a new Recipe (default: local-ollama)")
+                    help="local model profile for a new Recipe (default: local-ollama; "
+                         "owner profiles may come from HWB_MODEL_PROFILES)")
     tr.add_argument("--json", action="store_true",
                     help="print the result document as JSON instead of the summary")
     tr.set_defaults(func=cmd_try)
@@ -879,8 +879,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Recipe directory (default: ./.hwb/recipes/coding-python-bug-fix)")
     st.add_argument("--json", action="store_true", help="print the setup document as JSON")
     st.add_argument("--profile", default="local-ollama",
-                    choices=("local-ollama", "local-llamacpp"),
-                    help="model profile to check for a new Recipe (default: local-ollama)")
+                    help="local model profile to check (default: local-ollama; owner "
+                         "profiles may come from HWB_MODEL_PROFILES)")
     st.set_defaults(func=cmd_setup)
 
     lb = command("lab")
@@ -891,8 +891,8 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("--no-browser", action="store_true",
                     help="do not open a browser window")
     lb.add_argument("--profile", default="local-ollama",
-                    choices=("local-ollama", "local-llamacpp"),
-                    help="model profile for a new Recipe (default: local-ollama)")
+                    help="local model profile for a new Recipe (default: local-ollama; "
+                         "owner profiles may come from HWB_MODEL_PROFILES)")
     lb.set_defaults(func=cmd_lab)
 
     sj = command("subjects")
