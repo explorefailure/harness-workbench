@@ -37,6 +37,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import threading
 import time
@@ -75,6 +76,9 @@ class LabError(Exception):
 EVENTS_SCHEMA_VERSION = 1
 EVENTS_PAGE_LIMIT = 100
 ACTIVITY_INTERVAL = 2.0
+# How long a stopping Lab waits for the running check to end and seal its
+# record: the step's own SIGTERM grace (runner.STOP_GRACE_S) plus verification.
+SHUTDOWN_WAIT_S = 20.0
 
 
 class Lab:
@@ -95,6 +99,8 @@ class Lab:
         self._lock = threading.Lock()
         self._job: Optional[dict[str, Any]] = None
         self._last_duration: Optional[float] = None
+        self._stop: Optional[threading.Event] = None
+        self._thread: Optional[threading.Thread] = None
 
     # -- discovery ---------------------------------------------------------
     def setup(self) -> dict[str, Any]:
@@ -115,8 +121,25 @@ class Lab:
             self._emit(job, "submitted", "queued")
             self._emit(job, "claimed", "running")
             view = self._view(job, None)
-        threading.Thread(target=self._execute, args=(job,), daemon=True).start()
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._execute, args=(job, self._stop),
+                                            daemon=True)
+        self._thread.start()
         return view
+
+    def shutdown(self, wait: float = SHUTDOWN_WAIT_S) -> Optional[dict[str, Any]]:
+        """Stop a running check before the Lab exits, so nothing it started outlives
+        the Lab. Returns the job's final view, or None when nothing was running.
+        Waits at most `wait` seconds; a job still running after that is returned
+        as such, never reported as stopped."""
+        with self._lock:
+            running = self._job is not None and self._job["state"] == "running"
+            stop, thread = self._stop, self._thread
+        if not running or stop is None or thread is None:
+            return None
+        stop.set()
+        thread.join(wait)
+        return self.current()
 
     def _emit(self, job: dict[str, Any], kind: str, state: str, **extra: Any) -> None:
         # Caller holds self._lock.
@@ -135,7 +158,7 @@ class Lab:
                 self._emit(job, "progress", "running", phase=phase)
         return report
 
-    def _execute(self, job: dict[str, Any]) -> None:
+    def _execute(self, job: dict[str, Any], stop_run: threading.Event) -> None:
         stop = threading.Event()
         if self.profile == "local-llamacpp":
             threading.Thread(target=self._sample_activity, args=(job, stop),
@@ -143,7 +166,7 @@ class Lab:
         try:
             result = self._run_check(reality.CHECK, runs_root=self.runs_root,
                                      recipe_dir=str(self.recipe_dir), profile=self.profile,
-                                     progress=self._progress(job))
+                                     progress=self._progress(job), stop=stop_run)
             update = {"state": "done", "result": result,
                       "run_id": Path(result["record"]).name}
         except reality.RealityError as error:
@@ -525,10 +548,44 @@ def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bo
     print("  localhost only; press Ctrl-C to stop", flush=True)
     if open_browser:
         webbrowser.open(url)
+
+    # Closing the terminal (SIGHUP) or `kill` (SIGTERM) must stop a running check
+    # the same way Ctrl-C does; by default they would end the Lab at once and
+    # leave the agent's processes running with nobody watching them.
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+    previous = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            previous[name] = signal.signal(getattr(signal, name), interrupt)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        for name in previous:  # a second signal must not cut the cleanup short
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+        ignored_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            _stop_running_check(lab)
+        finally:
+            signal.signal(signal.SIGINT, ignored_int)
+            for name, handler in previous.items():
+                signal.signal(getattr(signal, name), handler)
     return 0
+
+
+def _stop_running_check(lab: Lab) -> None:
+    with lab._lock:
+        running = lab._job is not None and lab._job["state"] == "running"
+    if not running:
+        return
+    print(f"Stopping the running check (waiting up to {SHUTDOWN_WAIT_S:.0f} s)...", flush=True)
+    final = lab.shutdown()
+    if final is None or final["state"] == "running":
+        print("The check did not stop in time; its processes may still be running.", flush=True)
+    elif final["state"] == "done":
+        print(f"Stopped. Its record: {final.get('run_id')}", flush=True)
+    else:
+        print(f"Stopped. The check reported: {final.get('error')}", flush=True)
