@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 import sys
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -518,16 +518,38 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     }
 
 
+PROGRESS_PHASES = ("recipe", "model_identity", "run_started", "agent", "verifying")
+
+
 def run_check(
-    check: str, *, runs_root: str, recipe_dir: str | None, profile: str | None = None
+    check: str, *, runs_root: str, recipe_dir: str | None, profile: str | None = None,
+    progress: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    """Run the Reality Check. `progress(phase, detail)` is told each phase of
+    PROGRESS_PHASES as it begins. It is display only and never part of the
+    record; an observer that raises is ignored."""
+    def phase(name: str, **detail: Any) -> None:
+        if progress is not None:
+            try:
+                progress(name, detail)
+            except Exception:
+                pass
+
+    def observe(event: str, detail: dict[str, Any]) -> None:
+        if event == "run_started":
+            phase("run_started", run_id=detail.get("run_id"))
+        elif event == "step_started" and detail.get("step_id") == STEP_ID:
+            phase("agent")
+
     if check != CHECK:
         raise RealityError(f"unknown Reality Check: {check}")
+    phase("recipe")
     destination = (
         Path(recipe_dir).expanduser() if recipe_dir
         else _default_recipe(profile or DEFAULT_RECIPE_PROFILE)
     ).resolve()
     spec_path, created = prepare_recipe(destination, profile)
+    phase("model_identity")
     refresh_live_digest(destination)
     specification_value = json.loads(spec_path.read_text(encoding="utf-8"))
     effective_digests = _file_digests(
@@ -544,11 +566,13 @@ def run_check(
         environment = os.environ.copy()
         environment["HWB_PYTHON"] = sys.executable
         record = runner.execute(
-            specification, loaded, runs_root, environment=environment
+            specification, loaded, runs_root, environment=environment,
+            observer=observe,
         )
     except (specmod.SpecError, features.FeatureError, runner.HarnessError, OSError) as error:
         raise RealityError(str(error)) from error
     run_dir = Path(runs_root).resolve() / record["run_id"]
+    phase("verifying")
     verified = verify_run(run_dir, destination)
     return {
         "schema": RESULT_SCHEMA,

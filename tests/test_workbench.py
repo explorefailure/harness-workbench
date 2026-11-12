@@ -119,6 +119,28 @@ class Base(unittest.TestCase):
             self.fail("record does not conform -- %s" % e)
 
 
+class TestProgressObserver(Base):
+    """runner.execute reports progress for display; it never shapes the record."""
+
+    def test_observer_sees_run_start_then_each_step(self):
+        seen = []
+        sp = specmod.load(self.spec([]))
+        record = runner.execute(sp, features.resolve(sp), self.runs,
+                                observer=lambda event, detail: seen.append((event, detail)))
+        self.assertEqual([("run_started", {"run_id": record["run_id"]}),
+                          ("step_started", {"step_id": "01"}),
+                          ("step_finished", {"step_id": "01"})], seen)
+
+    def test_a_failing_observer_changes_nothing(self):
+        def broken(event, detail):
+            raise RuntimeError("display fault")
+        sp = specmod.load(self.spec([]))
+        record = runner.execute(sp, features.resolve(sp), self.runs, observer=broken)
+        run_dir = os.path.join(self.runs, record["run_id"])
+        self.assertEqual("completed", read(os.path.join(run_dir, "record.json"))["status"])
+        self.assertEqual("clean", runner.verify(run_dir)["state"])
+
+
 class TestDetachability(Base):
     def test_zero_features_produces_valid_record(self):
         rec = self.run_spec([])

@@ -248,7 +248,7 @@ class RealityCheckTests(unittest.TestCase):
             root = Path(td)
             seen = {}
 
-            def execute(specification, loaded, runs_root, environment=None):
+            def execute(specification, loaded, runs_root, environment=None, observer=None):
                 seen["python"] = environment.get("HWB_PYTHON")
                 seen["declared"] = specification.env
                 return {"run_id": "run-id"}
@@ -266,6 +266,34 @@ class RealityCheckTests(unittest.TestCase):
             self.assertEqual(sys.executable, seen["python"])
             self.assertEqual(["HWB_PYTHON"], seen["declared"])
             self.assertNotIn("HWB_PYTHON", os.environ)
+
+    def test_reality_check_reports_each_phase_in_order(self):
+        def execute(specification, loaded, runs_root, environment=None, observer=None):
+            observer("run_started", {"run_id": "run-id"})
+            observer("step_started", {"step_id": reality.STEP_ID})
+            observer("step_finished", {"step_id": reality.STEP_ID})
+            return {"run_id": "run-id"}
+
+        verified = {"verdict": "pass", "facts": [], "changed_files": [],
+                    "errors": [], "setup": {}}
+        for broken in (False, True):
+            with self.subTest(broken_callback=broken), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                seen = []
+
+                def progress(phase, detail):
+                    seen.append((phase, detail))
+                    if broken:
+                        raise RuntimeError("display fault")
+
+                with mock.patch.object(reality.runner, "execute", side_effect=execute), \
+                     mock.patch.object(reality, "verify_run", return_value=verified):
+                    result = reality.run_check(
+                        reality.CHECK, runs_root=str(root / "runs"),
+                        recipe_dir=str(root / "recipe"), progress=progress)
+                self.assertEqual("pass", result["verdict"])
+                self.assertEqual(list(reality.PROGRESS_PHASES), [p for p, _ in seen])
+                self.assertEqual({"run_id": "run-id"}, dict(seen)["run_started"])
 
     def test_recipe_allows_only_recorded_editable_model_selection(self):
         with tempfile.TemporaryDirectory() as td:
