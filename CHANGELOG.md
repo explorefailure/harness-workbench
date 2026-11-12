@@ -7,6 +7,8 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: the Lab's Proof page wraps the sealed record's path. It ran into the
+  model-digest column and made the page scroll sideways on narrow screens.
 - `hwb try coding/python-bug-fix --profile local-llamacpp` runs the Reality
   Check on a local llama.cpp server. The Recipe records the served GGUF's
   SHA-256 and the llama.cpp build as its baseline and reports later changes
