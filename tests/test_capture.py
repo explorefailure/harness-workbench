@@ -628,6 +628,76 @@ class BoundedRunTests(unittest.TestCase):
         self.assertFalse(result.group_alive_before_cleanup)
         self.assertFalse(result.group_alive_after_cleanup)
 
+    def test_exit_observed_after_empty_select_does_not_drop_later_bytes(self):
+        class Pipe:
+            def __init__(self, fd):
+                self.fd = fd
+
+            def fileno(self):
+                return self.fd
+
+            def close(self):
+                pass
+
+        class Process:
+            pid = 12345
+            returncode = 0
+
+            def __init__(self):
+                self.stdout = Pipe(1)
+                self.stderr = Pipe(2)
+                self.exited = False
+
+            def poll(self):
+                return self.returncode if self.exited else None
+
+            def wait(self, timeout=None):
+                self.exited = True
+                return self.returncode
+
+        process = Process()
+
+        class Selector:
+            def __init__(self):
+                self.keys = {}
+                self.calls = 0
+
+            def register(self, pipe, _events, stream):
+                self.keys[pipe.fd] = mock.Mock(fileobj=pipe, data=stream)
+
+            def unregister(self, pipe):
+                self.keys.pop(pipe.fd)
+
+            def get_map(self):
+                return self.keys
+
+            def select(self, timeout):
+                self.calls += 1
+                if self.calls == 1:
+                    process.exited = True
+                    return []
+                return [
+                    (key, capture.selectors.EVENT_READ)
+                    for key in self.keys.values()
+                ]
+
+            def close(self):
+                pass
+
+        reads = {1: [b"complete stdout", b""], 2: [b""]}
+
+        def read(fd, _size):
+            return reads[fd].pop(0)
+
+        with mock.patch.object(capture.subprocess, "Popen", return_value=process), \
+                mock.patch.object(capture.selectors, "DefaultSelector", Selector), \
+                mock.patch.object(capture.os, "read", side_effect=read), \
+                mock.patch.object(capture, "_group_alive", return_value=False):
+            result = capture.run_bounded(
+                ["synthetic"], cwd=Path("/tmp"), env={}, timeout=10
+            )
+        self.assertEqual(b"complete stdout", result.stdout)
+
     def test_nonzero_child_exit_is_captured_without_hanging(self):
         result = self._run("raise SystemExit(7)", timeout=5)
         self.assertEqual(7, result.returncode)
