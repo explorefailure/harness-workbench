@@ -87,14 +87,26 @@ class Lab:
     def __init__(self, runs_root: str, recipe_dir: Path, *,
                  run_check: Callable[..., dict[str, Any]] = reality.run_check,
                  discover: Callable[..., dict[str, Any]] = discovermod.discover,
-                 opener=urlopen, profile: str = discovermod.PROFILE):
+                 opener=urlopen, profile: Optional[str] = None):
+        requested_profile = profile
+        profile = profile or discovermod.PROFILE
+        profile_from_recipe = False
         manifest = recipe_dir / reality.RECIPE_NAME
         if manifest.is_file():
             try:
                 reality._validate_recipe(recipe_dir.resolve())
-                profile = json.loads(manifest.read_text(encoding="utf-8"))["model_profile"]
-            except (reality.RealityError, OSError, ValueError, KeyError) as error:
-                raise LabError(1, f"invalid Recipe: {error}") from error
+                recipe_profile = json.loads(
+                    manifest.read_text(encoding="utf-8"))["model_profile"]
+                if requested_profile is not None and requested_profile != recipe_profile:
+                    raise LabError(1, f"Recipe uses profile {recipe_profile!r}, not "
+                                   f"{requested_profile!r}; omit --profile, or point "
+                                   "--recipe at another directory")
+                profile = recipe_profile
+                profile_from_recipe = True
+            except (reality.RealityError, OSError, ValueError, KeyError):
+                # Discovery reports the invalid Recipe as a blocker.  Keep the
+                # requested/default profile only so setup can still render.
+                pass
         else:
             try:
                 available = reality.available_recipe_profiles()
@@ -105,6 +117,7 @@ class Lab:
         self.runs_root = runs_root
         self.recipe_dir = recipe_dir
         self.profile = profile
+        self.profile_from_recipe = profile_from_recipe
         self._run_check = run_check
         self._discover = discover
         self._opener = opener
@@ -551,9 +564,10 @@ def make_server(lab: Lab, port: int = DEFAULT_PORT,
 
 
 def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bool,
-          profile: str = discovermod.PROFILE) -> int:
+          profile: Optional[str] = None) -> int:
+    default_profile = profile or discovermod.PROFILE
     recipe = (Path(recipe_dir).expanduser() if recipe_dir
-              else discovermod.default_recipe_dir(profile))
+              else discovermod.default_recipe_dir(default_profile))
     lab = Lab(runs_root, recipe, profile=profile)
     try:
         server = make_server(lab, port)
@@ -566,7 +580,8 @@ def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bo
     print("  scripts: send 'Authorization: Bearer <the token above>'")
     print(f"  runs   {os.path.abspath(runs_root)}")
     print(f"  recipe {recipe}")
-    print(f"  profile {profile} (for a new Recipe)")
+    source = "from existing Recipe" if lab.profile_from_recipe else "for a new Recipe"
+    print(f"  profile {lab.profile} ({source})")
     print("  localhost only; press Ctrl-C to stop", flush=True)
     if open_browser:
         webbrowser.open(url)
