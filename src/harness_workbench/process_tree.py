@@ -27,6 +27,10 @@ class ProcessTreeError(RuntimeError):
     """Ownership cannot be established without guessing."""
 
 
+class _DeadlineExpired(ProcessTreeError):
+    """The phase deadline passed. Distinct from running out of work units."""
+
+
 class _Budget:
     """Aggregate work/deadline checks, including within backend iteration.
 
@@ -39,8 +43,10 @@ class _Budget:
         self.remaining = MAX_WORK if work is None else work
 
     def check(self):
-        if self.remaining <= 0 or time.monotonic() >= self.deadline:
+        if self.remaining <= 0:
             raise ProcessTreeError("process observation budget exhausted")
+        if time.monotonic() >= self.deadline:
+            raise _DeadlineExpired("process observation budget exhausted")
         self.remaining -= 1
 
 
@@ -266,7 +272,7 @@ class ObservedProcessTree:
     def root_alive(self):
         return self._matching(self.root) is not None
 
-    def observe(self, _budget=None):
+    def observe(self, _budget=None, _expiry_escalates=False):
         budget = _budget if _budget is not None else _Budget()
         pending = list(self.identities.values())
         visited = set()
@@ -305,6 +311,8 @@ class ObservedProcessTree:
                     self.identities[child.pid] = child
                     pending.append(child)
             except (OSError, ProcessTreeError) as error:
+                if _expiry_escalates and isinstance(error, _DeadlineExpired):
+                    raise  # cleanup's SIGTERM phase escalates; not a failure
                 self._error("descendant discovery failed: %s" % error)
                 # A shared budget cannot be recovered by moving to a different
                 # parent. Stop rather than repeating failures for every node.
@@ -350,7 +358,7 @@ class ObservedProcessTree:
             while True:
                 try:
                     _check(budget)
-                    self.observe(budget)
+                    self.observe(budget, _expiry_escalates=signum == signal.SIGTERM)
                     alive = []
                     for identity in self.identities.values():
                         _check(budget)
@@ -370,6 +378,13 @@ class ObservedProcessTree:
                     time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
                     if time.monotonic() >= deadline:
                         break
+                except _DeadlineExpired as error:
+                    # SIGTERM grace ran out mid-poll. That is the same expected
+                    # escalation as expiry between polls: the SIGKILL phase
+                    # observes the tree afresh. SIGKILL expiry still fails closed.
+                    if signum != signal.SIGTERM:
+                        self._error("cleanup phase failed: %s" % error)
+                    break
                 except ProcessTreeError as error:
                     self._error("cleanup phase failed: %s" % error)
                     break

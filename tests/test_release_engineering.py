@@ -1573,6 +1573,8 @@ class TestReleaseSurfaces(unittest.TestCase):
     INTERNAL_MODULES = frozenset({
         "blast", "catch", "cli", "commands", "confine", "diff", "effects",
         "efficacy", "features", "fidelity", "interrupt", "reality", "replay", "runner",
+        # Setup discovery and the local Lab server behind `hwb setup`/`hwb lab` (MVP).
+        "discover", "lab",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
         "sweep", "_pi_cli", "_opencode_cli", "_hermes_cli",
         # CLI implementation and versioned adapter validator; no Python API promise.

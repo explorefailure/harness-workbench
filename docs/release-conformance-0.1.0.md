@@ -378,6 +378,8 @@ command fails the suite until this record routes it.
 - `python -m harness_workbench --help`
 - `hwb run --help`
 - `hwb try --help`
+- `hwb setup --help`
+- `hwb lab --help`
 - `hwb subjects --help`
 - `hwb ls --help`
 - `hwb show --help`
