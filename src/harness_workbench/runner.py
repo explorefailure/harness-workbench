@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .canon import canon_bytes, digest_file, short
 from .seams import Dispatcher
@@ -462,9 +462,24 @@ def verify(run_dir: str) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- the loop
 
+def _notify(observer, event: str, detail: Dict[str, Any]) -> None:
+    """Tell an optional progress observer what just happened.
+
+    Progress is display only: it is never part of the record, and a faulty
+    observer must not change what a run does or what it seals.
+    """
+    if observer is None:
+        return
+    try:
+        observer(event, detail)
+    except Exception:
+        pass
+
+
 def execute(
     spec, loaded, root: str,
     environment: Optional[Dict[str, str]] = None,
+    observer: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     # Before anything is created: an unresolvable reproduction claim must
     # fail without leaving a run directory behind.
@@ -477,6 +492,7 @@ def execute(
     rec = Recorder(root, spec)
     rec.preserve(loaded)
     _lifecycle_checkpoint("inputs_preserved", rec.run_dir)
+    _notify(observer, "run_started", {"run_id": rec.run_id})
     disp = Dispatcher(loaded, rec)
 
     disp.call("on_spec_loaded", spec)
@@ -484,6 +500,7 @@ def execute(
 
     for step in spec.steps:
         disp.call("before_step", step, step_id=step.id)
+        _notify(observer, "step_started", {"step_id": step.id})
         counter = {"n": 0}
 
         def run_once(step=step, counter=counter):
@@ -566,6 +583,7 @@ def execute(
                                 "executed": False,
                                 "note": "no attempt executed"})
         disp.call("after_step", step, {"attempts": counter["n"]}, step_id=step.id)
+        _notify(observer, "step_finished", {"step_id": step.id})
 
     disp.call("after_run", spec)
     return rec.close("completed", loaded, environment=environment)

@@ -7,6 +7,13 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- The Lab shows a run's progress: which phase the check is in (Recipe, model
+  identity, run record, the agent's sealed process, verification), how long the
+  last run took and, on `--profile local-llamacpp` with a llama-server started
+  with `--metrics`, how many tokens the model has generated since the run began.
+  `GET /api/runs/current` returns the run's events in the lifecycle-history
+  shape (`sequence`, `kind`, `at`, `state`, `cancel_requested`); `?after=<n>`
+  returns only newer ones. Progress is display only and never enters the record.
 - Fix: the Lab's Proof page wraps the sealed record's path. It ran into the
   model-digest column and made the page scroll sideways on narrow screens.
 - `hwb try coding/python-bug-fix --profile local-llamacpp` runs the Reality

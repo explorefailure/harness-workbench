@@ -153,11 +153,45 @@ def llamacpp(base_url: str, opener=urlopen) -> dict[str, Any]:
             "build": build if isinstance(build, str) and build else None, "error": None}
 
 
+LLAMACPP_DEFAULT_URL = "http://127.0.0.1:8081/v1"
+_TOKENS_PREDICTED = "llamacpp:tokens_predicted_total"
+
+
+def llamacpp_tokens_predicted(base_url: str, opener=urlopen) -> dict[str, Any]:
+    """Read llama-server's running count of generated tokens from /metrics.
+
+    llama-server serves /metrics only when started with --metrics. The count is
+    the server's total across every client, so it shows that the model is
+    working, not what an agent is doing. Only that one number is read; nothing
+    else from the response is returned.
+    """
+    url = _endpoint(base_url) + "/metrics"
+    try:
+        with opener(url, timeout=_PROBE_TIMEOUT) as response:
+            text = response.read(1 << 20).decode("utf-8", "replace")
+    except (URLError, OSError, ValueError) as error:
+        reason = ("llama-server serves /metrics only when started with --metrics"
+                  if getattr(error, "code", None) in (404, 501) else str(error))
+        return {"available": False, "url": url, "tokens": None, "reason": reason}
+    for line in text.splitlines():
+        name, _, value = line.partition(" ")
+        if name == _TOKENS_PREDICTED:
+            try:
+                tokens = float(value.split()[0])
+            except (ValueError, IndexError):
+                break
+            if tokens >= 0 and tokens == tokens and tokens != float("inf"):
+                return {"available": True, "url": url, "tokens": int(tokens), "reason": None}
+            break
+    return {"available": False, "url": url, "tokens": None,
+            "reason": f"/metrics has no usable {_TOKENS_PREDICTED} counter"}
+
+
 def runtime(state: dict[str, Any], opener=urlopen) -> dict[str, Any]:
     """The runtime block for a Recipe state: one shape for Ollama and llama.cpp."""
     kind = state.get("runtime") or "ollama"
     if kind == "llama.cpp":
-        block = llamacpp(state["base_url"] or "http://127.0.0.1:8081/v1", opener=opener)
+        block = llamacpp(state["base_url"] or LLAMACPP_DEFAULT_URL, opener=opener)
         label = "llama.cpp"
     else:
         block = ollama(state["base_url"] or "http://127.0.0.1:11434/v1", opener=opener)

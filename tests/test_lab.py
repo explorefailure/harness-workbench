@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -166,7 +167,7 @@ class LabServer:
         self.calls = []
         self.profiles = []
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
             self.calls.append((check, runs_root, recipe_dir))
             self.profiles.append(profile)
             self.release.wait(5)
@@ -476,7 +477,7 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(self.srv.calls[0][2], str(self.recipe))
 
     def test_failed_run_is_reported_not_swallowed(self):
-        def boom(check, *, runs_root, recipe_dir, profile=None):
+        def boom(check, *, runs_root, recipe_dir, profile=None, progress=None):
             raise reality.RealityError("recipe directory exists without recipe.json")
         self.srv.lab._run_check = boom
         self.srv.json("/api/runs", "POST", {})
@@ -565,6 +566,265 @@ class LabPageStyleTests(unittest.TestCase):
             rules = re.findall(r"^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", css, re.M)
             self.assertTrue(any("overflow-wrap: anywhere" in r for r in rules),
                             f"{selector} must allow wrapping anywhere")
+
+
+def fake_metrics(counts):
+    """An opener whose /metrics serves the next of `counts` on each read."""
+    values = iter(counts)
+
+    def opener(url, timeout=None):
+        assert url.endswith("/metrics"), url
+        value = next(values, None)
+        if value is None:
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        return io.BytesIO(("# HELP x\nllamacpp:prompt_tokens_total 7\n"
+                           f"llamacpp:tokens_predicted_total {value}\n").encode())
+    return opener
+
+
+def wait_for(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+BACKEND_EVENT_FIELDS = {"sequence", "kind", "at", "state", "cancel_requested"}
+
+
+class MetricsReaderTests(unittest.TestCase):
+    def test_reads_only_the_generated_token_count(self):
+        reading = discover.llamacpp_tokens_predicted("http://h:1/v1", opener=fake_metrics([42]))
+        self.assertEqual({"available": True, "url": "http://h:1/metrics", "tokens": 42,
+                          "reason": None}, reading)
+
+    def test_metrics_disabled_is_explained(self):
+        reading = discover.llamacpp_tokens_predicted("http://h:1/v1", opener=fake_metrics([]))
+        self.assertFalse(reading["available"])
+        self.assertIn("--metrics", reading["reason"])
+
+    def test_missing_or_unusable_counter_is_unavailable(self):
+        for body in (b"llamacpp:prompt_tokens_total 3\n",
+                     b"llamacpp:tokens_predicted_total nan\n",
+                     b"llamacpp:tokens_predicted_total -1\n",
+                     b"llamacpp:tokens_predicted_total x\n"):
+            with self.subTest(body=body):
+                reading = discover.llamacpp_tokens_predicted(
+                    "http://h:1", opener=lambda url, timeout=None, b=body: io.BytesIO(b))
+                self.assertFalse(reading["available"])
+                self.assertIsNone(reading["tokens"])
+
+
+class LabProgressTests(unittest.TestCase):
+    """Run events in the backend's lifecycle shape, phases and runtime activity."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.runs = str(base / "runs")
+        self.recipe = base / "recipe"
+
+    def lab(self, run_check, profile="local-ollama", opener=dead_ollama):
+        return lab.Lab(self.runs, self.recipe, run_check=run_check, opener=opener,
+                       discover=lambda r, opener=None, profile=None: {"ready": True},
+                       profile=profile)
+
+    @staticmethod
+    def finished(the_lab):
+        return wait_for(lambda: the_lab.current()["state"] != "running")
+
+    @staticmethod
+    def events(view):
+        return [entry["event"] for entry in view["events"]["entries"]]
+
+    def test_a_run_reports_lifecycle_and_every_phase_in_backend_shape(self):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            for phase in reality.PROGRESS_PHASES:
+                progress(phase, {"run_id": "R7"} if phase == "run_started" else {})
+            return {"verdict": "fail", "record": os.path.join(runs_root, "R7")}
+
+        the_lab = self.lab(run_check)
+        started = the_lab.start_run()
+        self.assertRegex(started["id"], r"^[0-9a-f]{32}$")
+        self.assertTrue(self.finished(the_lab))
+        view = the_lab.current()
+        events = self.events(view)
+        self.assertEqual(
+            [("submitted", "queued"), ("claimed", "running")]
+            + [("progress", "running")] * len(reality.PROGRESS_PHASES)
+            + [("completed", "succeeded")],
+            [(e["kind"], e["state"]) for e in events])
+        self.assertEqual(list(reality.PROGRESS_PHASES),
+                         [e["phase"] for e in events if e["kind"] == "progress"])
+        self.assertEqual(list(range(1, len(events) + 1)), [e["sequence"] for e in events])
+        for event in events:
+            extra = {"phase"} if event["kind"] == "progress" else set()
+            self.assertEqual(BACKEND_EVENT_FIELDS | extra, set(event))
+            self.assertFalse(event["cancel_requested"])
+        page = view["events"]
+        self.assertEqual((1, view["id"], None),
+                         (page["schema_version"], page["job_id"], page["next_cursor"]))
+        self.assertEqual([e["sequence"] for e in events],
+                         [entry["sequence"] for entry in page["entries"]])
+        self.assertTrue(all(entry["error"] is None for entry in page["entries"]))
+        # A FAIL verdict is still a check that ran: the lifecycle succeeded.
+        self.assertEqual(("done", "R7", "verifying"),
+                         (view["state"], view["run_id"], view["phase"]))
+        self.assertNotIn("_events", view)
+
+    def test_a_run_that_cannot_start_completes_as_failed(self):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            progress("recipe", {})
+            raise reality.RealityError("recipe.json is missing")
+
+        the_lab = self.lab(run_check)
+        the_lab.start_run()
+        self.assertTrue(self.finished(the_lab))
+        view = the_lab.current()
+        self.assertEqual("failed", view["state"])
+        self.assertEqual(("completed", "failed"),
+                         (self.events(view)[-1]["kind"], self.events(view)[-1]["state"]))
+        self.assertIsNone(the_lab.start_run()["previous_duration"])
+
+    def test_after_returns_only_newer_events_and_pages_past_the_limit(self):
+        release = threading.Event()
+
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            release.wait(5)
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        the_lab = self.lab(run_check)
+        the_lab.start_run()
+        self.assertEqual([2], [e["sequence"] for e in self.events(the_lab.current(after=1))])
+        self.assertEqual([], self.events(the_lab.current(after=2)))
+        with the_lab._lock:
+            for _ in range(lab.EVENTS_PAGE_LIMIT + 5):
+                the_lab._emit(the_lab._job, "heartbeat", "running")
+        first = the_lab.current(after=0)["events"]
+        self.assertEqual(lab.EVENTS_PAGE_LIMIT, len(first["entries"]))
+        self.assertEqual(str(lab.EVENTS_PAGE_LIMIT), first["next_cursor"])
+        rest = the_lab.current(after=int(first["next_cursor"]))["events"]
+        self.assertEqual(7, len(rest["entries"]))
+        self.assertIsNone(rest["next_cursor"])
+        release.set()
+        self.assertTrue(self.finished(the_lab))
+
+    def test_the_next_run_knows_how_long_the_last_one_took(self):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        the_lab = self.lab(run_check)
+        self.assertIsNone(the_lab.start_run()["previous_duration"])
+        self.assertTrue(self.finished(the_lab))
+        took = the_lab.current()["finished_at"] - the_lab.current()["started_at"]
+        self.assertEqual(took, the_lab.start_run()["previous_duration"])
+        self.assertTrue(self.finished(the_lab))
+
+    def test_llamacpp_activity_reports_when_metrics_go_away(self):
+        release = threading.Event()
+
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            release.wait(5)
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        with mock.patch.object(lab, "ACTIVITY_INTERVAL", 0.01):
+            the_lab = self.lab(run_check, profile="local-llamacpp",
+                               opener=fake_metrics([1000, 1000, 1250, 1600]))
+            the_lab.start_run()
+            self.assertTrue(wait_for(lambda: (the_lab.current()["activity"] or {})
+                                     .get("available") is False))
+            release.set()
+            self.assertTrue(self.finished(the_lab))
+        # /metrics answered, then stopped: the loss is reported with its
+        # reason, not hidden behind the last good count.
+        self.assertIn("--metrics", the_lab.current()["activity"]["reason"])
+
+    def test_llamacpp_activity_reports_a_rising_count(self):
+        # Driven synchronously: each /metrics read first records what the
+        # sampler reported after the previous read, so no timing is involved.
+        the_lab = self.lab(lambda *a, **k: None, profile="local-llamacpp")
+        job = {"state": "running", "activity": None}
+        stop = threading.Event()
+        counts = [1000, 1250, 1600]
+        reported = []
+
+        def opener(url, timeout=None):
+            reported.append(job["activity"] and job["activity"]["tokens_since_start"])
+            if len(reported) == len(counts):
+                stop.set()
+            return io.BytesIO(
+                f"llamacpp:tokens_predicted_total {counts[len(reported) - 1]}\n".encode())
+
+        the_lab._opener = opener
+        with mock.patch.object(lab, "ACTIVITY_INTERVAL", 0):
+            the_lab._sample_activity(job, stop)
+        self.assertEqual([None, 0, 250], reported)
+        self.assertEqual(600, job["activity"]["tokens_since_start"])
+        self.assertEqual("llama-server /metrics", job["activity"]["source"])
+        self.assertIn("every client", job["activity"]["scope"])
+
+    def test_a_restarted_server_keeps_counting_instead_of_going_negative(self):
+        the_lab = self.lab(lambda *a, **k: None, profile="local-llamacpp")
+        job = {"state": "running", "activity": None}
+        stop = threading.Event()
+        counts = [1000, 1300, 1100, 1150]
+        reported = []
+
+        def opener(url, timeout=None):
+            reported.append(job["activity"] and job["activity"]["tokens_since_start"])
+            if len(reported) == len(counts):
+                stop.set()
+            return io.BytesIO(
+                f"llamacpp:tokens_predicted_total {counts[len(reported) - 1]}\n".encode())
+
+        the_lab._opener = opener
+        with mock.patch.object(lab, "ACTIVITY_INTERVAL", 0):
+            the_lab._sample_activity(job, stop)
+        # 1000 -> 1300 is +300. The drop to 1100 means a restart, after which
+        # the server has generated 1100 tokens from zero: +1100, then +50.
+        # A first-reading baseline would have reported 100 or gone negative.
+        self.assertEqual([None, 0, 300, 1400], reported)
+        self.assertEqual(1450, job["activity"]["tokens_since_start"])
+
+    def test_ollama_runs_report_no_activity(self):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+            return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
+
+        the_lab = self.lab(run_check, opener=fake_metrics([1]))
+        the_lab.start_run()
+        self.assertTrue(self.finished(the_lab))
+        self.assertIsNone(the_lab.current()["activity"])
+
+
+class LabProgressHttpTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.srv = LabServer(str(base / "runs"), base / "recipe", dead_ollama)
+
+    def tearDown(self):
+        self.srv.close()
+        self.tmp.cleanup()
+
+    def test_after_is_read_from_the_query(self):
+        self.assertEqual(202, self.srv.json("/api/runs", "POST", {})[0])
+        status, view = self.srv.json("/api/runs/current?after=1")
+        self.assertEqual(200, status)
+        self.assertEqual([2], [e["sequence"] for e in view["events"]["entries"]])
+
+    def test_a_malformed_after_is_refused(self):
+        self.srv.json("/api/runs", "POST", {})
+        for query in ("after=-1", "after=x", "after=1&after=2", "after=", "after=01"):
+            with self.subTest(query=query):
+                self.assertEqual(400, self.srv.json("/api/runs/current?" + query)[0])
+
+    def test_the_query_does_not_bypass_the_guard(self):
+        self.assertEqual(401, self.srv.request("/api/runs/current?after=0", auth=False)[0])
+        self.assertEqual(403, self.srv.request(
+            "/api/runs/current?after=0", headers={"Origin": "http://evil.test"})[0])
 
 
 class CliTests(unittest.TestCase):

@@ -153,8 +153,13 @@ unreleased local web GUI, `hwb lab`, opens a localhost page for the same check:
 discover your setup, run it, read the proof, choose the Recipe's model, and
 browse sealed runs. It listens on 127.0.0.1 only, on a free port chosen per
 launch, and every request needs that launch's secret token, which is in the URL
-it prints and opens. It has no step-by-step progress yet. Both `hwb setup` and `hwb lab` accept
-`--profile local-llamacpp` to check and run against a local llama-server.
+it prints and opens. While a run is going, it shows which phase the check is in
+and how long the last run took. The agent's own work happens inside one sealed
+process, so the Lab sees what it did only when that ends. Both `hwb setup` and
+`hwb lab` accept `--profile local-llamacpp` to check and run against a local
+llama-server. With that profile, a llama-server started with `--metrics` also
+reports how many tokens the model has generated during the run. The count covers
+every client of that server, not only the run.
 
 Not ready to run a model? The [no-model example](#explore-without-a-model)
 lets you inspect a deterministic failure-and-retry experiment first.

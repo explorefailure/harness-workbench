@@ -40,6 +40,7 @@ import secrets
 import socket
 import threading
 import time
+import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -65,6 +66,17 @@ class LabError(Exception):
         self.status = status
 
 
+# Run events use the backend's lifecycle-history shape (job_events, schema 1):
+# a page of entries {sequence, event, error} whose events carry sequence, kind,
+# at, state and cancel_requested. Lifecycle kinds are the backend's. The Lab adds
+# one kind, "progress" (state "running"), with a `phase` from
+# reality.PROGRESS_PHASES. "completed"/"succeeded" means the check reached a
+# verdict, whatever that verdict is; "completed"/"failed" means it could not run.
+EVENTS_SCHEMA_VERSION = 1
+EVENTS_PAGE_LIMIT = 100
+ACTIVITY_INTERVAL = 2.0
+
+
 class Lab:
     """State and operations behind the HTTP surface (testable without HTTP)."""
 
@@ -82,7 +94,7 @@ class Lab:
         self._opener = opener
         self._lock = threading.Lock()
         self._job: Optional[dict[str, Any]] = None
-        self._job_seq = 0
+        self._last_duration: Optional[float] = None
 
     # -- discovery ---------------------------------------------------------
     def setup(self) -> dict[str, Any]:
@@ -93,30 +105,106 @@ class Lab:
         with self._lock:
             if self._job and self._job["state"] == "running":
                 raise LabError(409, "A Reality Check is already running.")
-            self._job_seq += 1
-            job = {"id": self._job_seq, "state": "running",
+            job = {"id": uuid.uuid4().hex, "state": "running",
                    "check": reality.CHECK, "started_at": time.time(),
-                   "finished_at": None, "result": None, "error": None}
+                   "finished_at": None, "result": None, "error": None,
+                   "phase": None, "phases": list(reality.PROGRESS_PHASES),
+                   "activity": None, "previous_duration": self._last_duration,
+                   "_events": []}
             self._job = job
+            self._emit(job, "submitted", "queued")
+            self._emit(job, "claimed", "running")
+            view = self._view(job, None)
         threading.Thread(target=self._execute, args=(job,), daemon=True).start()
-        return dict(job)
+        return view
+
+    def _emit(self, job: dict[str, Any], kind: str, state: str, **extra: Any) -> None:
+        # Caller holds self._lock.
+        events = job["_events"]
+        events.append({"sequence": len(events) + 1, "kind": kind, "at": time.time(),
+                       "state": state, "cancel_requested": False, **extra})
+
+    def _progress(self, job: dict[str, Any]) -> Callable[[str, dict[str, Any]], None]:
+        def report(phase: str, detail: dict[str, Any]) -> None:
+            with self._lock:
+                if job["state"] != "running":
+                    return
+                job["phase"] = phase
+                if phase == "run_started" and detail.get("run_id"):
+                    job["run_id"] = detail["run_id"]
+                self._emit(job, "progress", "running", phase=phase)
+        return report
 
     def _execute(self, job: dict[str, Any]) -> None:
+        stop = threading.Event()
+        if self.profile == "local-llamacpp":
+            threading.Thread(target=self._sample_activity, args=(job, stop),
+                             daemon=True).start()
         try:
             result = self._run_check(reality.CHECK, runs_root=self.runs_root,
-                                     recipe_dir=str(self.recipe_dir), profile=self.profile)
+                                     recipe_dir=str(self.recipe_dir), profile=self.profile,
+                                     progress=self._progress(job))
             update = {"state": "done", "result": result,
                       "run_id": Path(result["record"]).name}
         except reality.RealityError as error:
             update = {"state": "failed", "error": str(error)}
         except Exception as error:  # surface, never swallow, unexpected faults
             update = {"state": "failed", "error": f"{type(error).__name__}: {error}"}
+        finally:
+            stop.set()
         with self._lock:
             job.update(update, finished_at=time.time())
+            self._emit(job, "completed", "succeeded" if job["state"] == "done" else "failed")
+            if job["state"] == "done":
+                self._last_duration = job["finished_at"] - job["started_at"]
 
-    def current(self) -> dict[str, Any]:
+    def _sample_activity(self, job: dict[str, Any], stop: threading.Event) -> None:
+        """Track llama-server's generated-token count while the run lasts."""
+        try:
+            base_url = discovermod.recipe_state(self.recipe_dir, self.profile).get("base_url")
+        except Exception:
+            base_url = None
+        base_url = base_url or discovermod.LLAMACPP_DEFAULT_URL
+        previous: Optional[int] = None
+        total = 0
+        while not stop.is_set():
+            reading = discovermod.llamacpp_tokens_predicted(base_url, opener=self._opener)
+            with self._lock:
+                if job["state"] != "running":
+                    return
+                if reading["available"]:
+                    tokens = reading["tokens"]
+                    if previous is not None:
+                        # A drop means the server restarted and counts from 0.
+                        total += tokens - previous if tokens >= previous else tokens
+                    previous = tokens
+                    job["activity"] = {
+                        "available": True, "source": "llama-server /metrics",
+                        "tokens_since_start": total,
+                        "scope": "every client of this llama-server, not only this run",
+                        "at": time.time()}
+                else:
+                    job["activity"] = {"available": False, "reason": reading["reason"]}
+            stop.wait(ACTIVITY_INTERVAL)
+
+    def _view(self, job: dict[str, Any], after: Optional[int]) -> dict[str, Any]:
+        # Caller holds self._lock.
+        view = {key: value for key, value in job.items() if key != "_events"}
+        newer = [e for e in job["_events"] if after is None or e["sequence"] > after]
+        page = newer[:EVENTS_PAGE_LIMIT]
+        view["events"] = {
+            "schema_version": EVENTS_SCHEMA_VERSION, "job_id": job["id"],
+            "entries": [{"sequence": e["sequence"], "event": dict(e), "error": None}
+                        for e in page],
+            # Pass as ?after= to read the next page; None when this page is the end.
+            "next_cursor": (str(page[-1]["sequence"])
+                            if len(newer) > EVENTS_PAGE_LIMIT else None),
+        }
+        return view
+
+    def current(self, after: Optional[int] = None) -> dict[str, Any]:
         with self._lock:
-            return dict(self._job) if self._job else {"state": "idle"}
+            return self._view(self._job, after) if self._job else {"state": "idle"}
 
     def list_runs(self) -> list[dict[str, Any]]:
         root = Path(self.runs_root)
@@ -226,6 +314,15 @@ ROUTES = {
     ("POST", "/api/runs"): "start_run",
     ("POST", "/api/recipe/model"): "set_model",
 }
+
+
+def _after(query: str) -> Optional[int]:
+    values = parse_qs(query, keep_blank_values=True).get("after")
+    if not values:
+        return None
+    if len(values) != 1 or not re.fullmatch(r"(0|[1-9][0-9]{0,8})", values[0]):
+        raise LabError(400, "after must be one non-negative event sequence number.")
+    return int(values[0])
 
 
 def _route(method: str, path: str):
@@ -363,7 +460,7 @@ def _handler(lab: Lab):
                 if name == "runs":
                     return self._json(200, {"runs": lab.list_runs()})
                 if name == "current":
-                    return self._json(200, lab.current())
+                    return self._json(200, lab.current(_after(parsed.query)))
                 if name == "run_detail":
                     return self._json(200, lab.run_detail(arg))
                 if name == "recipe":
