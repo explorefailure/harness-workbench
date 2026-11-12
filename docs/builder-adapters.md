@@ -105,8 +105,13 @@ On 2026-11-08 the OpenCode builder's repair passed its capture and independent
 outcome checks this way with OpenCode 1.19.5, llama.cpp v0.9.0 and
 `qwen3.8:27b`. The Pi builder (Pi 1.4.0, Node 26.13.0) passed the same repair
 through `hwb-pi configure --base-url http://127.0.0.1:8081/v1 --model
-qwen3.8:27b` with an independent `unittest` check. The Hermes builder was not
-tried against llama.cpp.
+qwen3.8:27b` with an independent `unittest` check. On 2026-11-11 the Hermes
+builder (Hermes Agent 0.22.5) also passed its capture and independent repair
+outcome against `qwen3.8:27b` through the same llama.cpp OpenAI-compatible
+endpoint. Native test-command exits were `[1, 0]`, only the declared
+implementation changed, and the final independent tests passed. The server was
+llama.cpp build 12110 (`cd959bae9`, reported as `0.9.0-dev`) with a 65,536-token
+context; this is one local model/task result, not a general compatibility claim.
 
 For an authenticated compatible Chat Completions endpoint:
 
