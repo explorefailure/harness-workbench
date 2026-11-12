@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import sys
+import threading
 from typing import Any, Callable, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -524,10 +525,12 @@ PROGRESS_PHASES = ("recipe", "model_identity", "run_started", "agent", "verifyin
 def run_check(
     check: str, *, runs_root: str, recipe_dir: str | None, profile: str | None = None,
     progress: Callable[[str, dict[str, Any]], None] | None = None,
+    stop: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run the Reality Check. `progress(phase, detail)` is told each phase of
     PROGRESS_PHASES as it begins. It is display only and never part of the
-    record; an observer that raises is ignored."""
+    record; an observer that raises is ignored. Setting `stop` ends the
+    running step early; the attempt is then marked `stopped` in the record."""
     def phase(name: str, **detail: Any) -> None:
         if progress is not None:
             try:
@@ -567,7 +570,7 @@ def run_check(
         environment["HWB_PYTHON"] = sys.executable
         record = runner.execute(
             specification, loaded, runs_root, environment=environment,
-            observer=observe,
+            observer=observe, stop=stop,
         )
     except (specmod.SpecError, features.FeatureError, runner.HarnessError, OSError) as error:
         raise RealityError(str(error)) from error

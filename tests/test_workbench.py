@@ -14,8 +14,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -139,6 +141,44 @@ class TestProgressObserver(Base):
         run_dir = os.path.join(self.runs, record["run_id"])
         self.assertEqual("completed", read(os.path.join(run_dir, "record.json"))["status"])
         self.assertEqual("clean", runner.verify(run_dir)["state"])
+
+
+class TestStoppableStep(Base):
+    """A caller's stop request ends a step and the record says so."""
+
+    def _stopped_run(self, argv, after=0.3):
+        stop = threading.Event()
+        threading.Timer(after, stop.set).start()
+        sp = specmod.load(self.spec([], steps=[{"id": "01", "argv": argv, "inputs": ["in.txt"]}]))
+        started = time.monotonic()
+        record = runner.execute(sp, features.resolve(sp), self.runs, stop=stop)
+        run_dir = os.path.join(self.runs, record["run_id"])
+        with open(os.path.join(run_dir, "attempts.jsonl"), encoding="utf-8") as fh:
+            attempt = json.loads(fh.readline())
+        return time.monotonic() - started, attempt, run_dir
+
+    def test_stop_ends_a_long_step_and_is_recorded(self):
+        took, attempt, run_dir = self._stopped_run(["sleep", "30"])
+        self.assertLess(took, 5)
+        self.assertTrue(attempt["stopped"])
+        self.assertEqual(-15, attempt["exit"])
+        self.assertEqual("clean", runner.verify(run_dir)["state"])
+
+    def test_a_step_that_ignores_sigterm_is_killed_after_the_grace(self):
+        with mock.patch.object(runner, "STOP_GRACE_S", 0.5):
+            took, attempt, _ = self._stopped_run(["sh", "-c", "trap '' TERM; sleep 30"])
+        self.assertLess(took, 5)
+        self.assertTrue(attempt["stopped"])
+        self.assertEqual(-9, attempt["exit"])
+
+    def test_an_unset_stop_changes_nothing(self):
+        stop = threading.Event()
+        sp = specmod.load(self.spec([]))
+        record = runner.execute(sp, features.resolve(sp), self.runs, stop=stop)
+        with open(os.path.join(self.runs, record["run_id"], "attempts.jsonl"), encoding="utf-8") as fh:
+            attempt = json.loads(fh.readline())
+        self.assertEqual(0, attempt["exit"])
+        self.assertNotIn("stopped", attempt)
 
 
 class TestDetachability(Base):
