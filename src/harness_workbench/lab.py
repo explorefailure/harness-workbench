@@ -93,8 +93,10 @@ class Lab:
             try:
                 reality._validate_recipe(recipe_dir.resolve())
                 profile = json.loads(manifest.read_text(encoding="utf-8"))["model_profile"]
-            except (reality.RealityError, OSError, ValueError, KeyError) as error:
-                raise LabError(1, f"invalid Recipe: {error}") from error
+            except (reality.RealityError, OSError, ValueError, KeyError):
+                # Discovery reports the invalid Recipe as a blocker.  Keep the
+                # requested/default profile only so setup can still render.
+                pass
         else:
             try:
                 available = reality.available_recipe_profiles()

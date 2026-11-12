@@ -591,6 +591,29 @@ class LabApiTests(unittest.TestCase):
         reopened = lab.Lab(self.runs, recipe)
         self.assertEqual("metal-small", reopened.profile)
 
+    def test_tampered_recipe_opens_with_blocker_and_run_fails(self):
+        recipe = Path(self.tmp.name) / "tampered-recipe"
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(recipe)
+        manifest = json.loads((recipe / reality.RECIPE_NAME).read_text())
+        bound = next(iter(manifest["bound_file_digests"]))
+        with (recipe / bound).open("ab") as stream:
+            stream.write(b"\ntampered\n")
+
+        the_lab = lab.Lab(self.runs, recipe, opener=fake_ollama([(self.model, GOOD)]))
+        with mock.patch.object(discover, "tool", side_effect=lambda name, which=None: {
+            "name": name, "found": True, "path": f"/usr/bin/{name}", "version": "1.0",
+        }):
+            setup = the_lab.setup()
+
+        self.assertFalse(setup["ready"])
+        self.assertTrue(any("Recipe" in item["message"] for item in setup["blockers"]))
+        self.assertEqual("local-ollama", the_lab.profile)
+        the_lab.start_run()
+        self.assertTrue(wait_for(lambda: the_lab.current()["state"] != "running"))
+        self.assertEqual("failed", the_lab.current()["state"])
+        self.assertIn("Recipe", the_lab.current()["error"])
+
     def test_run_detail_rejects_bad_and_missing_ids(self):
         self.assertEqual(self.srv.json("/api/runs/..%2Fetc")[0], 400)
         self.assertEqual(self.srv.json("/api/runs/NOPE")[0], 404)
