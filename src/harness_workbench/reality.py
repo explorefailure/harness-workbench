@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from . import features, interrupt, runner, spec as specmod, subject_tree
+from . import features, interrupt, model_profiles, runner, spec as specmod, subject_tree
 from .canon import canon_bytes, digest_file
 
 
@@ -39,8 +39,8 @@ EDITABLE_RECIPE_FILE = "model_selection.json"
 # setup.  llama.cpp is opt-in with `hwb try --profile local-llamacpp`.
 RECIPE_PROFILES = ("local-ollama", "local-llamacpp")
 DEFAULT_RECIPE_PROFILE = "local-ollama"
-LOCAL_PROFILES_ENV = "HWB_MODEL_PROFILES"
-_PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+LOCAL_PROFILES_ENV = model_profiles.LOCAL_PROFILES_ENV
+_PROFILE_NAME = model_profiles._PROFILE_NAME
 _CONTENT_ADDRESSED_GGUF = re.compile(r"(?:sha256[-:])?([0-9a-f]{64})(?:\.gguf)?")
 
 
@@ -57,33 +57,7 @@ def _available_selection() -> dict[str, Any]:
     file, so a retained Recipe remains self-describing without the overlay.
     """
     selection = _shipped_selection()
-    overlay_path = os.environ.get(LOCAL_PROFILES_ENV)
-    if not overlay_path:
-        return selection
-    try:
-        overlay = json.loads(Path(overlay_path).expanduser().read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise RealityError(f"{LOCAL_PROFILES_ENV} is unreadable: {error}") from None
-    profiles = overlay.get("profiles") if isinstance(overlay, dict) else None
-    if not isinstance(profiles, dict) or not all(
-        isinstance(name, str) and isinstance(profile, dict)
-        for name, profile in profiles.items()
-    ):
-        raise RealityError(f"{LOCAL_PROFILES_ENV} must hold an object of profiles")
-    clashes = sorted(set(profiles) & set(selection["profiles"]))
-    if clashes:
-        raise RealityError(
-            f"{LOCAL_PROFILES_ENV} may not redefine committed profiles: "
-            + ", ".join(clashes)
-        )
-    for name in profiles:
-        if _PROFILE_NAME.fullmatch(name) is None:
-            raise RealityError(
-                f"{LOCAL_PROFILES_ENV} profile name {name!r} is unsafe; use letters, "
-                "digits, dot, underscore or hyphen"
-            )
-    selection["profiles"] = {**selection["profiles"], **copy.deepcopy(profiles)}
-    return selection
+    return model_profiles.apply_overlay(selection, RealityError)
 
 
 def _local_profile_names(selection: dict[str, Any]) -> tuple[str, ...]:

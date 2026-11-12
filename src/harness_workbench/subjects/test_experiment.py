@@ -5234,6 +5234,14 @@ class ContractComparisonTests(unittest.TestCase):
                             Path(comparator.capture_module.__file__).resolve()
                         ),
                     },
+                    "model_profiles": {
+                        "file": "model_profiles.py",
+                        "sha256": digest_file(
+                            Path(
+                                comparator.model_profiles_module.__file__
+                            ).resolve()
+                        ),
+                    },
                 },
                 "baseline": {
                     "present": True,

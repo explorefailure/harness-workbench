@@ -195,7 +195,7 @@ def _offline_apparatus(*, require_live_prerequisites: bool) -> dict[str, Any]:
         "inputs": input_maps[0],
         "apparatus_modules": {
             name: digest_file(getattr(adapters, f"{name}_module").__file__)
-            for name in ("canon", "capture")
+            for name in ("canon", "capture", "model_profiles")
         },
         "workflow_modules": {
             Path(path).name: digest_file(path)

@@ -100,7 +100,7 @@ def apparatus_manifest() -> Dict[str, Any]:
     to happen against the running primitive, not against a lock made at the
     same moment.
     """
-    from . import canon, capture
+    from . import canon, capture, model_profiles
 
     return {
         "schema": "hwb-subject-apparatus/v0.1",
@@ -112,7 +112,11 @@ def apparatus_manifest() -> Dict[str, Any]:
                 "sha256": canon.digest_file(module.__file__).split(":", 1)[1],
             }
             for name, module in sorted(
-                {"canon": canon, "capture": capture}.items()
+                {
+                    "canon": canon,
+                    "capture": capture,
+                    "model_profiles": model_profiles,
+                }.items()
             )
         },
     }

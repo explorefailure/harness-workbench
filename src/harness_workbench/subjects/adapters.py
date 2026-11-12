@@ -18,6 +18,7 @@ from urllib.request import urlopen
 import harness_workbench
 from harness_workbench import canon as canon_module
 from harness_workbench import capture as capture_module
+from harness_workbench import model_profiles as model_profiles_module
 from harness_workbench.canon import digest_obj
 from harness_workbench.capture import (
     DEFAULT_SIDECAR_LIMIT,
@@ -303,7 +304,7 @@ def _verify_identity(subject: str) -> dict[str, Any]:
     }
 
 
-LOCAL_PROFILES_ENV = "HWB_MODEL_PROFILES"
+LOCAL_PROFILES_ENV = model_profiles_module.LOCAL_PROFILES_ENV
 
 
 def _model_selection() -> dict[str, Any]:
@@ -317,26 +318,7 @@ def _model_selection() -> dict[str, Any]:
     plan while the overlay is set.
     """
     selection = json.loads((HERE / "model_selection.json").read_text(encoding="utf-8"))
-    overlay_path = os.environ.get(LOCAL_PROFILES_ENV)
-    if not overlay_path:
-        return selection
-    try:
-        overlay = json.loads(Path(overlay_path).expanduser().read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise AdapterError(f"{LOCAL_PROFILES_ENV} is unreadable: {error}") from None
-    profiles = overlay.get("profiles") if isinstance(overlay, dict) else None
-    if not isinstance(profiles, dict) or not all(
-        isinstance(profile, dict) for profile in profiles.values()
-    ):
-        raise AdapterError(f"{LOCAL_PROFILES_ENV} must hold an object of profiles")
-    clashes = sorted(set(profiles) & set(selection["profiles"]))
-    if clashes:
-        raise AdapterError(
-            f"{LOCAL_PROFILES_ENV} may not redefine committed profiles: "
-            + ", ".join(clashes)
-        )
-    selection["profiles"] = {**selection["profiles"], **profiles}
-    return selection
+    return model_profiles_module.apply_overlay(selection, AdapterError)
 
 
 def refuse_local_profiles(purpose: str) -> None:
@@ -2073,14 +2055,15 @@ def _apparatus() -> dict[str, Any]:
     *visible* in the record instead of silently changing what a run measured --
     it does not make freeze detect it.
     """
-    # Both modules, not just the obvious one. `capture.digest_file` is a thin
-    # wrapper over `canon.digest_file`, and `digest_obj` is imported straight
+    # Every imported core module, not just the obvious one. `capture.digest_file`
+    # is a thin wrapper over `canon.digest_file`, and `digest_obj` is imported straight
     # from `canon`, so a change to the canonical-JSON or file-digest rule moves
     # every digest in this record while `capture.py` stays byte-identical.
     # Naming only the file you thought of is how provenance gets a blind spot.
     modules = {
         "capture": Path(capture_module.__file__).resolve(),
         "canon": Path(canon_module.__file__).resolve(),
+        "model_profiles": Path(model_profiles_module.__file__).resolve(),
     }
     live = {
         "schema": "hwb-subject-apparatus/v0.1",

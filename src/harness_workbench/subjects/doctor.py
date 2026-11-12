@@ -230,7 +230,9 @@ def _certification_check(subject: str) -> tuple[bool, str]:
             if digest_file(path) != expected:
                 return False, f"certified input changed ({relative})"
         modules = certification.get("apparatus_modules")
-        if not isinstance(modules, dict) or set(modules) != {"canon", "capture"}:
+        if not isinstance(modules, dict) or set(modules) != {
+            "canon", "capture", "model_profiles"
+        }:
             return False, "live certification does not bind the complete apparatus"
         for name, expected in modules.items():
             if not _is_sha256(expected):

@@ -3922,7 +3922,7 @@ class TestPackageIdentity(unittest.TestCase):
         # bytes decide how a subject is measured from outside everything a spec
         # can declare. This is the baseline the adapter compares itself to.
         import json
-        from harness_workbench import canon, capture, subject_tree
+        from harness_workbench import canon, capture, model_profiles, subject_tree
 
         tmp = tempfile.mkdtemp(prefix="hb-apparatus-")
         self.addCleanup(shutil.rmtree, tmp, True)
@@ -3935,8 +3935,14 @@ class TestPackageIdentity(unittest.TestCase):
         # Both modules, not just the obvious one: `capture.digest_file` wraps
         # `canon.digest_file`, so a change in canon moves every digest in a
         # record while capture.py stays byte-identical.
-        self.assertEqual({"canon", "capture"}, set(manifest["modules"]))
-        for name, module in (("canon", canon), ("capture", capture)):
+        self.assertEqual(
+            {"canon", "capture", "model_profiles"}, set(manifest["modules"])
+        )
+        for name, module in (
+            ("canon", canon),
+            ("capture", capture),
+            ("model_profiles", model_profiles),
+        ):
             self.assertEqual(
                 canon.digest_file(module.__file__).split(":", 1)[1],
                 manifest["modules"][name]["sha256"])
