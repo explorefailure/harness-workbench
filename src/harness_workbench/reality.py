@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import sys
 from typing import Any, Optional
@@ -32,6 +33,11 @@ BLIND_SPOTS = (
 )
 MODEL_DIGEST_CONTRACT = "recorded_digest_not_pinned_reproduction"
 EDITABLE_RECIPE_FILE = "model_selection.json"
+# Profiles a Recipe may run.  Ollama stays the default: it is the easiest first
+# setup.  llama.cpp is opt-in with `hwb try --profile local-llamacpp`.
+RECIPE_PROFILES = ("local-ollama", "local-llamacpp")
+DEFAULT_RECIPE_PROFILE = "local-ollama"
+_CONTENT_ADDRESSED_GGUF = re.compile(r"(?:sha256[-:])?([0-9a-f]{64})(?:\.gguf)?")
 
 
 def _local_model_digest(model: str, base_url: str) -> Optional[str]:
@@ -56,6 +62,49 @@ def _local_model_digest(model: str, base_url: str) -> Optional[str]:
     return None
 
 
+def _llamacpp_identity(model: str, base_url: str) -> tuple[Optional[str], Optional[str]]:
+    """(file digest, build) this machine's llama-server reports, or Nones.
+
+    llama.cpp publishes no digest; the served GGUF must be named by its own
+    SHA-256 and the alias must be the selected model.  Anything else reads as
+    unknown, and the certified adapter's own check then fails the run.
+    """
+    endpoint = base_url.rstrip("/")
+    if endpoint.endswith("/v1"):
+        endpoint = endpoint[:-3]
+    try:
+        with urlopen(endpoint + "/props", timeout=3) as response:
+            payload = json.load(response)
+    except (URLError, OSError, ValueError):
+        return None, None
+    if not isinstance(payload, dict) or payload.get("model_alias") != model:
+        return None, None
+    build = payload.get("build_info")
+    build = build if isinstance(build, str) and build else None
+    name = str(payload.get("model_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = _CONTENT_ADDRESSED_GGUF.fullmatch(name)
+    return (match.group(1) if match else None), build
+
+
+def _live_identity(profile: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(model digest, runtime build) for a Recipe profile; build is llama.cpp only."""
+    model, base_url = str(profile["models"]["pi"]), str(profile["base_url"])
+    if profile.get("runtime") == "llama.cpp":
+        return _llamacpp_identity(model, base_url)
+    return _local_model_digest(model, base_url), None
+
+
+def _recipe_profile(selection: Any) -> tuple[str, dict[str, Any]]:
+    name = selection.get("active") if isinstance(selection, dict) else None
+    profiles = selection.get("profiles") if isinstance(selection, dict) else None
+    profile = profiles.get(name) if isinstance(profiles, dict) else None
+    if name not in RECIPE_PROFILES or not isinstance(profile, dict):
+        raise RealityError(
+            "Recipe must keep one of these profiles active: " + ", ".join(RECIPE_PROFILES)
+        )
+    return str(name), profile
+
+
 def refresh_live_digest(destination: Path) -> None:
     """Point the Recipe's checked digest at what this machine serves now.
 
@@ -69,11 +118,12 @@ def refresh_live_digest(destination: Path) -> None:
     path = destination / EDITABLE_RECIPE_FILE
     try:
         selection = json.loads(path.read_text(encoding="utf-8"))
-        local = selection["profiles"]["local-ollama"]
-        model, base_url = str(local["models"]["pi"]), str(local["base_url"])
+        _, local = _recipe_profile(selection)
+        if not isinstance(local["models"]["pi"], str) or not isinstance(local["base_url"], str):
+            raise TypeError("profile must name a Pi model and a base_url")
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RealityError(f"editable model selection is malformed: {error}") from error
-    live = _local_model_digest(model, base_url)
+    live, build = _live_identity(local)
     if not live:
         return
     baseline = local.get("baseline_digest")
@@ -83,6 +133,16 @@ def refresh_live_digest(destination: Path) -> None:
         changed = True
     if changed:
         local["model_digest"] = live
+    if build is not None and local.get("runtime") == "llama.cpp":
+        # The build is recorded the same way: a newer llama.cpp is reported
+        # against the baseline, never refused.
+        if not local.get("baseline_runtime_build"):
+            local["baseline_runtime_build"] = build
+            changed = True
+        if local.get("runtime_build") != build:
+            local["runtime_build"] = build
+            changed = True
+    if changed:
         _write_json(path, selection)
 
 
@@ -94,24 +154,39 @@ def model_change(recipe_dir: Path, setup: dict[str, Any]) -> dict[str, Any]:
     before its earlier result is relied on.
     """
     baseline = None
+    profile: dict[str, Any] = {}
     try:
         selection = json.loads((recipe_dir / EDITABLE_RECIPE_FILE).read_text(encoding="utf-8"))
-        value = selection["profiles"]["local-ollama"].get("baseline_digest")
+        _, profile = _recipe_profile(selection)
+        value = profile.get("baseline_digest")
         baseline = value if isinstance(value, str) and len(value) == 64 else None
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RealityError):
         baseline = None
     observed = setup.get("model_digest") if isinstance(setup, dict) else None
     observed = observed if isinstance(observed, str) and len(observed) == 64 else None
     matches = None if baseline is None or observed is None else baseline == observed
-    return {"recipe_baseline": baseline, "recorded": observed, "matches_baseline": matches}
+    change: dict[str, Any] = {
+        "recipe_baseline": baseline, "recorded": observed, "matches_baseline": matches,
+    }
+    if profile.get("runtime") == "llama.cpp":
+        base_build, build = profile.get("baseline_runtime_build"), profile.get("runtime_build")
+        change["runtime_build"] = {
+            "recipe_baseline": base_build or None,
+            "recorded": build or None,
+            "matches_baseline": None if not (base_build and build) else base_build == build,
+        }
+    return change
 
 
 class RealityError(ValueError):
     """A Reality Check could not be prepared or interpreted honestly."""
 
 
-def _default_recipe() -> Path:
-    return Path.cwd() / ".hwb" / "recipes" / "coding-python-bug-fix"
+def _default_recipe(profile: str = DEFAULT_RECIPE_PROFILE) -> Path:
+    name = "coding-python-bug-fix"
+    if profile != DEFAULT_RECIPE_PROFILE:
+        name += "-" + profile
+    return Path.cwd() / ".hwb" / "recipes" / name
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -170,7 +245,8 @@ def _validate_recipe(destination: Path) -> Path:
         raise RealityError("Recipe manifest is incomplete or has unknown fields")
     expected_values = {
         "schema": RECIPE_SCHEMA, "check": CHECK, "spec": SPEC_NAME,
-        "subject": "pi", "workload": "repair", "model_profile": "local-ollama",
+        "subject": "pi", "workload": "repair",
+        "model_profile": manifest.get("model_profile"),
         "model_digest_contract": MODEL_DIGEST_CONTRACT,
         "editable_files": [EDITABLE_RECIPE_FILE],
     }
@@ -203,45 +279,69 @@ def _validate_recipe(destination: Path) -> Path:
         selection = json.loads((destination / EDITABLE_RECIPE_FILE).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
         raise RealityError(f"editable model selection is malformed: {error}") from error
-    profiles = selection.get("profiles") if isinstance(selection, dict) else None
-    local = profiles.get("local-ollama") if isinstance(profiles, dict) else None
-    if selection.get("active") != "local-ollama" or not isinstance(local, dict):
-        raise RealityError("Recipe must keep the local-ollama profile active")
+    name, local = _recipe_profile(selection)
+    if name != manifest.get("model_profile"):
+        raise RealityError(
+            f"Recipe profile changed: the manifest says {manifest.get('model_profile')!r}, "
+            f"model_selection.json has {name!r} active"
+        )
     if local.get("digest_contract") != MODEL_DIGEST_CONTRACT:
-        raise RealityError("local-ollama must declare the recorded-only digest contract")
+        raise RealityError(f"{name} must declare the recorded-only digest contract")
     if local.get("verify_digest") is not True:
-        raise RealityError("local-ollama must record the live Ollama digest")
+        raise RealityError(f"{name} must record the live model digest")
+    if name == "local-llamacpp" and local.get("runtime") != "llama.cpp":
+        raise RealityError("local-llamacpp must keep the llama.cpp runtime")
     models = local.get("models")
     if not isinstance(models, dict) or not isinstance(models.get("pi"), str) or not models["pi"]:
-        raise RealityError("local-ollama must name a Pi model")
+        raise RealityError(f"{name} must name a Pi model")
     return spec_path
 
 
-def prepare_recipe(destination: Path) -> tuple[Path, bool]:
-    """Create the thin manifest/spec over the existing subject tree."""
+def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Path, bool]:
+    """Create the thin manifest/spec over the existing subject tree.
+
+    `profile` chooses the model profile for a NEW Recipe (default Ollama).  An
+    existing Recipe keeps the profile it was made with; asking for another one
+    is refused rather than silently ignored.
+    """
     manifest_path = destination / RECIPE_NAME
+    if profile is not None and profile not in RECIPE_PROFILES:
+        raise RealityError(
+            f"unknown Recipe profile {profile!r}; choose one of: " + ", ".join(RECIPE_PROFILES)
+        )
     if destination.exists():
         if not manifest_path.is_file():
             raise RealityError(
                 f"recipe directory exists without {RECIPE_NAME}: {destination}"
             )
-        return _validate_recipe(destination), False
+        spec_path = _validate_recipe(destination)
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))["model_profile"]
+        if profile is not None and profile != existing:
+            raise RealityError(
+                f"Recipe at {destination} uses {existing}; choose another --recipe "
+                f"directory for {profile}"
+            )
+        return spec_path, False
+    profile = profile or DEFAULT_RECIPE_PROFILE
 
     destination.mkdir(parents=True)
     subject_tree.materialize(str(destination))
     selection_path = destination / "model_selection.json"
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
-    if "local-ollama" not in selection.get("profiles", {}):
-        raise RealityError("shipped subject tree has no local-ollama model profile")
-    selection["active"] = "local-ollama"
-    local = selection["profiles"]["local-ollama"]
+    if profile not in selection.get("profiles", {}):
+        raise RealityError(f"shipped subject tree has no {profile} model profile")
+    selection["active"] = profile
+    local = selection["profiles"][profile]
     local["identity_strength"] = "recorded_local_content_digest"
     local["digest_contract"] = MODEL_DIGEST_CONTRACT
-    # Baseline from this machine's Ollama, never the digest the package
-    # shipped; empty when Ollama cannot be read now (the first run adopts it).
-    live = _local_model_digest(str(local["models"]["pi"]), str(local["base_url"])) or ""
-    local["baseline_digest"] = live
-    local["model_digest"] = live
+    # Baseline from this machine's runtime, never the digest the package
+    # shipped; empty when it cannot be read now (the first run adopts it).
+    live, build = _live_identity(local)
+    local["baseline_digest"] = live or ""
+    local["model_digest"] = live or ""
+    if local.get("runtime") == "llama.cpp" and build:
+        local["baseline_runtime_build"] = build
+        local["runtime_build"] = build
     _write_json(selection_path, selection)
     _write_json(destination / SPEC_NAME, _spec())
     required_files = _required_inputs(_spec())
@@ -252,7 +352,7 @@ def prepare_recipe(destination: Path) -> tuple[Path, bool]:
         "spec": SPEC_NAME,
         "subject": "pi",
         "workload": "repair",
-        "model_profile": "local-ollama",
+        "model_profile": profile,
         "model_digest_contract": MODEL_DIGEST_CONTRACT,
         "editable_files": [EDITABLE_RECIPE_FILE],
         "bound_file_digests": _file_digests(destination, bound_names),
@@ -418,11 +518,16 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     }
 
 
-def run_check(check: str, *, runs_root: str, recipe_dir: str | None) -> dict[str, Any]:
+def run_check(
+    check: str, *, runs_root: str, recipe_dir: str | None, profile: str | None = None
+) -> dict[str, Any]:
     if check != CHECK:
         raise RealityError(f"unknown Reality Check: {check}")
-    destination = (Path(recipe_dir).expanduser() if recipe_dir else _default_recipe()).resolve()
-    spec_path, created = prepare_recipe(destination)
+    destination = (
+        Path(recipe_dir).expanduser() if recipe_dir
+        else _default_recipe(profile or DEFAULT_RECIPE_PROFILE)
+    ).resolve()
+    spec_path, created = prepare_recipe(destination, profile)
     refresh_live_digest(destination)
     specification_value = json.loads(spec_path.read_text(encoding="utf-8"))
     effective_digests = _file_digests(
@@ -467,13 +572,28 @@ def _model_line(change: dict[str, Any]) -> str:
         return "Model digest: not observed in this run"
     if not baseline:
         return (f"Model digest: recorded {recorded[:12]}; the Recipe has no baseline yet "
-                "(Ollama was not readable when it was created)")
+                "(the model runtime was not readable when it was created)")
     if change.get("matches_baseline"):
         return f"Model digest: recorded {recorded[:12]}; matches the Recipe's baseline"
     return (f"Model digest: recorded {recorded[:12]}; the Recipe's baseline is {baseline[:12]}. "
             "The model changed since the Recipe was made, so this result applies to the "
             "recorded digest. Re-prove before relying on earlier results; set baseline_digest "
             f"in {EDITABLE_RECIPE_FILE} to adopt the new model.")
+
+
+def _build_line(change: dict[str, Any]) -> str | None:
+    """llama.cpp Recipes also record the server build; Ollama Recipes have none."""
+    build = change.get("runtime_build")
+    if not isinstance(build, dict):
+        return None
+    recorded, baseline = build.get("recorded"), build.get("recipe_baseline")
+    if not recorded:
+        return "llama.cpp build: not readable before this run"
+    if build.get("matches_baseline") or not baseline:
+        return f"llama.cpp build: {recorded}"
+    return (f"llama.cpp build: {recorded}; the Recipe's baseline is {baseline}. "
+            "Re-prove before relying on earlier results; set baseline_runtime_build "
+            f"in {EDITABLE_RECIPE_FILE} to adopt it.")
 
 
 def print_result(result: dict[str, Any]) -> None:
@@ -502,6 +622,9 @@ def print_result(result: dict[str, Any]) -> None:
     print(f"Recipe: {result['recipe']}")
     print(f"Recipe integrity: {result['recipe_contract']}")
     print(_model_line(result.get("model_change") or {}))
+    build_line = _build_line(result.get("model_change") or {})
+    if build_line:
+        print(build_line)
     print(f"Rerun: {result['rerun']}")
     print("\nExplicit blind spots")
     for item in result["blind_spots"]:
