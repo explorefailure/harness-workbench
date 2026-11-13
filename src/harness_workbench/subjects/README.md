@@ -299,6 +299,10 @@ python3.11 certify.py --live \
   --record-dir ../../../measure/certification/five-repair-YYYY-MM-DD
 ```
 
+`--live` refuses to start while any `repair_*.freeze.lock` is left in this
+directory: an earlier run's baselines would make every draw report drift after
+its model calls are spent. Move them aside first.
+
 Offline environment preparation and the all-five doctor run before the usage
 gate, and no provider or Workbench request starts unless all of them pass. The
 retained three-route canary then takes its own fresh usage reading and stops on

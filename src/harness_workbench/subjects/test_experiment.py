@@ -485,6 +485,30 @@ class CommonTests(unittest.TestCase):
                 scan["errors"],
             )
 
+    def test_live_certification_refuses_leftover_freeze_locks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "repair_pi.freeze.lock").write_text("{}")
+            (root / "repair_claude.freeze.lock").write_text("{}")
+            (root / "repair_pi.json").write_text("{}")
+            record = root / "record"
+            stderr = io.StringIO()
+            with mock.patch.object(certify, "HERE", root), mock.patch.object(
+                sys, "argv", ["certify.py", "--live", "--record-dir", str(record)]
+            ), mock.patch.object(certify, "build_plan") as plan, mock.patch.object(
+                certify, "execute"
+            ) as execute, mock.patch("sys.stderr", stderr):
+                with self.assertRaises(SystemExit) as stopped:
+                    certify.main()
+            self.assertEqual(2, stopped.exception.code)
+            self.assertIn(
+                "repair_claude.freeze.lock, repair_pi.freeze.lock", stderr.getvalue()
+            )
+            self.assertNotIn(directory, stderr.getvalue())
+            self.assertFalse(record.exists())
+            plan.assert_not_called()
+            execute.assert_not_called()
+
     def test_certification_usage_gate_starts_no_workbench_run(self) -> None:
         plan = self._certification_live_plan({"rolling": 80})
         ready = {
