@@ -104,6 +104,60 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual({101}, set(tracker.identities))
         self.assertTrue(tracker.errors)
 
+    def test_parent_exit_during_discovery_keeps_known_child_cleanup_clean(self):
+        backend = FakeBackend()
+        self.child(backend)
+        tracker = self.tracker(backend)
+        tracker.identities[102] = backend.processes[102]
+
+        def discover(pid, budget=None):
+            if pid == 101:
+                backend.processes.pop(101)
+                return [102]
+            return []
+
+        def stop(identity, signum, budget=None):
+            backend.processes.pop(identity.pid, None)
+
+        with patch.object(backend, 'children', side_effect=discover):
+            tracker.observe()
+            with patch.object(tracker, '_signal', side_effect=stop):
+                result = tracker.cleanup(.01)
+        self.assertTrue(result['passed'], result)
+        self.assertEqual([], result['errors'])
+
+    def test_parent_exit_during_discovery_does_not_adopt_new_child(self):
+        backend = FakeBackend()
+        self.child(backend)
+        tracker = self.tracker(backend)
+
+        def discover(pid, budget=None):
+            backend.processes.pop(101)
+            return [102]
+
+        with patch.object(backend, 'children', side_effect=discover):
+            tracker.observe()
+        self.assertEqual({101}, set(tracker.identities))
+        self.assertIn('parent identity lost', ' '.join(tracker.errors))
+
+    def test_parent_exit_during_discovery_rejects_changed_known_child(self):
+        backend = FakeBackend()
+        self.child(backend)
+        tracker = self.tracker(backend)
+        tracker.identities[102] = backend.processes[102]
+        backend.processes[102] = tree._Identity(102, 101, (999,))
+
+        def discover(pid, budget=None):
+            if pid == 101:
+                backend.processes.pop(101)
+                return [102]
+            return []
+
+        with patch.object(backend, 'children', side_effect=discover):
+            tracker.observe()
+        self.assertEqual((12,), tracker.identities[102].birth)
+        self.assertIn('parent identity lost', ' '.join(tracker.errors))
+
     def test_reuse_before_kill_and_signal_permission_failure_fail_closed(self):
         backend = FakeBackend()
         self.child(backend)
