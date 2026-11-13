@@ -295,7 +295,8 @@ class ObservedProcessTree:
                     if child is not None and not child.zombie and child.ppid == parent.pid:
                         candidates.append(child)
                 if self._matching(parent, budget) is None:
-                    if candidates:
+                    if any(child.pid in self.retired or child.pid not in self.identities or
+                           self.identities[child.pid].birth != child.birth for child in candidates):
                         self._error("parent identity lost during child discovery")
                     continue
                 for child in candidates:
