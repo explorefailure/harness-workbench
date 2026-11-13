@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -3304,6 +3305,8 @@ class CommonTests(unittest.TestCase):
             )
             self.assertEqual(accepted.returncode, 0)
             self.assertNotIn(secret, evidence.read_text())
+            self.assertIn(adapters.capture_module.REDACTION_MARKER.decode(),
+                          evidence.read_text())
             environment["HWB_HERMES_HOOK_MAX_BYTES"] = "1"
             refused = subprocess.run(
                 [sys.executable, str(adapters.HERE / "hook.py")],
@@ -3314,6 +3317,21 @@ class CommonTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(refused.returncode, 3)
+
+    def test_workspace_copies_never_spell_the_redaction_marker(self) -> None:
+        # Agents can read what is copied into their workspace, and the
+        # certification credential scan counts every literal marker in
+        # retained evidence. A marker in these sources is a false positive
+        # waiting for an agent to cat the file.
+        source = (adapters.HERE / "adapters.py").read_text(encoding="utf-8")
+        copied = sorted(set(re.findall(
+            r'shutil\.copy2\(\s*HERE((?:\s*/\s*"[^"]+")+)\s*,', source)))
+        self.assertTrue(copied)
+        for parts in copied:
+            path = adapters.HERE.joinpath(*re.findall(r'"([^"]+)"', parts))
+            with self.subTest(path=path.name):
+                self.assertNotIn(adapters.capture_module.REDACTION_MARKER,
+                                 path.read_bytes())
 
     def test_hermes_hook_bounds_stdin_before_json_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -5256,6 +5274,14 @@ class ContractComparisonTests(unittest.TestCase):
                         "file": "capture.py",
                         "sha256": digest_file(
                             Path(comparator.capture_module.__file__).resolve()
+                        ),
+                    },
+                    "model_profiles": {
+                        "file": "model_profiles.py",
+                        "sha256": digest_file(
+                            Path(
+                                comparator.model_profiles_module.__file__
+                            ).resolve()
                         ),
                     },
                 },
