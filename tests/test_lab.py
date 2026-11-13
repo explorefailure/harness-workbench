@@ -1048,6 +1048,41 @@ class LabProgressTests(unittest.TestCase):
         self.assertEqual(70, activity["tokens_since_start"])
         self.assertEqual("llama-server /metrics + /slots", activity["source"])
 
+    def test_slots_are_sampled_more_often_than_metrics(self):
+        # A live 1.5B run generated 70 tokens in about 1 s; a 2 s /slots sample
+        # missed all of it because an idle slot reports n_decoded 0. /slots is
+        # now read every SLOTS_INTERVAL, /metrics still every ACTIVITY_INTERVAL.
+        self.assertLessEqual(lab.SLOTS_INTERVAL, 0.5)
+        the_lab = self.lab(lambda *a, **k: None, profile="local-llamacpp")
+        job = {"state": "running", "activity": None}
+        stop = threading.Event()
+        reads = []
+        short_generation = iter([[], self._slot(1, True, 35)]
+                                + [self._slot(1, False, 0)] * 6)
+
+        def opener(url, timeout=None):
+            reads.append(url.rsplit("/", 1)[-1])
+            if url.endswith("/metrics"):
+                raise urllib.error.HTTPError(url, 501, "Not Implemented", {}, None)
+            body = next(short_generation, None)
+            if body is None:
+                stop.set()
+                body = self._slot(1, False, 0)
+            return io.BytesIO(json.dumps(body).encode())
+
+        ticks = iter([index * 0.5 for index in range(100)])
+        the_lab._opener = opener
+        with mock.patch.object(lab, "_clock", lambda: next(ticks)), \
+                mock.patch.object(lab, "ACTIVITY_INTERVAL", 2.0), \
+                mock.patch.object(lab, "SLOTS_INTERVAL", 0):
+            the_lab._sample_activity(job, stop)
+        # 9 ticks of 0.5 s (t = 0 .. 4.0 s): /slots every tick, /metrics at
+        # t = 0, 2 and 4 s only.
+        self.assertEqual(9, reads.count("slots"))
+        self.assertEqual(3, reads.count("metrics"))
+        self.assertEqual(35, job["activity"]["tokens_since_start"])
+        self.assertEqual("llama-server /slots", job["activity"]["source"])
+
     def test_a_request_ending_between_the_two_reads_never_steps_back(self):
         # Tick 3: /metrics is read before the request finishes (still 1000),
         # /slots after it finished (idle, 0). Unclamped, the count would fall

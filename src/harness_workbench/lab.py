@@ -76,6 +76,10 @@ class LabError(Exception):
 EVENTS_SCHEMA_VERSION = 1
 EVENTS_PAGE_LIMIT = 100
 ACTIVITY_INTERVAL = 2.0
+# llama-server resets an idle slot's n_decoded to 0, so a generation shorter
+# than the /slots interval would otherwise vanish between two samples.
+SLOTS_INTERVAL = 0.5
+_clock = time.monotonic  # patched by tests to drive the two intervals
 # How long a stopping Lab waits for the running check to end and seal its
 # record: the step's own SIGTERM grace (runner.STOP_GRACE_S) plus verification.
 SHUTDOWN_WAIT_S = 20.0
@@ -233,11 +237,17 @@ class Lab:
         slot_carry = 0
         last_processing: set[int] = set()
         highest_task = -1
-        # A request that ends between the /metrics and the /slots read leaves both
-        # counts for one tick; only an undercount is possible, so never step back.
+        # /metrics is read at most every ACTIVITY_INTERVAL, /slots every
+        # SLOTS_INTERVAL. A finished request leaves /slots before an older /metrics
+        # reading counts it; only an undercount is possible, so never step back.
         shown: dict[str, int] = {}
+        metrics: Optional[dict[str, Any]] = None
+        metrics_at = 0.0
         while not stop.is_set():
-            metrics = discovermod.llamacpp_tokens_predicted(base_url, opener=self._opener)
+            now = _clock()
+            if metrics is None or now - metrics_at >= ACTIVITY_INTERVAL:
+                metrics = discovermod.llamacpp_tokens_predicted(base_url, opener=self._opener)
+                metrics_at = now
             slots = discovermod.llamacpp_slots(base_url, opener=self._opener)
             if metrics["available"]:
                 tokens = metrics["tokens"]
@@ -324,7 +334,7 @@ class Lab:
                     job["activity"] = {
                         "available": False,
                         "reason": f"/metrics: {metrics['reason']}; /slots: {slots['reason']}"}
-            stop.wait(ACTIVITY_INTERVAL)
+            stop.wait(min(SLOTS_INTERVAL, ACTIVITY_INTERVAL))
 
     @staticmethod
     def _monotone(shown: dict[str, int], source: str, value: int) -> int:
