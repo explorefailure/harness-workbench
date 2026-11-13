@@ -224,26 +224,113 @@ class Lab:
             base_url = None
         base_url = base_url or discovermod.LLAMACPP_DEFAULT_URL
         previous: Optional[int] = None
-        total = 0
+        metrics_total = 0
+        slot_baselines: dict[int, int] = {}
+        slot_highs: dict[int, int] = {}
+        pre_existing: set[int] = set()
+        subtracted: set[int] = set()
+        first_slots = True
+        slot_carry = 0
+        last_processing: set[int] = set()
+        highest_task = -1
+        # A request that ends between the /metrics and the /slots read leaves both
+        # counts for one tick; only an undercount is possible, so never step back.
+        shown: dict[str, int] = {}
         while not stop.is_set():
-            reading = discovermod.llamacpp_tokens_predicted(base_url, opener=self._opener)
+            metrics = discovermod.llamacpp_tokens_predicted(base_url, opener=self._opener)
+            slots = discovermod.llamacpp_slots(base_url, opener=self._opener)
+            if metrics["available"]:
+                tokens = metrics["tokens"]
+                if previous is not None:
+                    # A drop means the server restarted and counts from 0.
+                    if tokens < previous:
+                        slot_carry += (sum(slot_highs[t] - slot_baselines[t]
+                                           for t in last_processing)
+                                       - sum(slot_baselines[t] for t in subtracted))
+                        slot_baselines.clear()
+                        slot_highs.clear()
+                        pre_existing.clear()
+                        subtracted.clear()
+                        last_processing.clear()
+                        highest_task = -1
+                    metrics_total += tokens - previous if tokens >= previous else tokens
+                previous = tokens
+
+            processing: set[int] = set()
+            if slots["available"]:
+                task_ids = [slot["task"] for slot in slots["slots"]
+                            if slot["task"] is not None]
+                if task_ids and max(task_ids) < highest_task:
+                    slot_carry += sum(slot_highs[t] - slot_baselines[t]
+                                      for t in slot_highs)
+                    slot_baselines.clear()
+                    slot_highs.clear()
+                    pre_existing.clear()
+                    subtracted.clear()
+                    last_processing.clear()
+                    highest_task = -1
+                for slot in slots["slots"]:
+                    task, decoded = slot["task"], slot["decoded"]
+                    if task is None:
+                        continue
+                    highest_task = max(highest_task, task)
+                    if task not in slot_baselines:
+                        baseline = decoded if first_slots else 0
+                        slot_baselines[task] = baseline
+                        slot_highs[task] = decoded
+                        if first_slots and slot["processing"]:
+                            pre_existing.add(task)
+                    else:
+                        slot_highs[task] = max(slot_highs[task], decoded)
+                    if slot["processing"]:
+                        processing.add(task)
+                first_slots = False
+                if metrics["available"]:
+                    for task in pre_existing - processing - subtracted:
+                        subtracted.add(task)
+                last_processing = processing
+
             with self._lock:
                 if job["state"] != "running":
                     return
-                if reading["available"]:
-                    tokens = reading["tokens"]
-                    if previous is not None:
-                        # A drop means the server restarted and counts from 0.
-                        total += tokens - previous if tokens >= previous else tokens
-                    previous = tokens
+                if metrics["available"] and slots["available"]:
+                    in_flight = sum(slot_highs[t] - slot_baselines[t] for t in processing)
+                    adjustment = sum(slot_baselines[t] for t in subtracted)
+                    job["activity"] = {
+                        "available": True, "source": "llama-server /metrics + /slots",
+                        "tokens_since_start": self._monotone(
+                            shown, "metrics+slots",
+                            metrics_total + slot_carry + in_flight - adjustment),
+                        "scope": "every client of this llama-server, not only this run",
+                        "at": time.time()}
+                elif slots["available"]:
+                    total = (slot_carry
+                             + sum(slot_highs[t] - slot_baselines[t] for t in slot_highs))
+                    job["activity"] = {
+                        "available": True, "source": "llama-server /slots",
+                        "tokens_since_start": self._monotone(shown, "slots", total),
+                        "approximate": True,
+                        "note": ("This can miss tokens generated after the last sample "
+                                 "when a request ends, up to one sampling interval."),
+                        "scope": "every client of this llama-server, not only this run",
+                        "at": time.time()}
+                elif metrics["available"]:
                     job["activity"] = {
                         "available": True, "source": "llama-server /metrics",
-                        "tokens_since_start": total,
+                        "tokens_since_start": self._monotone(shown, "metrics", metrics_total),
                         "scope": "every client of this llama-server, not only this run",
                         "at": time.time()}
                 else:
-                    job["activity"] = {"available": False, "reason": reading["reason"]}
+                    job["activity"] = {
+                        "available": False,
+                        "reason": f"/metrics: {metrics['reason']}; /slots: {slots['reason']}"}
             stop.wait(ACTIVITY_INTERVAL)
+
+    @staticmethod
+    def _monotone(shown: dict[str, int], source: str, value: int) -> int:
+        """Never report fewer tokens than this source already reported."""
+        shown[source] = max(0, value, shown.get(source, 0))
+        return shown[source]
 
     def _view(self, job: dict[str, Any], after: Optional[int]) -> dict[str, Any]:
         # Caller holds self._lock.

@@ -154,6 +154,7 @@ def llamacpp(base_url: str, opener=urlopen) -> dict[str, Any]:
 
 LLAMACPP_DEFAULT_URL = "http://127.0.0.1:8081/v1"
 _TOKENS_PREDICTED = "llamacpp:tokens_predicted_total"
+_SLOTS_BODY_LIMIT = 1 << 20
 
 
 def llamacpp_tokens_predicted(base_url: str, opener=urlopen) -> dict[str, Any]:
@@ -184,6 +185,55 @@ def llamacpp_tokens_predicted(base_url: str, opener=urlopen) -> dict[str, Any]:
             break
     return {"available": False, "url": url, "tokens": None,
             "reason": f"/metrics has no usable {_TOKENS_PREDICTED} counter"}
+
+
+def llamacpp_slots(base_url: str, opener=urlopen) -> dict[str, Any]:
+    """Read only task progress numbers from llama-server's /slots endpoint."""
+    url = _endpoint(base_url) + "/slots"
+    unavailable = {"available": False, "url": url, "slots": []}
+    try:
+        with opener(url, timeout=_PROBE_TIMEOUT) as response:
+            body = response.read(_SLOTS_BODY_LIMIT + 1)
+    except (URLError, OSError, ValueError) as error:
+        off = (getattr(error, "code", None) in (404, 501)
+               or "does not support slots endpoint" in str(error).lower())
+        reason = ("llama-server /slots is off when started with --no-slots"
+                  if off else str(error))
+        return {**unavailable, "reason": reason}
+    if len(body) > _SLOTS_BODY_LIMIT:
+        return {**unavailable, "reason": "/slots response exceeds 1 MiB limit"}
+    text = body.decode("utf-8", "replace")
+    if "does not support slots endpoint" in text.lower():
+        return {**unavailable,
+                "reason": "llama-server /slots is off when started with --no-slots"}
+    try:
+        payload = json.loads(text, strict=False)
+    except (ValueError, TypeError):
+        return {**unavailable, "reason": "llama-server returned malformed /slots JSON"}
+    if not isinstance(payload, list):
+        return {**unavailable, "reason": "llama-server returned unexpected /slots document"}
+
+    slots = []
+    for item in payload:
+        if not isinstance(item, dict) or not isinstance(item.get("is_processing"), bool):
+            return {**unavailable, "reason": "/slots contains a malformed slot"}
+        task = item.get("id_task")
+        if task is not None and (isinstance(task, bool) or not isinstance(task, int)
+                                 or task < 0):
+            return {**unavailable, "reason": "/slots contains a malformed task id"}
+        decoded = None
+        if task is not None:
+            next_token = item.get("next_token")
+            if not isinstance(next_token, list) or not next_token \
+                    or not isinstance(next_token[0], dict):
+                return {**unavailable, "reason": "/slots contains malformed token progress"}
+            decoded = next_token[0].get("n_decoded")
+            if (isinstance(decoded, bool) or not isinstance(decoded, int)
+                    or decoded < 0):
+                return {**unavailable, "reason": "/slots contains malformed token progress"}
+        slots.append({"task": task, "processing": item["is_processing"],
+                      "decoded": decoded})
+    return {"available": True, "url": url, "slots": slots, "reason": None}
 
 
 def runtime(state: dict[str, Any], opener=urlopen) -> dict[str, Any]:

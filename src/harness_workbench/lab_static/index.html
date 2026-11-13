@@ -548,7 +548,7 @@
     var a = job.activity;
     $("tActivity").hidden = !a;
     if (a) text("tActivity", a.available
-      ? "Model activity: " + a.tokens_since_start.toLocaleString() + " tokens generated since the run began (" + a.source + "; counts " + a.scope + ")."
+      ? "Model activity: " + a.tokens_since_start.toLocaleString() + " tokens generated since the run began (" + a.source + "; counts " + a.scope + ")." + (a.note ? " " + a.note : "")
       : "Model activity unavailable: " + a.reason + ".");
     text("tExpect", job.previous_duration ? "The last run on this Lab took " + clock(job.previous_duration) + "." : "A run usually takes a few minutes.");
   }
