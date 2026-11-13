@@ -692,6 +692,8 @@ def fake_metrics(counts):
     values = iter(counts)
 
     def opener(url, timeout=None):
+        if url.endswith("/slots"):
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
         assert url.endswith("/metrics"), url
         value = next(values, None)
         if value is None:
@@ -734,6 +736,56 @@ class MetricsReaderTests(unittest.TestCase):
                     "http://h:1", opener=lambda url, timeout=None, b=body: io.BytesIO(b))
                 self.assertFalse(reading["available"])
                 self.assertIsNone(reading["tokens"])
+
+
+class SlotsReaderTests(unittest.TestCase):
+    @staticmethod
+    def read(payload):
+        body = json.dumps(payload).encode()
+        return discover.llamacpp_slots(
+            "http://h:1/v1", opener=lambda url, timeout=None: io.BytesIO(body))
+
+    def test_returns_only_progress_numbers(self):
+        reading = self.read([{
+            "id": 2, "id_task": 17, "is_processing": True,
+            "prompt": "private prompt", "generated": "private answer",
+            "next_token": [{"n_decoded": 9, "has_next_token": True}],
+        }, {"id": 3, "is_processing": False}])
+        self.assertEqual({
+            "available": True, "url": "http://h:1/slots",
+            "slots": [
+                {"task": 17, "processing": True, "decoded": 9},
+                {"task": None, "processing": False, "decoded": None},
+            ], "reason": None,
+        }, reading)
+        self.assertNotIn("private", repr(reading))
+
+    def test_oversize_body_is_unavailable(self):
+        body = b"[" + b" " * (discover._SLOTS_BODY_LIMIT + 1)
+        reading = discover.llamacpp_slots(
+            "http://h:1", opener=lambda url, timeout=None: io.BytesIO(body))
+        self.assertFalse(reading["available"])
+        self.assertIn("exceeds", reading["reason"])
+
+    def test_malformed_shapes_are_unavailable(self):
+        cases = [
+            {},
+            [{"id_task": True, "is_processing": True,
+              "next_token": [{"n_decoded": 1}]}],
+            [{"id_task": -1, "is_processing": True,
+              "next_token": [{"n_decoded": 1}]}],
+            [{"id_task": 1, "is_processing": True}],
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertFalse(self.read(payload)["available"])
+
+    def test_disabled_endpoint_mentions_no_slots(self):
+        def disabled(url, timeout=None):
+            raise urllib.error.HTTPError(url, 501, "Not Implemented", {}, None)
+        reading = discover.llamacpp_slots("http://h:1", opener=disabled)
+        self.assertFalse(reading["available"])
+        self.assertIn("--no-slots", reading["reason"])
 
 
 class LabProgressTests(unittest.TestCase):
@@ -900,6 +952,8 @@ class LabProgressTests(unittest.TestCase):
         reported = []
 
         def opener(url, timeout=None):
+            if url.endswith("/slots"):
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
             reported.append(job["activity"] and job["activity"]["tokens_since_start"])
             if len(reported) == len(counts):
                 stop.set()
@@ -922,6 +976,8 @@ class LabProgressTests(unittest.TestCase):
         reported = []
 
         def opener(url, timeout=None):
+            if url.endswith("/slots"):
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
             reported.append(job["activity"] and job["activity"]["tokens_since_start"])
             if len(reported) == len(counts):
                 stop.set()
@@ -936,6 +992,105 @@ class LabProgressTests(unittest.TestCase):
         # A first-reading baseline would have reported 100 or gone negative.
         self.assertEqual([None, 0, 300, 1400], reported)
         self.assertEqual(1450, job["activity"]["tokens_since_start"])
+
+    def _sample_sequence(self, metrics, slots):
+        the_lab = self.lab(lambda *a, **k: None, profile="local-llamacpp")
+        job = {"state": "running", "activity": None}
+        stop = threading.Event()
+        reported = []
+        tick = 0
+
+        calls = 0
+
+        def opener(url, timeout=None):
+            nonlocal tick, calls
+            calls += 1
+            if calls > 4 * len(slots):  # a sampler that never reads /slots
+                stop.set()
+                raise urllib.error.HTTPError(url, 501, "Not Implemented", {}, None)
+            if url.endswith("/metrics"):
+                value = metrics[min(tick, len(metrics) - 1)]
+                if value is None:
+                    raise urllib.error.HTTPError(url, 501, "Not Implemented", {}, None)
+                return io.BytesIO(
+                    f"llamacpp:tokens_predicted_total {value}\n".encode())
+            self.assertTrue(url.endswith("/slots"), url)
+            if slots[tick] is None:
+                tick += 1
+                if tick == len(slots):
+                    stop.set()
+                reported.append(job["activity"] and dict(job["activity"]))
+                raise urllib.error.HTTPError(url, 501, "Not Implemented", {}, None)
+            result = io.BytesIO(json.dumps(slots[tick]).encode())
+            tick += 1
+            if tick == len(slots):
+                stop.set()
+            reported.append(job["activity"] and dict(job["activity"]))
+            return result
+
+        the_lab._opener = opener
+        with mock.patch.object(lab, "ACTIVITY_INTERVAL", 0):
+            the_lab._sample_activity(job, stop)
+        return reported, job["activity"]
+
+    @staticmethod
+    def _slot(task, processing, decoded):
+        return [{"id_task": task, "is_processing": processing,
+                 "next_token": [{"n_decoded": decoded}]}]
+
+    def test_slots_show_in_flight_tokens_without_double_counting_metrics(self):
+        reported, activity = self._sample_sequence(
+            [1000, 1000, 1120],
+            [self._slot(7, True, 50), self._slot(7, True, 120),
+             self._slot(7, False, 0)])
+        self.assertEqual([None, 0, 70],
+                         [a and a["tokens_since_start"] for a in reported])
+        self.assertEqual(70, activity["tokens_since_start"])
+        self.assertEqual("llama-server /metrics + /slots", activity["source"])
+
+    def test_a_request_ending_between_the_two_reads_never_steps_back(self):
+        # Tick 3: /metrics is read before the request finishes (still 1000),
+        # /slots after it finished (idle, 0). Unclamped, the count would fall
+        # from 120 to 0 for one tick; the next tick's /metrics restores it.
+        reported, activity = self._sample_sequence(
+            [1000, 1000, 1000, 1120],
+            [[], self._slot(7, True, 120), self._slot(7, False, 0),
+             self._slot(7, False, 0)])
+        self.assertEqual([None, 0, 120, 120],
+                         [a and a["tokens_since_start"] for a in reported])
+        self.assertEqual(120, activity["tokens_since_start"])
+
+    def test_slots_only_keeps_high_water_mark_and_tracks_a_new_task(self):
+        reported, activity = self._sample_sequence(
+            [None, None, None, None],
+            [self._slot(7, True, 50), self._slot(7, True, 120),
+             self._slot(7, False, 0), self._slot(8, True, 30)])
+        self.assertEqual([None, 0, 70, 70],
+                         [a and a["tokens_since_start"] for a in reported])
+        self.assertEqual(100, activity["tokens_since_start"])
+        self.assertEqual("llama-server /slots", activity["source"])
+        self.assertTrue(activity["approximate"])
+        self.assertIn("sampling interval", activity["note"])
+
+    def test_activity_unavailable_names_both_endpoint_causes(self):
+        _, activity = self._sample_sequence([None], [None])
+        self.assertFalse(activity["available"])
+        self.assertIn("--metrics", activity["reason"])
+        self.assertIn("--no-slots", activity["reason"])
+
+    def test_metrics_restart_carries_slot_progress_and_allows_reused_task_id(self):
+        _, activity = self._sample_sequence(
+            [1000, 1000, 0],
+            [self._slot(9, True, 10), self._slot(9, True, 30),
+             self._slot(1, True, 5)])
+        self.assertEqual(25, activity["tokens_since_start"])
+
+    def test_slots_only_lower_task_id_carries_progress_across_restart(self):
+        _, activity = self._sample_sequence(
+            [None, None, None],
+            [self._slot(9, True, 10), self._slot(9, True, 30),
+             self._slot(1, True, 5)])
+        self.assertEqual(25, activity["tokens_since_start"])
 
     def test_ollama_runs_report_no_activity(self):
         def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
