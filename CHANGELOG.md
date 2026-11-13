@@ -7,6 +7,16 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Fix: `capture.run_bounded` could drop a child's last output. If its readiness
+  wait timed out while the child was still running, and the child then wrote
+  and exited before the exit check, the loop treated the pipes as drained.
+  It now samples the exit before the wait. This was the rare macOS CI failure
+  with empty captured stdout.
+- `harness_workbench.model_profiles` (new public module): one implementation of
+  the `HWB_MODEL_PROFILES` owner-profile overlay, used by Reality Checks and the
+  certified subject adapter. The adapter now also rejects unsafe profile names,
+  as Reality Checks already did. The module is a certified apparatus module
+  alongside `canon` and `capture`.
 - Fix: stopping `hwb lab` while a check is running no longer leaves the
   agent's processes behind. Closing the terminal or `kill` (SIGHUP/SIGTERM)
   used to end the Lab at once, while the subject runner and Pi kept running,

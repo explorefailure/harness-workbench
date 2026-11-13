@@ -331,6 +331,7 @@ def run_bounded(
                 # that initiates teardown. Output provoked by SIGTERM arrives
                 # in a later cycle and remains an independent overflow fact;
                 # it must not rewrite the already observed initiating reason.
+                exited_before_select = process.poll() is not None
                 ready = selector.select(timeout=0.05)
                 cycle_limit_streams: set[str] = set()
                 for key, _ in ready:
@@ -356,12 +357,12 @@ def run_bounded(
                             cycle_limit_streams.add(stream)
                 if reason is None and cycle_limit_streams:
                     terminate(_stream_limit_reason(cycle_limit_streams))
-                if process.poll() is not None and not read_any:
-                    # The child is gone and the pipe is drained -- anything
-                    # still holding it is a grandchild that outlived its parent.
-                    # Reading to EOF here would block on a process this run does
-                    # not control, so stop: the orphan is a finding, reported by
-                    # the group check below, not something to wait for.
+                if exited_before_select and not read_any:
+                    # The child was gone before this readiness wait and no bytes
+                    # arrived, so it cannot add more. Anything still holding a
+                    # pipe is a grandchild that outlived its parent. Reading to
+                    # EOF would block on a process this run does not control, so
+                    # stop: the orphan is reported by the group check below.
                     break
         finally:
             selector.close()

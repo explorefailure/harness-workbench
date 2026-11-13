@@ -325,6 +325,7 @@ def _digest_errors(
             {
                 "canon": paths["package"] / "canon.py",
                 "capture": paths["package"] / "capture.py",
+                "model_profiles": paths["package"] / "model_profiles.py",
             },
         ),
     )

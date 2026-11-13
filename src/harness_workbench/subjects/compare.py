@@ -15,6 +15,7 @@ from typing import Any
 import harness_workbench
 from harness_workbench import canon as canon_module
 from harness_workbench import capture as capture_module
+from harness_workbench import model_profiles as model_profiles_module
 from harness_workbench.capture import digest_file, manifest, parse_jsonl
 from harness_workbench.conform import NonConforming, validate_record
 from oracles import EXPECTED_CONTENT
@@ -589,6 +590,7 @@ def verify_apparatus(
     live_modules = {
         "canon": Path(canon_module.__file__).resolve(),
         "capture": Path(capture_module.__file__).resolve(),
+        "model_profiles": Path(model_profiles_module.__file__).resolve(),
     }
     expected_live = {
         "schema": "hwb-subject-apparatus/v0.1",
@@ -606,7 +608,9 @@ def verify_apparatus(
     if type(apparatus.get("version")) is not str or not apparatus["version"]:
         errors.append(f"{label} adapter has invalid apparatus version")
     modules = apparatus.get("modules")
-    if not isinstance(modules, dict) or set(modules) != {"canon", "capture"}:
+    if not isinstance(modules, dict) or set(modules) != {
+        "canon", "capture", "model_profiles"
+    }:
         errors.append(f"{label} adapter has invalid apparatus modules")
     else:
         for name, module in modules.items():
@@ -649,7 +653,7 @@ def verify_apparatus(
                 f"{label} adapter has invalid apparatus changed modules"
             )
         elif changed is not None and any(
-            name not in {"canon", "capture"} for name in changed
+            name not in {"canon", "capture", "model_profiles"} for name in changed
         ):
             errors.append(
                 f"{label} adapter has invalid apparatus changed modules"
