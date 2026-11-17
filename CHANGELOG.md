@@ -29,6 +29,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   beforehand. The new Recipe is validated before it replaces the old one, so
   a failed update leaves the old Recipe untouched. A Recipe with edited files
   is still refused.
+- Docs: the README's install steps now work for a newcomer on a clean
+  machine: install from `main` (v0.2.0 has no `hwb lab`), the Debian/Ubuntu
+  `python3-venv` prerequisite, and concrete commands for Node and npm, Pi,
+  Ollama, and the 13 GB model, plus CPU-only timing.
 - Change: the Reality Check runs on the Pi and Node you have instead of
   refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
   version and executable hash and the Node version; `hwb try` and the Lab's

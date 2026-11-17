@@ -79,11 +79,15 @@ record. The package is not published to PyPI.
 ### Install Workbench
 
 Use Python 3.11–3.14 on Linux or macOS. Workbench has zero Python runtime
-dependencies; the coding agent, Node, and Ollama are separate prerequisites.
-Installing from source may download build dependencies.
+dependencies; the coding agent, Node, and Ollama are separate prerequisites
+(next section). Installing from source may download build dependencies.
+
+Install from `main`. The local web GUI (`hwb lab`), the setup hints, and the
+Reality Check on any Pi, Node, and Python version are not in v0.2.0 yet; the
+next release will include them.
 
 ```sh
-git clone --branch v0.2.0 https://github.com/explorefailure/harness-workbench.git
+git clone https://github.com/explorefailure/harness-workbench.git
 cd harness-workbench
 python3 -m venv .venv
 . .venv/bin/activate
@@ -91,42 +95,61 @@ python -m pip install .
 hwb --version
 ```
 
-Release wheels and source archives are also available from the
+On Debian and Ubuntu, `python3 -m venv` fails until the venv package is
+installed: `sudo apt install python3-venv`, then delete `.venv` and run the
+`venv` line again.
+
+Release wheels and source archives for v0.2.0 are available from the
 [release page](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
 
 ### Prepare the local coding setup
 
 The first Reality Check is a demo of the feature, built around one specific
 setup so you can try the complete run, verification, and Recipe experience.
-These exact requirements apply to this demo. Support for additional local AI
-runtimes and integrations with agent tracing software are coming soon, with
-more models, coding agents, and configurations planned as the feature expands.
-Workbench will complement the tracing tools you already use, bringing their
-traces together with independent checks and controlled experiments to help you
-understand failures, improve your setup, and get better results from local AI.
+Support for additional local AI runtimes and integrations with agent tracing
+software are coming soon, with more models, coding agents, and configurations
+planned as the feature expands. Workbench will complement the tracing tools you
+already use, bringing their traces together with independent checks and
+controlled experiments to help you understand failures, improve your setup, and
+get better results from local AI.
 
-The demo requires:
+The demo needs three things. Workbench does not install them, download models,
+or reconfigure your model server for you:
 
-- Ollama running locally at `http://127.0.0.1:11434`, with `gpt-oss:20b`
-  installed and enough memory to run it.
-- Pi and Node on `PATH`. Any versions work; the run records which Pi (version
-  and executable hash) and which Node it used. The check was built and tested
-  with Pi 0.84.1 on Node 22.22.3 (the
-  [shipped pins](src/harness_workbench/subjects/pin.json)); a Pi that behaves
-  differently can make a run fail or come out invalid, but cannot make it pass,
-  because the verdict comes from Workbench's own test run, not from Pi.
+1. **Node.js and npm.** Get them from [nodejs.org](https://nodejs.org/en/download)
+   or your package manager. Debian and Ubuntu ship npm separately:
+   `sudo apt install nodejs npm`.
+2. **The Pi coding agent:** `npm install -g @earendil-works/pi-coding-agent`.
+   If npm's global folder belongs to root (the Debian/Ubuntu default), prefix
+   the command with `sudo`.
+3. **Ollama** from [ollama.com/download](https://ollama.com/download), running at
+   `http://127.0.0.1:11434`, with the demo's model downloaded:
+   `ollama pull gpt-oss:20b`. The download is about 13 GB, and the model needs
+   about that much free memory to run.
 
-This is the subject adapter's baseline Pi setup. The separate
-[Pi builder integration](docs/pi-builder.md) defaults to a newer Pi/Node pair;
-that default does not satisfy this Reality Check's pins. Workbench does not
-install these tools, download models, or reconfigure your model server for you.
+Then check the machine:
 
-**Known v0.2.0 setup issue:** the shipped local profile enforces a historical
-Ollama model digest. If your installed model has different bytes, the check can
-return `INVALID` before the agent starts. That is a setup failure, not a failed
-repair. A correction is in development; it is not included in v0.2.0. The
-intended behavior is to record your live model identity and flag changes for
-another proof.
+```sh
+hwb setup
+```
+
+`hwb setup` names anything still missing and how to install it.
+
+Any Pi and Node versions work. The run records which Pi (version and executable
+hash) and which Node it used. The check was built and tested with Pi 0.84.1 on
+Node 22.22.3 (the [shipped pins](src/harness_workbench/subjects/pin.json)); a Pi
+that behaves differently can make a run fail or come out invalid, but cannot
+make it pass, because the verdict comes from Workbench's own test run, not from
+Pi. The pins matter only for certifying the adapters, not for your run. The
+separate [Pi builder integration](docs/pi-builder.md) defaults to a newer
+Pi/Node pair.
+
+A GPU is not required. Without one, Ollama runs the model on the CPU: on a
+12-core laptop-class CPU the whole check took about 3 to 4 minutes.
+
+v0.2.0 enforced a historical Ollama model digest and could return `INVALID`
+before the agent started; `main` records your model's identity instead and
+flags a change for another proof.
 
 ### Run the Reality Check
 
