@@ -7,6 +7,20 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Change: the Reality Check runs on the Pi and Node you have instead of
+  refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
+  version and executable hash and the Node version; `hwb try` and the Lab's
+  Proof page show them. The verdict still comes from Workbench's own test run,
+  so a different Pi can fail a run but cannot pass it.
+- Fix: the Pi adapter now reads a command's exit status where Pi 1.x reports
+  it (`result.structuredContent.exit_code`), so a red test run under Pi 1.4.0
+  is recognised and a correct repair can pass. A JSON true/false is no longer
+  accepted as an exit status.
+- Change: the subject adapters no longer decide which harness versions are
+  allowed; they record what is installed. Certification still requires the
+  pinned identities (the doctor reports `pin_drift` before a live run and the
+  comparison rejects any other identity), so a future change to that policy no
+  longer edits certified bytes.
 - Fix: `capture.run_bounded` could drop a child's last output. If its readiness
   wait timed out while the child was still running, and the child then wrote
   and exited before the exit check, the loop treated the pipes as drained.

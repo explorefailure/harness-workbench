@@ -592,7 +592,7 @@
     var runId = (result.record || "").split("/").pop();
     text("h-proof", "Proof · " + runId + (rederived ? " · re-derived from the record" : ""));
     var su = result.setup || {};
-    $("pSetup").replaceChildren.apply($("pSetup"), [su.subject ? "Pi " + (su.pi_version || "") : null, su.model, su.model_profile].filter(Boolean)
+    $("pSetup").replaceChildren.apply($("pSetup"), [su.subject ? "Pi " + (su.pi_version || "") : null, su.node_version && su.node_version !== "unobserved" ? "Node " + su.node_version : null, su.model, su.model_profile].filter(Boolean)
       .map(function (t) { return el("span", { class: "chip", text: t }); }));
     var facts = (result.facts || []).filter(function (f) { return f.fact !== "model_completion_claim_used_as_verdict"; });
     var ok = facts.filter(function (f) { return f.observed; }).length;

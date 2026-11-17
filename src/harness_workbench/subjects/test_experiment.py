@@ -2331,6 +2331,85 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(commit, identity["source_commit"])
         self.assertEqual(pin["uv_lock_sha256"], identity["uv_lock_sha256"])
 
+    def _pi_identity_with_node(self, node: str, version: str = "0.84.1",
+                               same_bytes: bool = True) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as raw:
+            executable = Path(raw) / "pi"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            pin = {"version": "0.84.1", "node_version": "22.22.3",
+                   "executable_sha256": digest_file(executable)}
+            if not same_bytes:
+                executable.write_text("#!/bin/sh\n# another Pi build\n", encoding="utf-8")
+            with (
+                mock.patch.object(adapters, "_pins",
+                                  return_value={"pi_coding_agent": pin}),
+                mock.patch.object(adapters, "_executable", return_value=executable),
+                mock.patch.object(adapters, "_command_text",
+                                  side_effect=[version, f"v{node}"]),
+            ):
+                identity = adapters._verify_identity("pi")
+                identity["_pin"] = pin
+                return identity
+
+    def test_pi_runs_on_any_pi_build_and_records_it(self) -> None:
+        # Owner decision 2026-11-17: a user's own Pi runs too. The adapter only
+        # records it; the independent repair oracle, not Pi, decides PASS.
+        identity = self._pi_identity_with_node("22.22.3", version="1.4.0", same_bytes=False)
+        self.assertEqual("1.4.0", identity["version"])
+        self.assertNotEqual(identity["_pin"]["executable_sha256"],
+                            identity["executable_sha256"])
+
+    def test_doctor_refuses_an_unpinned_harness_before_certification(self) -> None:
+        pinned = self._pi_identity_with_node("22.22.3")
+        pin = pinned.pop("_pin")
+        with mock.patch.object(adapters, "_pins", return_value={"pi_coding_agent": pin}):
+            self.assertEqual([], doctor._pin_mismatches("pi", pinned))
+            for change in ({"version": "1.4.0"}, {"executable_sha256": "0" * 64},
+                           {"node_version": "26.13.0"}):
+                with self.subTest(change=change):
+                    problems = doctor._pin_mismatches("pi", {**pinned, **change})
+                    self.assertEqual(1, len(problems))
+                    self.assertIn(next(iter(change)), problems[0])
+                    self.assertIn("does not match pin.json", problems[0])
+
+    def test_any_harness_identity_is_recorded_not_refused(self) -> None:
+        # No version policy is left in the certified adapter, so changing that
+        # policy later needs no live recertification.
+        pin = dict(adapters._pins()["claude_code"])
+        with tempfile.TemporaryDirectory() as raw:
+            executable = Path(raw) / "claude"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            with (
+                mock.patch.object(adapters, "_pins", return_value={"claude_code": pin}),
+                mock.patch.object(adapters, "_executable", return_value=executable),
+                mock.patch.object(adapters, "_command_text", return_value="9.9.9 (Claude Code)"),
+            ):
+                identity = adapters._verify_identity("claude")
+        self.assertEqual("9.9.9", identity["version"])
+        errors: list[str] = []
+        comparator.verify_adapter_subject("claude", identity, errors)
+        self.assertEqual(["claude adapter identity disagrees with declarations"], errors)
+
+    def test_pi_runs_on_any_node_and_records_the_version(self) -> None:
+        # Node is the runtime under Pi, not the measured subject (owner
+        # decision 2026-11-17): a user's Reality Check must not be refused
+        # because their Node differs from the pin.
+        identity = self._pi_identity_with_node("26.13.0")
+        self.assertEqual("26.13.0", identity["node_version"])
+        self.assertEqual("0.84.1", identity["version"])
+        self.assertEqual("22.22.3", self._pi_identity_with_node("22.22.3")["node_version"])
+
+    def test_certification_still_requires_the_pinned_node(self) -> None:
+        declared = comparator._declared_subject_identity("pi")
+        self.assertEqual(adapters._pins()["pi_coding_agent"]["node_version"],
+                         declared["node_version"])
+        errors: list[str] = []
+        comparator.verify_adapter_subject("pi", dict(declared), errors)
+        self.assertEqual([], errors)
+        other_node = {**declared, "node_version": "26.13.0"}
+        comparator.verify_adapter_subject("pi", other_node, errors)
+        self.assertEqual(["pi adapter identity disagrees with declarations"], errors)
+
     def test_hermes_identity_rejects_a_tag_object_substitution(self) -> None:
         pin = dict(adapters._pins()["hermes_agent"])
         pin["tag_object"] = "0" * 40
@@ -3676,6 +3755,33 @@ class CodexNormalizerTests(unittest.TestCase):
 
 
 class PiNormalizerTests(unittest.TestCase):
+    @staticmethod
+    def _pi1_unittest(call_id: str, structured: dict[str, Any]) -> tuple[dict, dict]:
+        # Shape recorded from a live Pi 1.4.0 run: the status is in
+        # result.structuredContent, and isError stays false for a red test run.
+        start = {"type": "tool_execution_start", "toolCallId": call_id, "toolName": "bash",
+                 "args": {"command": "python3.11 -m unittest -v", "timeout": 30}}
+        end = {"type": "tool_execution_end", "toolCallId": call_id, "toolName": "bash",
+               "result": {"content": [{"type": "text", "text": "FAILED (failures=1)\n"}],
+                          "structuredContent": {"output": "FAILED (failures=1)\n",
+                                                "truncated": False, **structured}},
+               "isError": False, "durationMs": 40}
+        return start, end
+
+    def test_pi1_structured_exit_code_is_read_and_boolean_is_rejected(self) -> None:
+        for structured, expected in (({"exit_code": 1}, 1), ({"exit_code": 0}, 0),
+                                     ({"exit_code": True}, None), ({}, None)):
+            with self.subTest(structured=structured):
+                start, end = self._pi1_unittest("call_red", structured)
+                lifecycle, _ = adapters._normalize_pi(
+                    jsonl({"type": "session"}, start, end, {"type": "agent_end"},
+                          {"type": "agent_settled"}),
+                    Path("/workspace"),
+                )
+                execution = lifecycle["tool_executions"][0]
+                self.assertEqual("python_unittest_v", execution["operation"])
+                self.assertEqual(expected, execution["operation_exit_code"])
+
     def test_tool_events_after_agent_settled_are_rejected(self) -> None:
         events = (
             {"type": "session"},

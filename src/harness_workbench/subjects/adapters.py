@@ -230,18 +230,15 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         executable = _executable("claude")
         expected = pins["claude_code"]
         version = _command_text([str(executable), "--version"]).split()[0]
-        digest_key = "executable_sha256"
     elif subject == "codex":
         executable = _executable("codex")
         expected = pins["codex_cli"]
         version = _command_text([str(executable), "--version"]).split()[-1]
-        digest_key = "executable_sha256"
     elif subject == "hermes":
         executable = _executable("hermes")
         expected = pins["hermes_agent"]
         version_text = _command_text([str(executable), "--version"])
         version = version_text.split()[2].removeprefix("v")
-        digest_key = "launcher_sha256"
         source_root = _hermes_source_root()
         commit = _command_text(["git", "-C", str(source_root), "rev-parse", "HEAD"])
         if commit != expected["source_commit"]:
@@ -265,22 +262,22 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         executable = _executable("dsh")
         expected = pins["deepseek_harness"]
         version = _command_text([str(executable), "--version"]).split()[0]
-        digest_key = "executable_sha256"
     elif subject == "pi":
         executable = _executable("pi")
         expected = pins["pi_coding_agent"]
         version = _command_text([str(executable), "--version"]).split()[0]
-        digest_key = "executable_sha256"
+        # Node is the runtime under Pi, not the measured subject: any version
+        # runs and is recorded. Certification still requires the pinned one
+        # (compare._declared_subject_identity declares it for Pi).
         node_version = _command_text(["node", "--version"]).lstrip("v")
-        if node_version != expected["node_version"]:
-            raise AdapterError("Node version does not match pin.json")
     else:
         raise AdapterError(f"unknown subject: {subject}")
-    if version != expected["version"]:
-        raise AdapterError(f"{subject} version {version} does not match pin.json")
+    # This adapter only RECORDS which harness ran; it never decides which
+    # versions are allowed. That policy lives outside the certified bytes:
+    # compare._declared_subject_identity makes certification require the pins,
+    # and doctor refuses a mismatch before a certification run. A user's
+    # Reality Check runs whatever is installed and records it.
     digest = digest_file(executable)
-    if digest != expected[digest_key]:
-        raise AdapterError(f"{subject} executable digest does not match pin.json")
     return {
         "name": subject,
         "version": version,
@@ -301,6 +298,7 @@ def _verify_identity(subject: str) -> dict[str, Any]:
             if subject == "hermes"
             else {}
         ),
+        **({"node_version": node_version} if subject == "pi" else {}),
     }
 
 
@@ -1872,16 +1870,15 @@ def _pi_result_exit_code(event: dict[str, Any]) -> int | None:
     the error flag, because a command can exit nonzero without Pi treating the
     tool call as failed.
     """
-    for key in ("exitCode", "exit_code"):
-        value = event.get(key)
-        if isinstance(value, int):
-            return value
     result = event.get("result")
-    if isinstance(result, dict):
-        for key in ("exitCode", "exit_code"):
-            value = result.get(key)
-            if isinstance(value, int):
-                return value
+    # Pi 1.x reports the status in result.structuredContent.exit_code.
+    structured = result.get("structuredContent") if isinstance(result, dict) else None
+    for holder in (event, result, structured):
+        if isinstance(holder, dict):
+            for key in ("exitCode", "exit_code"):
+                value = holder.get(key)
+                if type(value) is int:  # a JSON true/false is not a status
+                    return value
     return None
 
 

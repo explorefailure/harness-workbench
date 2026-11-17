@@ -446,7 +446,8 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
             "verdict": "invalid", "facts": facts,
             "changed_files": [], "errors": errors,
             "setup": {"subject": "Pi", "model": "unobserved",
-                      "model_profile": "unobserved", "pi_version": "unobserved"},
+                      "model_profile": "unobserved", "pi_version": "unobserved",
+                      "node_version": "unobserved"},
         }
 
     adapter = document.get("adapter")
@@ -553,6 +554,7 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
             "model_profile": subject.get("model_profile", "unobserved"),
             "model_digest": subject.get("model_digest", "unobserved"),
             "pi_version": subject.get("version", "unobserved"),
+            "node_version": subject.get("node_version", "unobserved"),
         },
     }
 
@@ -669,9 +671,10 @@ def print_result(result: dict[str, Any]) -> None:
     print(f"Reality Check: {result['job']}")
     setup = result.get("setup", {})
     print(
-        "Setup: {subject} {pi_version} · {model} ({model_profile}) · digest {model_digest}".format(
+        "Setup: {subject} {pi_version} (Node {node_version}) · {model} ({model_profile}) · digest {model_digest}".format(
             subject=setup.get("subject", "Pi"),
             pi_version=setup.get("pi_version", "unobserved"),
+            node_version=setup.get("node_version", "unobserved"),
             model=setup.get("model", "unobserved"),
             model_profile=setup.get("model_profile", "unobserved"),
             model_digest=setup.get("model_digest", "unobserved"),
