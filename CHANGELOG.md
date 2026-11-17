@@ -22,6 +22,13 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   (Ollama), the Lab now says why the page is quiet instead of looking
   frozen. An `INVALID` proof that stopped early now says how many checks
   ran ("Stopped early: 2 of 7 checks ran") instead of "2 of 2 hold".
+- Fix: a Recipe made by another Workbench version no longer comes out
+  `INVALID` ("Recipe fixture/template differs"). If its files are unedited,
+  the next run rebuilds it from the installed version and keeps
+  `model_selection.json` byte for byte; `hwb setup` and the Lab say so
+  beforehand. The new Recipe is validated before it replaces the old one, so
+  a failed update leaves the old Recipe untouched. A Recipe with edited files
+  is still refused.
 - Change: the Reality Check runs on the Pi and Node you have instead of
   refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
   version and executable hash and the Node version; `hwb try` and the Lab's

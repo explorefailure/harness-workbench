@@ -661,3 +661,66 @@ class LlamaCppIdentityParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleRecipeRefreshTests(unittest.TestCase):
+    """A Recipe made by another Workbench version is refreshed, not refused."""
+
+    def setUp(self):
+        patcher = mock.patch.object(reality, "_local_model_digest", return_value="a" * 64)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.recipe = Path(self.tmp.name) / "recipe"
+        reality.prepare_recipe(self.recipe)
+
+    def age(self, name="repair_task.md"):
+        """Make the Recipe look like an older version's: other bytes, own manifest agrees."""
+        path = self.recipe / name
+        path.write_bytes(path.read_bytes() + b"\nolder version\n")
+        manifest_path = self.recipe / reality.RECIPE_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["bound_file_digests"][name] = reality.digest_file(path)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_fresh_recipe_is_not_stale(self):
+        self.assertFalse(reality.recipe_is_stale(self.recipe))
+        self.assertFalse(reality.refresh_stale_recipe(self.recipe))
+
+    def test_older_version_recipe_is_refreshed_keeping_the_model_choice(self):
+        selection = self.recipe / reality.EDITABLE_RECIPE_FILE
+        value = json.loads(selection.read_text(encoding="utf-8"))
+        value["profiles"][value["active"]]["models"]["pi"] = "my-model:7b"
+        selection.write_text(json.dumps(value), encoding="utf-8")
+        chosen = selection.read_bytes()
+        self.age()
+        self.assertTrue(reality.recipe_is_stale(self.recipe))
+        self.assertTrue(reality.refresh_stale_recipe(self.recipe))
+        self.assertFalse(reality.recipe_is_stale(self.recipe))
+        self.assertEqual(chosen, selection.read_bytes())
+        reality._validate_recipe(self.recipe)
+        spec_path, created = reality.prepare_recipe(self.recipe)
+        self.assertFalse(created)
+        siblings = sorted(p.name for p in self.recipe.parent.iterdir())
+        self.assertEqual(["recipe"], siblings)
+
+    def test_edited_recipe_is_still_refused(self):
+        path = self.recipe / "repair_task.md"
+        path.write_bytes(path.read_bytes() + b"\nedited by hand\n")
+        self.assertFalse(reality.recipe_is_stale(self.recipe))
+        with self.assertRaisesRegex(reality.RealityError, "bound file was edited"):
+            reality.prepare_recipe(self.recipe)
+
+    def test_failed_refresh_leaves_the_old_recipe_untouched(self):
+        self.age()
+        selection = self.recipe / reality.EDITABLE_RECIPE_FILE
+        value = json.loads(selection.read_text(encoding="utf-8"))
+        value["profiles"][value["active"]]["verify_digest"] = False
+        selection.write_text(json.dumps(value), encoding="utf-8")
+        before = {p.name: p.read_bytes() for p in self.recipe.rglob("*") if p.is_file()}
+        with self.assertRaisesRegex(reality.RealityError, "Move it aside"):
+            reality.refresh_stale_recipe(self.recipe)
+        after = {p.name: p.read_bytes() for p in self.recipe.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        self.assertEqual(["recipe"], sorted(p.name for p in self.recipe.parent.iterdir()))
