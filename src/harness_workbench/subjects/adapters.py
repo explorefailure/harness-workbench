@@ -1870,16 +1870,15 @@ def _pi_result_exit_code(event: dict[str, Any]) -> int | None:
     the error flag, because a command can exit nonzero without Pi treating the
     tool call as failed.
     """
-    for key in ("exitCode", "exit_code"):
-        value = event.get(key)
-        if isinstance(value, int):
-            return value
     result = event.get("result")
-    if isinstance(result, dict):
-        for key in ("exitCode", "exit_code"):
-            value = result.get(key)
-            if isinstance(value, int):
-                return value
+    # Pi 1.x reports the status in result.structuredContent.exit_code.
+    structured = result.get("structuredContent") if isinstance(result, dict) else None
+    for holder in (event, result, structured):
+        if isinstance(holder, dict):
+            for key in ("exitCode", "exit_code"):
+                value = holder.get(key)
+                if type(value) is int:  # a JSON true/false is not a status
+                    return value
     return None
 
 

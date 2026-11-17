@@ -3755,6 +3755,33 @@ class CodexNormalizerTests(unittest.TestCase):
 
 
 class PiNormalizerTests(unittest.TestCase):
+    @staticmethod
+    def _pi1_unittest(call_id: str, structured: dict[str, Any]) -> tuple[dict, dict]:
+        # Shape recorded from a live Pi 1.4.0 run: the status is in
+        # result.structuredContent, and isError stays false for a red test run.
+        start = {"type": "tool_execution_start", "toolCallId": call_id, "toolName": "bash",
+                 "args": {"command": "python3.11 -m unittest -v", "timeout": 30}}
+        end = {"type": "tool_execution_end", "toolCallId": call_id, "toolName": "bash",
+               "result": {"content": [{"type": "text", "text": "FAILED (failures=1)\n"}],
+                          "structuredContent": {"output": "FAILED (failures=1)\n",
+                                                "truncated": False, **structured}},
+               "isError": False, "durationMs": 40}
+        return start, end
+
+    def test_pi1_structured_exit_code_is_read_and_boolean_is_rejected(self) -> None:
+        for structured, expected in (({"exit_code": 1}, 1), ({"exit_code": 0}, 0),
+                                     ({"exit_code": True}, None), ({}, None)):
+            with self.subTest(structured=structured):
+                start, end = self._pi1_unittest("call_red", structured)
+                lifecycle, _ = adapters._normalize_pi(
+                    jsonl({"type": "session"}, start, end, {"type": "agent_end"},
+                          {"type": "agent_settled"}),
+                    Path("/workspace"),
+                )
+                execution = lifecycle["tool_executions"][0]
+                self.assertEqual("python_unittest_v", execution["operation"])
+                self.assertEqual(expected, execution["operation_exit_code"])
+
     def test_tool_events_after_agent_settled_are_rejected(self) -> None:
         events = (
             {"type": "session"},

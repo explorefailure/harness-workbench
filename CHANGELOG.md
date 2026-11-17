@@ -12,6 +12,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   version and executable hash and the Node version; `hwb try` and the Lab's
   Proof page show them. The verdict still comes from Workbench's own test run,
   so a different Pi can fail a run but cannot pass it.
+- Fix: the Pi adapter now reads a command's exit status where Pi 1.x reports
+  it (`result.structuredContent.exit_code`), so a red test run under Pi 1.4.0
+  is recognised and a correct repair can pass. A JSON true/false is no longer
+  accepted as an exit status.
 - Change: the subject adapters no longer decide which harness versions are
   allowed; they record what is installed. Certification still requires the
   pinned identities (the doctor reports `pin_drift` before a live run and the
