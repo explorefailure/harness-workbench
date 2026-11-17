@@ -18,6 +18,10 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 - Change: `hwb setup` and the Lab now say how to install each missing
   prerequisite (Pi's npm package, Node.js and npm, Ollama, and
   `ollama pull <model>`). Workbench still installs nothing itself.
+- Fix: while the agent works on a runtime that reports no live activity
+  (Ollama), the Lab now says why the page is quiet instead of looking
+  frozen. An `INVALID` proof that stopped early now says how many checks
+  ran ("Stopped early: 2 of 7 checks ran") instead of "2 of 2 hold".
 - Change: the Reality Check runs on the Pi and Node you have instead of
   refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
   version and executable hash and the Node version; `hwb try` and the Lab's

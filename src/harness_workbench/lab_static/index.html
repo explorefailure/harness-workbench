@@ -546,10 +546,13 @@
       return el("li", { "data-s": s, text: PHASE_LABELS[p] || p });
     }));
     var a = job.activity;
-    $("tActivity").hidden = !a;
+    var quiet = !a && job.state === "running" && job.phase === "agent";
+    $("tActivity").hidden = !a && !quiet;
     if (a) text("tActivity", a.available
       ? "Model activity: " + a.tokens_since_start.toLocaleString() + " tokens generated since the run began (" + a.source + "; counts " + a.scope + ")." + (a.note ? " " + a.note : "")
       : "Model activity unavailable: " + a.reason + ".");
+    else if (quiet) text("tActivity", "The agent is working inside a sealed process, so its steps appear only when it finishes. " +
+      "This model runtime reports no live activity; the clock above keeps counting. On a CPU-only machine this step can take several minutes.");
     text("tExpect", job.previous_duration ? "The last run on this Lab took " + clock(job.previous_duration) + "." : "A run usually takes a few minutes.");
   }
   function tick() {
@@ -596,7 +599,10 @@
       .map(function (t) { return el("span", { class: "chip", text: t }); }));
     var facts = (result.facts || []).filter(function (f) { return f.fact !== "model_completion_claim_used_as_verdict"; });
     var ok = facts.filter(function (f) { return f.observed; }).length;
-    text("pCount", ok + " of " + facts.length + " hold");
+    var full = Object.keys(LABELS).length;
+    text("pCount", facts.length < full
+      ? "Stopped early: " + facts.length + " of " + full + " checks ran, " + ok + " held"
+      : ok + " of " + facts.length + " hold");
     $("pFacts").replaceChildren.apply($("pFacts"), facts.map(function (f) {
       return el("li", { class: "fact", "data-ok": f.observed ? "1" : "0" }, [
         el("span", { class: "mark", "aria-hidden": "true", text: f.observed ? "✓" : "✕" }),
