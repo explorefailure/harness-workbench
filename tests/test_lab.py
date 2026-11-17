@@ -113,6 +113,26 @@ class DiscoverTests(unittest.TestCase):
         doc = self.run_discover(fake_ollama([("other:1b", GOOD)]))
         self.assertIn("model_missing", {b["code"] for b in doc["blockers"]})
 
+    def test_each_missing_prerequisite_says_how_to_install_it(self):
+        doc = self.run_discover(dead_ollama, which=lambda name: None)
+        hints = {b["code"]: b.get("hint", "") for b in doc["blockers"]}
+        self.assertIn("npm install -g " + discover.PI_NPM_PACKAGE, hints["pi_missing"])
+        self.assertIn("nodejs.org", hints["node_missing"])
+        self.assertIn("ollama.com/download", hints["ollama_unreachable"])
+        model, _ = shipped_model()
+        doc = self.run_discover(fake_ollama([("other:1b", GOOD)]))
+        hint = next(b["hint"] for b in doc["blockers"] if b["code"] == "model_missing")
+        self.assertIn(f"ollama pull {model}", hint)
+
+    def test_llamacpp_missing_model_gets_no_ollama_pull_hint(self):
+        self.assertIsNone(discover.install_hint("model_missing", model="m", llama=True))
+        self.assertIn("llama-server", discover.install_hint("llamacpp_unreachable"))
+
+    def test_pi_install_hint_names_the_pinned_npm_package(self):
+        pins = json.loads(
+            (Path(discover.__file__).parent / "subjects" / "pin.json").read_text())
+        self.assertEqual(pins["pi_coding_agent"]["npm_package"], discover.PI_NPM_PACKAGE)
+
     def test_discovery_writes_nothing(self):
         model, digest = shipped_model()
         self.run_discover(fake_ollama([(model, digest)]))

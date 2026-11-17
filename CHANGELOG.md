@@ -15,6 +15,9 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   repair task asks the agent for `python3 -m unittest -v`. Records that
   spell the command `python3.11` still read the same. Certified inputs
   changed, so the adapters were recertified live.
+- Change: `hwb setup` and the Lab now say how to install each missing
+  prerequisite (Pi's npm package, Node.js and npm, Ollama, and
+  `ollama pull <model>`). Workbench still installs nothing itself.
 - Change: the Reality Check runs on the Pi and Node you have instead of
   refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
   version and executable hash and the Node version; `hwb try` and the Lab's
