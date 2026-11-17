@@ -2249,6 +2249,42 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(1, run.call_count)
         self.assertEqual(1, report["live_subject_runs_started"])
 
+    def test_unittest_projection_names_any_python3_spelling(self) -> None:
+        workspace = Path("/fixture/run/workspace")
+        for command in (
+            "python3 -m unittest -v",
+            "python3.11 -m unittest -v",
+            "python3.14 -m unittest -v",
+            "/usr/bin/python3 -m unittest -v",
+        ):
+            projection, kind, _ = adapters._argument_projection(
+                "bash", {"command": command}, workspace
+            )
+            self.assertEqual("command", kind)
+            self.assertEqual("python_unittest_v", projection.get("operation"), command)
+        for command in ("mypython3 -m unittest -v", "python3 -m unittest", "python -m unittest -v"):
+            projection, _, _ = adapters._argument_projection(
+                "bash", {"command": command}, workspace
+            )
+            self.assertNotIn("operation", projection, command)
+
+    def test_repair_interpreter_wrapper_runs_this_python_first_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"PATH": "/usr/bin:/bin"}
+            wrapper = adapters._install_repair_interpreter(
+                Path(directory) / "bin", environment
+            )
+            self.assertEqual(
+                str(Path(directory) / "bin") + os.pathsep + "/usr/bin:/bin",
+                environment["PATH"],
+            )
+            completed = subprocess.run(
+                ["python3", "-c", "import sys; print(sys.executable)"],
+                env=environment, capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(sys.executable, completed.stdout.strip())
+            self.assertTrue(os.access(wrapper, os.X_OK))
+
     def test_normalized_argv_keeps_auxiliary_executable_basename(self) -> None:
         actual = adapters._normalized_argv(
             ["/usr/bin/python3.11", "-m", "unittest"],
