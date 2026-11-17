@@ -3,10 +3,10 @@
   "certified_date": "2026-11-17",
   "workload": "repair",
   "draws_per_subject": 3,
-  "comparator_sha256": "sha256:c1a04f29026ed2ef1e57ceaea429e1a75ee4f239d5ac0088ae43c3a7bd686d02",
+  "comparator_sha256": "sha256:fc403485d616fb9c987c4691412d2dbf44a62d94b337f85b46a8e4441b76f40b",
   "contract_passed": true,
   "inputs": {
-    "adapters.py": "sha256:a0a7b98838d2ccae86aefe35be7c11b1a17a493cca5ab83f07132ecca2d7d8a0",
+    "adapters.py": "sha256:3ef0dfcd85d8fd7514805e2fcf64cb027d3c905ac87bd39cb7da0185595fb017",
     "dsh_patch.yml": "sha256:c3520bb94f5872fc4d6e054ac612441f12ec843786139935837fe863b83edf95",
     "hermes_config.yaml": "sha256:e7993a551fdf194857cdfd6f86f177c899d4c0813df8c1e432b8e6c6542e8d72",
     "hook.py": "sha256:6992cac719fa06cccdfd027aa56dea41623c8e3db68a4b6b63b04fb27501027f",
@@ -15,10 +15,10 @@
     "pin.json": "sha256:1eb0d17c9c043d666c2ecd94048ac81be0f60aa541e1b1ec7f0246a2150df10e",
     "repair_fixture/slugger.py": "sha256:779c1838d6a838697ea20b464f895e8f1a01e64f1bab3d722dd424be9c1ff67c",
     "repair_fixture/test_slugger.py": "sha256:838c4e2f81586723a61f687ec01b0121bace32d0eacce44f85f54ef0f89b8da1",
-    "repair_task.md": "sha256:cfb9c794b9cc4935661f39cdaf0a78e8c49991085825bfd0c6417e8be7f7fad3",
+    "repair_task.md": "sha256:bac5e2a7c57099b173e3f268d5b75a4568087843e3364259ca55dee8d1ec8f2a",
     "run_subject.sh": "sha256:fd73e6b1ad2f0d2585c0282d2cb2fca0047a0ea0f0cfdb01fb19e93e836c1568",
     "runner.py": "sha256:37d748e46173d04cd5cbecae745e7fa35531a18f7c96abb750e5f71f51af02ed",
-    "workloads.py": "sha256:dbaf823948cf89021e9bef3aa17e78479c53b631d679edd00082bbb9b95edf92"
+    "workloads.py": "sha256:0d449bee122b96cd9424f9c56c3dc4811c46b6c73556ddf156b2e3c0028cc5ad"
   },
   "apparatus_modules": {
     "canon": "sha256:ad65d72e676b8b569316b2edc8a46f7df50cbceef39c31f6d9444ad26160de9b",
@@ -27,36 +27,36 @@
   },
   "subjects": {
     "claude": {
-      "run_id": "20261117T100645Z-2355e9-97d5",
-      "record_sha256": "sha256:882220513e008af555b64a76683f79c477be4515c10fe1f40f3ffe09f2b5e9d8",
+      "run_id": "20261117T135119Z-2355e9-29c9",
+      "record_sha256": "sha256:6ad6ff51eb5ac1c3aca46b70a5940799a16b2948ee11b0ce1e3c068bdd45e678",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "codex": {
-      "run_id": "20261117T100726Z-e523b9-c1ce",
-      "record_sha256": "sha256:2eabed74f3ffdbb5fdfcd6a0347fd8479dfc8797d9fcd76b39806b20385cca72",
+      "run_id": "20261117T135200Z-e523b9-d8f6",
+      "record_sha256": "sha256:8b3ed505a8abbc0c95e97aae3a5acef0d5e1b5af37e6a4b9e890e655eb00447d",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "deepseek": {
-      "run_id": "20261117T100843Z-afb1ef-f6b4",
-      "record_sha256": "sha256:2e661a864485eb65e92241257b2ab86c56dad6d0c7fbc27541ef695bc3a37989",
+      "run_id": "20261117T135320Z-afb1ef-990c",
+      "record_sha256": "sha256:cd90aacc69cdef2fef184933f02287d63396333e6dbfecdc867884e0c7b8f828",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "hermes": {
-      "run_id": "20261117T101201Z-400fd4-1f4a",
-      "record_sha256": "sha256:f3ff958b70da122067cb0190235fdc67fcac4e509189c57a2bc6226ea1cbac21",
+      "run_id": "20261117T135628Z-400fd4-80d9",
+      "record_sha256": "sha256:9b4995eb0ed468d1dc902997544cedba3e6bb8404d4315b4b60dcac6e578ce9e",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
     },
     "pi": {
-      "run_id": "20261117T102652Z-c6514d-6c23",
-      "record_sha256": "sha256:5f195b3d269f6c1d490bcb12be6b312f2ef877281031f63c5b45690bfd7afb54",
+      "run_id": "20261117T141018Z-c6514d-fd9f",
+      "record_sha256": "sha256:8975bbb736a57e5e1ec9ca41ca7017d2de40b1bf346fe454c5db76e6b98df3a5",
       "adapter": "3/3",
       "outcome": "3/3",
       "timeouts": 0
