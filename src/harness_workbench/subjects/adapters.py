@@ -11,6 +11,7 @@ import secrets
 import shlex
 import shutil
 import stat
+import sys
 import tempfile
 from typing import Any
 from urllib.request import urlopen
@@ -692,6 +693,26 @@ def _write_private_bytes(path: Path, data: bytes) -> None:
 
 
 GUARD_HOOK_INTERPRETER = "python3.11"
+# The repair workload names its test interpreter `python3` and the adapter
+# puts a `python3` that runs this very interpreter first on the subject's
+# PATH, so the agent and the oracle test with the same Python on any machine
+# (a stock system may have no `python3.11`). Older records spell it
+# `python3.11`; both name the same operation.
+UNITTEST_COMMAND = re.compile(r"(?<![\w.])python3(?:\.\d+)? -m unittest -v")
+REPAIR_INTERPRETER = "python3"
+
+
+def _install_repair_interpreter(directory: Path, environment: dict[str, str]) -> Path:
+    """Put a `python3` that runs this interpreter first on the subject's PATH."""
+    directory.mkdir()
+    wrapper = directory / REPAIR_INTERPRETER
+    wrapper.write_text(
+        "#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    environment["PATH"] = str(directory) + os.pathsep + environment.get("PATH", "")
+    return wrapper
 # Codex refuses to run a hook it has no persisted `trusted_hash` for, and
 # announces that stand-down as an `error` item on its own stream. Named once so
 # the flag and the stream check that forgives its notice cannot drift apart.
@@ -1338,7 +1359,7 @@ def _argument_projection(
         projection = {
             "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest()
         }
-        if "python3.11 -m unittest -v" in command:
+        if UNITTEST_COMMAND.search(command):
             projection["operation"] = "python_unittest_v"
         return projection, "command", False
 
@@ -2349,6 +2370,10 @@ def capture(
         environment = os.environ.copy()
         environment["PWD"] = str(workspace)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        if workload == "repair":
+            # Outside the workspace, like the guard receipt: the oracle's
+            # after-manifest must not see the instrumentation.
+            _install_repair_interpreter(root / "bin", environment)
         # Outside the workspace on purpose: the receipt is the adapter's
         # evidence about the run, and a file the oracle would see in the
         # after-manifest would make the instrumentation part of the effect it
@@ -2436,7 +2461,7 @@ def capture(
         oracle_process_errors: list[str] = []
         if workload == "repair":
             initial_test = run_bounded(
-                ["python3.11", "-m", "unittest", "-v"],
+                [sys.executable, "-m", "unittest", "-v"],
                 cwd=workspace,
                 env=environment,
                 timeout=30,
@@ -2805,7 +2830,7 @@ def capture(
             oracle_evidence = None
         else:
             final_test = run_bounded(
-                ["python3.11", "-m", "unittest", "-v"],
+                [sys.executable, "-m", "unittest", "-v"],
                 cwd=workspace,
                 env=environment,
                 timeout=30,
