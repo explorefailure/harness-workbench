@@ -285,6 +285,29 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
             "base_url": base_url, "error": None}
 
 
+# The npm package the Reality Check's Pi subject is pinned to (pin.json); a
+# test keeps the two equal.
+PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent"
+
+
+def install_hint(code: str, *, model: str | None = None, llama: bool = False) -> str | None:
+    """How to fix one setup blocker; Workbench never installs these itself."""
+    if code == "pi_missing":
+        return (f"Install it with `npm install -g {PI_NPM_PACKAGE}` (prefix sudo "
+                "if npm's global folder belongs to root, as on Ubuntu).")
+    if code == "node_missing":
+        return ("Install Node.js and npm from https://nodejs.org/en/download "
+                "(Debian/Ubuntu: `sudo apt install nodejs npm`).")
+    if code == "ollama_unreachable":
+        return ("Install Ollama from https://ollama.com/download and make sure it "
+                "is running.")
+    if code == "llamacpp_unreachable":
+        return "Start llama-server as the subject guide describes."
+    if code == "model_missing" and model and not llama:
+        return f"Download it with `ollama pull {model}`."
+    return None
+
+
 def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
              opener=urlopen) -> dict[str, Any]:
     """Return the setup document used by `hwb setup` and the Lab."""
@@ -336,6 +359,10 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
                 notes.append({"code": "build_changed", "message": (
                     f"llama.cpp is now {inventory['build']}; the Recipe's baseline is "
                     f"{recipe['recorded_build']}. The run will proceed and record it.")})
+    for blocker in blockers:
+        hint = install_hint(blocker["code"], model=recipe["model"], llama=llama)
+        if hint:
+            blocker["hint"] = hint
     recipe["live_digest"] = live_digest
     recipe["live_build"] = inventory["build"]
 
@@ -379,6 +406,8 @@ def print_setup(doc: dict[str, Any]) -> None:
     print("Ready" if doc["ready"] else "Not ready")
     for b in doc["blockers"]:
         print(f"  - {b['message']}")
+        if b.get("hint"):
+            print(f"    {b['hint']}")
     for n in doc.get("notes", []):
         print(f"  note: {n['message']}")
     print(doc["note"])

@@ -491,7 +491,7 @@
       $("dNeeds").replaceChildren.apply($("dNeeds"), needs.map(function (n) { return el("li", { "data-ok": n[0] ? "1" : "0", text: n[1] }); }));
 
       $("dBlockers").hidden = s.ready;
-      $("dBlockerList").replaceChildren.apply($("dBlockerList"), s.blockers.map(function (b) { return el("li", { text: b.message }); }));
+      $("dBlockerList").replaceChildren.apply($("dBlockerList"), s.blockers.map(function (b) { return el("li", { text: b.message + (b.hint ? " " + b.hint : "") }); }));
       var notes = s.notes || [];
       $("dNotes").hidden = !notes.length;
       $("dNoteList").replaceChildren.apply($("dNoteList"), notes.map(function (n) { return el("li", { text: n.message }); }));
