@@ -107,7 +107,31 @@ def _identity_check(subject: str) -> tuple[bool, str]:
             identity.update(adapters._resolve_model(subject))
     except (adapters.AdapterError, OSError, TypeError, ValueError) as error:
         return False, str(error)
+    mismatches = _pin_mismatches(subject, identity)
+    if mismatches:
+        return False, "; ".join(mismatches)
     return True, f"installed identity matches pin ({identity['version']})"
+
+
+_PIN_NAMES = {"claude": "claude_code", "codex": "codex_cli", "deepseek": "deepseek_harness",
+              "hermes": "hermes_agent", "pi": "pi_coding_agent"}
+
+
+def _pin_mismatches(subject: str, identity: dict[str, Any]) -> list[str]:
+    """Certification requires the pinned harness; the adapter only records it.
+
+    The adapter accepts any installed version so a user's Reality Check can
+    run on it. A certification run must not, and finding that out here costs
+    nothing, while compare would only reject it after the whole live run.
+    """
+    pin = adapters._pins()[_PIN_NAMES[subject]]
+    wanted = {"version": pin["version"],
+              "executable_sha256": pin["launcher_sha256" if subject == "hermes"
+                                       else "executable_sha256"]}
+    if subject == "pi":
+        wanted["node_version"] = pin["node_version"]
+    return [f"{subject} {key} {identity.get(key)!r} does not match pin.json ({value!r})"
+            for key, value in wanted.items() if identity.get(key) != value]
 
 
 def _bounded_auth_command(

@@ -15,7 +15,10 @@ unittest operation ordered around the write.
 
 ## Run
 
-The identities in `pin.json` must match the installed clients. Claude and Codex
+For certification, the identities in `pin.json` must match the installed clients:
+the doctor reports `pin_drift` before a live run and the comparison rejects any
+other identity. The adapter itself only records which client ran, so a user's
+Reality Check runs on whatever Pi and Node are installed. Claude and Codex
 use their existing authenticated clients. DeepSeek Harness uses the official
 `dsh` headless profile with temporary `HOME`, `DSH_HOME`, and XDG directories.
 Which model runs is declared in `model_selection.json`, which is the model

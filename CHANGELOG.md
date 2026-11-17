@@ -7,11 +7,16 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
-- Change: the Reality Check runs on any Node version instead of refusing
-  everything but Node 22.22.3. Node is the runtime under Pi, not the measured
-  subject; the run records the version it used, and `hwb try` and the Lab's
-  Proof page show it. Pi itself stays pinned by version and executable hash, and
-  adapter certification still requires the pinned Node.
+- Change: the Reality Check runs on the Pi and Node you have instead of
+  refusing everything but Pi 0.84.1 on Node 22.22.3. The run records Pi's
+  version and executable hash and the Node version; `hwb try` and the Lab's
+  Proof page show them. The verdict still comes from Workbench's own test run,
+  so a different Pi can fail a run but cannot pass it.
+- Change: the subject adapters no longer decide which harness versions are
+  allowed; they record what is installed. Certification still requires the
+  pinned identities (the doctor reports `pin_drift` before a live run and the
+  comparison rejects any other identity), so a future change to that policy no
+  longer edits certified bytes.
 - Fix: `capture.run_bounded` could drop a child's last output. If its readiness
   wait timed out while the child was still running, and the child then wrote
   and exited before the exit check, the loop treated the pipes as drained.
