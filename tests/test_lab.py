@@ -132,6 +132,21 @@ class DiscoverTests(unittest.TestCase):
         pins = json.loads(
             (Path(discover.__file__).parent / "subjects" / "pin.json").read_text())
         self.assertEqual(pins["pi_coding_agent"]["npm_package"], discover.PI_NPM_PACKAGE)
+    def test_older_version_recipe_is_a_note_and_discovery_writes_nothing(self):
+        model, digest = shipped_model()
+        with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
+            reality.prepare_recipe(self.recipe)
+        task = self.recipe / "repair_task.md"
+        task.write_bytes(task.read_bytes() + b"\nolder version\n")
+        manifest_path = self.recipe / reality.RECIPE_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["bound_file_digests"]["repair_task.md"] = reality.digest_file(task)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        before = task.read_bytes()
+        doc = self.run_discover(fake_ollama([(model, GOOD)]))
+        self.assertTrue(doc["ready"], doc["blockers"])
+        self.assertIn("recipe_refresh", [n["code"] for n in doc["notes"]])
+        self.assertEqual(before, task.read_bytes())
 
     def test_discovery_writes_nothing(self):
         model, digest = shipped_model()

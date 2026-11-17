@@ -259,8 +259,9 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
     exists = (recipe_dir / "recipe.json").is_file()
     source = "recipe" if exists else "shipped default"
     name = profile
+    stale = exists and reality.recipe_is_stale(recipe_dir.resolve())
     try:
-        if exists:
+        if exists and not stale:
             reality._validate_recipe(recipe_dir.resolve())
         selection = (json.loads(selection_path.read_text(encoding="utf-8"))
                      if exists else _shipped_selection())
@@ -282,7 +283,7 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
     return {"path": str(recipe_dir), "exists": exists, "source": source,
             "profile": name, "runtime": kind,
             "model": model, "recorded_digest": digest, "recorded_build": build,
-            "base_url": base_url, "error": None}
+            "base_url": base_url, "error": None, "stale": stale}
 
 
 # The npm package the Reality Check's Pi subject is pinned to (pin.json); a
@@ -320,6 +321,10 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
     notes: list[dict[str, str]] = []
     if recipe["error"]:
         blockers.append({"code": "recipe_unreadable", "message": recipe["error"]})
+    if recipe.get("stale"):
+        notes.append({"code": "recipe_refresh", "message": (
+            "The Recipe was made by another Workbench version. The next run "
+            "updates its files from this version and keeps your model choice.")})
     if not tools["pi"]["found"]:
         blockers.append({"code": "pi_missing",
                          "message": "Pi coding agent (`pi`) was not found on PATH."})

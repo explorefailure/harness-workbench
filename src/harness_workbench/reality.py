@@ -5,6 +5,9 @@ import copy
 import json
 import os
 import re
+import shutil
+import tempfile
+from functools import lru_cache
 from pathlib import Path
 import sys
 import threading
@@ -332,6 +335,113 @@ def _validate_recipe(destination: Path) -> Path:
     return spec_path
 
 
+def _recipe_untouched(destination: Path) -> bool:
+    """Every bound file still has the bytes the Recipe's own manifest recorded."""
+    try:
+        manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
+        bound = manifest["bound_file_digests"]
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(bound, dict) or not bound:
+        return False
+    for name, digest in bound.items():
+        path = destination / name
+        if path.is_symlink() or not path.is_file() or digest_file(path) != digest:
+            return False
+    return True
+
+
+@lru_cache(maxsize=1)
+def _installed_bound_digests() -> tuple[tuple[str, str], ...]:
+    """Digests of the bound files a new Recipe would get from this installation.
+
+    Materialized rather than read from the package, because materializing
+    generates some files (the apparatus baseline).  The installed package
+    cannot change under a running process, so one computation is enough.
+    """
+    names = [name for name in _required_inputs(_spec()) if name != EDITABLE_RECIPE_FILE]
+    with tempfile.TemporaryDirectory(prefix="hwb-recipe-") as scratch:
+        tree = Path(scratch) / "tree"
+        tree.mkdir()
+        subject_tree.materialize(str(tree))
+        return tuple(sorted(_file_digests(tree, names).items()))
+
+
+def recipe_is_stale(destination: Path) -> bool:
+    """An unedited Recipe made by a different Workbench version.
+
+    Its bound files match its own manifest, but not the files this
+    installation would put in a new Recipe.  Running it would execute the old
+    version's subject files and fail the template check, so the run refreshes
+    it instead (see `refresh_stale_recipe`).  An edited Recipe is never stale:
+    it keeps failing validation.
+    """
+    if not (destination / RECIPE_NAME).is_file() or not _recipe_untouched(destination):
+        return False
+    manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
+    try:
+        spec_current = json.loads(
+            (destination / SPEC_NAME).read_text(encoding="utf-8")) == _spec()
+    except (OSError, UnicodeError, ValueError):
+        spec_current = False
+    files_current = (
+        tuple(sorted(manifest["bound_file_digests"].items())) == _installed_bound_digests()
+    )
+    canonical_current = manifest.get("canonical_fixture_digests") == _canonical_digests()
+    return not (spec_current and files_current and canonical_current)
+
+
+def refresh_stale_recipe(destination: Path) -> bool:
+    """Rebuild a stale Recipe from this installation, keeping the model choice.
+
+    `model_selection.json` is the only file a person edits, so it carries over
+    unchanged; every other file comes from the installed package.  The new
+    Recipe is built and validated beside the old one and swapped in only when
+    it validates, so a failure leaves the old Recipe exactly as it was.
+    Returns True when a refresh happened.
+    """
+    if not recipe_is_stale(destination):
+        return False
+    manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
+    staging = destination.with_name(destination.name + ".refreshing")
+    retired = destination.with_name(destination.name + ".retired")
+    for leftover in (staging, retired):
+        if leftover.exists():
+            shutil.rmtree(leftover)
+    try:
+        staging.mkdir()
+        subject_tree.materialize(str(staging))
+        shutil.copyfile(destination / EDITABLE_RECIPE_FILE, staging / EDITABLE_RECIPE_FILE)
+        _write_json(staging / SPEC_NAME, _spec())
+        bound_names = [
+            name for name in _required_inputs(_spec()) if name != EDITABLE_RECIPE_FILE
+        ]
+        _write_json(staging / RECIPE_NAME, {
+            **{key: manifest[key] for key in ("model_profile", "rerun")},
+            "schema": RECIPE_SCHEMA,
+            "check": CHECK,
+            "spec": SPEC_NAME,
+            "subject": "pi",
+            "workload": "repair",
+            "model_digest_contract": MODEL_DIGEST_CONTRACT,
+            "editable_files": [EDITABLE_RECIPE_FILE],
+            "bound_file_digests": _file_digests(staging, bound_names),
+            "canonical_fixture_digests": _canonical_digests(),
+        })
+        _validate_recipe(staging)
+    except (OSError, KeyError, RealityError) as error:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise RealityError(
+            f"The Recipe at {destination} was made by another Workbench version and "
+            f"could not be updated with your model choice ({error}). Move it aside "
+            "and run again to create a new one."
+        ) from error
+    destination.rename(retired)
+    staging.rename(destination)
+    shutil.rmtree(retired, ignore_errors=True)
+    return True
+
+
 def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Path, bool]:
     """Create the thin manifest/spec over the existing subject tree.
 
@@ -345,6 +455,7 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
             raise RealityError(
                 f"recipe directory exists without {RECIPE_NAME}: {destination}"
             )
+        refresh_stale_recipe(destination)
         spec_path = _validate_recipe(destination)
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))["model_profile"]
         if profile is not None and profile != existing:
@@ -591,6 +702,7 @@ def run_check(
         Path(recipe_dir).expanduser() if recipe_dir
         else _default_recipe(profile or DEFAULT_RECIPE_PROFILE)
     ).resolve()
+    refreshed = destination.exists() and refresh_stale_recipe(destination)
     spec_path, created = prepare_recipe(destination, profile)
     phase("model_identity")
     refresh_live_digest(destination)
@@ -629,6 +741,7 @@ def run_check(
         "record": str(run_dir),
         "recipe": str(destination),
         "recipe_created": created,
+        "recipe_refreshed": bool(refreshed),
         "recipe_contract": "editable configuration; only model_selection.json may change",
         "effective_recipe_digests": effective_digests,
         "model_digest_contract": MODEL_DIGEST_CONTRACT,
@@ -692,6 +805,9 @@ def print_result(result: dict[str, Any]) -> None:
             print(f"  - {error}")
     print(f"\nSealed record: {result['record']}")
     print(f"Recipe: {result['recipe']}")
+    if result.get("recipe_refreshed"):
+        print("Recipe updated: it was made by another Workbench version; its files now "
+              "come from this one and your model choice was kept.")
     print(f"Recipe integrity: {result['recipe_contract']}")
     print(_model_line(result.get("model_change") or {}))
     build_line = _build_line(result.get("model_change") or {})
