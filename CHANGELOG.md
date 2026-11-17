@@ -7,6 +7,11 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Change: the Reality Check runs on any Node version instead of refusing
+  everything but Node 22.22.3. Node is the runtime under Pi, not the measured
+  subject; the run records the version it used, and `hwb try` and the Lab's
+  Proof page show it. Pi itself stays pinned by version and executable hash, and
+  adapter certification still requires the pinned Node.
 - Fix: `capture.run_bounded` could drop a child's last output. If its readiness
   wait timed out while the child was still running, and the child then wrote
   and exited before the exit check, the loop treated the pipes as drained.

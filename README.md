@@ -109,9 +109,11 @@ The demo requires:
 
 - Ollama running locally at `http://127.0.0.1:11434`, with `gpt-oss:20b`
   installed and enough memory to run it.
-- Pi **0.84.1** and Node **22.22.3** on `PATH`. The check validates Pi's
-  executable hash as well as its version against the
-  [shipped pins](src/harness_workbench/subjects/pin.json).
+- Pi **0.84.1** and Node on `PATH`. The check validates Pi's executable hash
+  as well as its version against the
+  [shipped pins](src/harness_workbench/subjects/pin.json). Any Node version
+  that runs Pi works; the run records which one it used (the pins were tested
+  with Node 22.22.3).
 
 This is the subject adapter's baseline Pi setup. The separate
 [Pi builder integration](docs/pi-builder.md) defaults to a newer Pi/Node pair;

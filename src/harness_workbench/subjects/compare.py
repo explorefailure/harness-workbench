@@ -148,6 +148,9 @@ def _declared_subject_identity(subject: str) -> dict[str, Any]:
     }
     if subject == "deepseek":
         expected["provider"] = pin["provider"]
+    if subject == "pi":
+        # A user's Reality Check runs on any Node; certification does not.
+        expected["node_version"] = pin["node_version"]
     if subject == "hermes":
         expected.update({
             "release_tag": pin["release_tag"],

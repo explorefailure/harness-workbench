@@ -2331,6 +2331,41 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(commit, identity["source_commit"])
         self.assertEqual(pin["uv_lock_sha256"], identity["uv_lock_sha256"])
 
+    def _pi_identity_with_node(self, node: str) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as raw:
+            executable = Path(raw) / "pi"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            pin = {"version": "0.84.1", "node_version": "22.22.3",
+                   "executable_sha256": digest_file(executable)}
+            with (
+                mock.patch.object(adapters, "_pins",
+                                  return_value={"pi_coding_agent": pin}),
+                mock.patch.object(adapters, "_executable", return_value=executable),
+                mock.patch.object(adapters, "_command_text",
+                                  side_effect=["0.84.1", f"v{node}"]),
+            ):
+                return adapters._verify_identity("pi")
+
+    def test_pi_runs_on_any_node_and_records_the_version(self) -> None:
+        # Node is the runtime under Pi, not the measured subject (owner
+        # decision 2026-11-17): a user's Reality Check must not be refused
+        # because their Node differs from the pin.
+        identity = self._pi_identity_with_node("26.13.0")
+        self.assertEqual("26.13.0", identity["node_version"])
+        self.assertEqual("0.84.1", identity["version"])
+        self.assertEqual("22.22.3", self._pi_identity_with_node("22.22.3")["node_version"])
+
+    def test_certification_still_requires_the_pinned_node(self) -> None:
+        declared = comparator._declared_subject_identity("pi")
+        self.assertEqual(adapters._pins()["pi_coding_agent"]["node_version"],
+                         declared["node_version"])
+        errors: list[str] = []
+        comparator.verify_adapter_subject("pi", dict(declared), errors)
+        self.assertEqual([], errors)
+        other_node = {**declared, "node_version": "26.13.0"}
+        comparator.verify_adapter_subject("pi", other_node, errors)
+        self.assertEqual(["pi adapter identity disagrees with declarations"], errors)
+
     def test_hermes_identity_rejects_a_tag_object_substitution(self) -> None:
         pin = dict(adapters._pins()["hermes_agent"])
         pin["tag_object"] = "0" * 40

@@ -271,9 +271,10 @@ def _verify_identity(subject: str) -> dict[str, Any]:
         expected = pins["pi_coding_agent"]
         version = _command_text([str(executable), "--version"]).split()[0]
         digest_key = "executable_sha256"
+        # Node is the runtime under Pi, not the measured subject: any version
+        # runs and is recorded. Certification still requires the pinned one
+        # (compare._declared_subject_identity declares it for Pi).
         node_version = _command_text(["node", "--version"]).lstrip("v")
-        if node_version != expected["node_version"]:
-            raise AdapterError("Node version does not match pin.json")
     else:
         raise AdapterError(f"unknown subject: {subject}")
     if version != expected["version"]:
@@ -301,6 +302,7 @@ def _verify_identity(subject: str) -> dict[str, Any]:
             if subject == "hermes"
             else {}
         ),
+        **({"node_version": node_version} if subject == "pi" else {}),
     }
 
 
