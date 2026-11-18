@@ -114,6 +114,60 @@ def cmd_lab(args) -> int:
         return _fail(str(error))
 
 
+def cmd_harness(args) -> int:
+    from . import runtimes
+
+    try:
+        if args.action == "list":
+            rows = runtimes.describe()
+            if args.json:
+                json.dump({"store": str(runtimes.store_root()), "platform": runtimes.platform_key(),
+                           "harnesses": rows}, sys.stdout, indent=2, sort_keys=True)
+                sys.stdout.write("\n")
+                return 0
+            print("Runtime store: %s (%s)" % (runtimes.store_root(), runtimes.platform_key()))
+            for row in rows:
+                where = []
+                if row["on_path"]:
+                    where.append("on PATH: " + row["on_path"])
+                where.extend("store: " + i["version"] for i in row["installed"])
+                if not where:
+                    where.append("installable: hwb harness add " + row["harness"]
+                                 if row["installable_here"] else "not installed (install it yourself)")
+                modes = [m for m in ("certified", "your_task") if row["modes"].get(m)]
+                print("  %-17s %-11s %s  [modes: %s]%s" % (
+                    row["display"], row["default_version"], "; ".join(where),
+                    ", ".join(modes) or "none",
+                    "  (needs sign-in)" if row["sign_in"] else ""))
+            return 0
+        if args.action == "add":
+            steps = runtimes.plan(args.harness, args.version)
+            if steps["already_installed"]:
+                print("%s %s is already installed: %s" % (args.harness, steps["version"], steps["destination"]))
+                return 0
+            print("Install %s %s into %s" % (args.harness, steps["version"], steps["destination"]))
+            for item in steps["downloads"]:
+                print("  download %s\n    sha256 %s" % (item["url"], item["sha256"]))
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    return _fail("not a terminal; pass --yes to confirm the download")
+                if input("Download and install? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("Nothing downloaded.")
+                    return 1
+            result = runtimes.add(args.harness, args.version)
+            print("Installed %s %s: %s" % (args.harness, steps["version"], result["path"]))
+            entry = runtimes.load_catalog()["harnesses"][args.harness]
+            if entry.get("sign_in"):
+                print("Next: " + entry["sign_in"])
+            return 0
+        removed = runtimes.remove(args.harness, args.version)
+        for path in removed:
+            print("Removed " + path)
+        return 0
+    except runtimes.RuntimeStoreError as error:
+        return _fail(str(error))
+
+
 def cmd_subjects(args) -> int:
     from . import subject_tree
 
@@ -894,6 +948,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="local model profile for a new Recipe (default: local-ollama; "
                          "owner profiles may come from HWB_MODEL_PROFILES)")
     lb.set_defaults(func=cmd_lab)
+
+    hn = command("harness")
+    hn_sub = hn.add_subparsers(dest="action", required=True)
+    hn_list = hn_sub.add_parser("list", help="installed, available and unavailable harnesses")
+    hn_list.add_argument("--json", action="store_true", help="print the list as JSON")
+    hn_add = hn_sub.add_parser("add", help="download a pinned, checksum-verified runtime")
+    hn_add.add_argument("harness")
+    hn_add.add_argument("--version", default=None, help="catalog version (default: the pinned default)")
+    hn_add.add_argument("--yes", action="store_true", help="do not ask before downloading")
+    hn_rm = hn_sub.add_parser("remove", help="delete an installed runtime from the store")
+    hn_rm.add_argument("harness")
+    hn_rm.add_argument("--version", default=None, help="one version (default: every installed version)")
+    hn.set_defaults(func=cmd_harness)
 
     sj = command("subjects")
     # No positional: every id-taking positional has to be visible to the

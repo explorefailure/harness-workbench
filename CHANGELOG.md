@@ -7,6 +7,16 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb harness list|add|remove` (first step of one-install): a shared,
+  versioned runtime store at `$HWB_RUNTIME_STORE`, else
+  `$XDG_DATA_HOME/hwb/runtimes`, else `~/.local/share/hwb/runtimes`. `list`
+  shows each known harness: on PATH, installed in the store, installable here,
+  modes, and whether it needs sign-in. `add opencode` asks first (or takes
+  `--yes`), downloads the pinned official build, checks the archive and binary
+  SHA-256 from the shipped pin, and moves it into place only after both match,
+  so a failed install leaves nothing behind. The other harnesses are listed
+  but must still be installed by hand for now.
+
 ## 0.3.0 — 2026-11-17
 
 - Fix: the Reality Check no longer needs a `python3.11` binary. The repair
