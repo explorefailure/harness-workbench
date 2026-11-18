@@ -7,6 +7,8 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-17
+
 - Fix: the Reality Check no longer needs a `python3.11` binary. The repair
   check ran its own tests with a hard-coded `python3.11`, so every run on a
   machine without one (stock Ubuntu 26.04, for example) came out `INVALID`.
@@ -136,6 +138,12 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   Proof, Recipe (model choice records Ollama's current digest) and History
   (verdicts re-derived from sealed records). No live progress yet; the local
   server is not hardened beyond localhost binding and JSON-only writes.
+
+The reviewed 2026-11-17 recertification, after the any-version and
+any-Python changes above, passed adapter capture and the exact repair outcome
+3/3 for Claude Code, Codex CLI, DeepSeek Harness, Hermes Agent, and Pi, with
+zero timeouts. The release gate must still establish the exact tagged source
+and artifact bytes; certification does not transfer to them.
 
 ## 0.2.0 — 2026-11-07
 
