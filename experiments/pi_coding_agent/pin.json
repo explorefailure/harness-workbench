@@ -2,7 +2,7 @@
   "schema": "pi-hwb-pin/v0.1",
   "npm_package": "@earendil-works/pi-coding-agent",
   "version": "0.84.1",
-  "npm_integrity": "sha512-ncAqFrG+zAfCU8LcSZBwxzx1UB9XMgjgmg4lekeX5eXHmn/8BAhWcQcOpGbI5emBl57FVBqCwGr5MXChQ/VUxQ==",
+  "npm_integrity": "sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A==",
   "source_repository": "https://github.com/earendil-works/pi",
   "source_commit": "6f707eb36064e82af9c1320a7634f4dfad21049b",
   "node_version": "22.22.3",

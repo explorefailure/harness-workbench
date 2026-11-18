@@ -1,0 +1,56 @@
+{
+  "schema": "hwb-prerequisite-pin/v1",
+  "source": "nodejs.org/dist SHASUMS256.txt",
+  "versions": {
+    "22.22.3": {
+      "version": "22.22.3",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-arm64.tar.gz",
+          "archive_sha256": "0da7ff74ef8611328c8212f17943368713a2ad953fb7d89a8c8a0eae87c23207",
+          "strip": "node-v22.22.3-darwin-arm64"
+        },
+        "darwin-x86_64": {
+          "url": "https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-x64.tar.gz",
+          "archive_sha256": "45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec",
+          "strip": "node-v22.22.3-darwin-x64"
+        },
+        "linux-x86_64": {
+          "url": "https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-x64.tar.gz",
+          "archive_sha256": "c7a10d6816da8eaaa7534dd73c71c6e2b2c391dbbf845e364902d156615dd1b8",
+          "strip": "node-v22.22.3-linux-x64"
+        },
+        "linux-aarch64": {
+          "url": "https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-arm64.tar.gz",
+          "archive_sha256": "cc8bc82b2dd0b595c3b95a4c3c9c8c350907cff011afbdee3d1379e812e1e3e3",
+          "strip": "node-v22.22.3-linux-arm64"
+        }
+      }
+    },
+    "26.13.0": {
+      "version": "26.13.0",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-arm64.tar.gz",
+          "archive_sha256": "d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6",
+          "strip": "node-v26.13.0-darwin-arm64"
+        },
+        "darwin-x86_64": {
+          "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-x64.tar.gz",
+          "archive_sha256": "525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e",
+          "strip": "node-v26.13.0-darwin-x64"
+        },
+        "linux-x86_64": {
+          "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.gz",
+          "archive_sha256": "5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455",
+          "strip": "node-v26.13.0-linux-x64"
+        },
+        "linux-aarch64": {
+          "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-arm64.tar.gz",
+          "archive_sha256": "439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791",
+          "strip": "node-v26.13.0-linux-arm64"
+        }
+      }
+    }
+  }
+}

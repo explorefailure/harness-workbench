@@ -118,8 +118,142 @@ class TestShippedCatalog(unittest.TestCase):
                 Path(store), which=lambda name: "/bin/" + name if name == "pi" else None)}
         self.assertEqual("/bin/pi", rows["pi"]["on_path"])
         self.assertIsNone(rows["opencode"]["on_path"])
-        self.assertFalse(rows["pi"]["installable_here"])  # npm installer not built yet
+        self.assertFalse(rows["claude"]["installable_here"])  # npm installer is Pi-only so far
         self.assertTrue(rows["claude"]["sign_in"])
+
+
+class TestShippedNpmAndPrerequisitePins(unittest.TestCase):
+    def test_prerequisite_pins_resolve_for_every_supported_platform(self):
+        catalog = runtimes.load_catalog()
+        for name in ("node", "uv"):
+            entry = catalog["prerequisites"][name]
+            for version, spec in entry["versions"].items():
+                with self.subTest(prerequisite=name, version=version):
+                    pin = runtimes._pin(spec)
+                    self.assertEqual(version, pin["version"])
+                    self.assertEqual({"darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-aarch64"},
+                                     set(pin["platforms"]))
+                    for asset in pin["platforms"].values():
+                        self.assertRegex(asset["archive_sha256"], r"^[0-9a-f]{64}$")
+                        self.assertTrue(asset["url"].endswith(".tar.gz"))
+
+    def test_each_pi_version_names_a_known_node_and_ships_its_lockfile(self):
+        catalog = runtimes.load_catalog()
+        nodes = catalog["prerequisites"]["node"]["versions"]
+        for version, spec in catalog["harnesses"]["pi"]["versions"].items():
+            with self.subTest(version=version):
+                self.assertIn(spec["node"], nodes)
+                pin = runtimes._pin(spec)
+                self.assertEqual(spec["node"], pin["node_version"])
+                lock = json.loads((runtimes.PACKAGE / spec["lock_dir"] / "package-lock.json").read_text())
+                key = "node_modules/" + pin["npm_package"]
+                self.assertEqual(version, lock["packages"][key]["version"])
+                self.assertEqual(pin["npm_integrity"], lock["packages"][key]["integrity"])
+
+    def test_the_bundled_pi_lockfile_is_the_one_its_pin_binds(self):
+        spec = runtimes.load_catalog()["harnesses"]["pi"]["versions"]["1.4.0"]
+        lock = (runtimes.PACKAGE / spec["lock_dir"] / "package-lock.json").read_bytes()
+        self.assertEqual(runtimes._pin(spec)["installation_lock_sha256"], hashlib.sha256(lock).hexdigest())
+
+
+def _tree(members, mode=0o755):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, data, kind in members:
+            info = tarfile.TarInfo(name)
+            if kind == "file":
+                info.size = len(data)
+                info.mode = mode
+                archive.addfile(info, io.BytesIO(data))
+            elif kind == "dir":
+                info.type = tarfile.DIRTYPE
+                archive.addfile(info)
+            elif kind == "link":
+                info.type = tarfile.SYMTYPE
+                info.linkname = data
+                archive.addfile(info)
+            elif kind == "hard":
+                info.type = tarfile.LNKTYPE
+                info.linkname = data
+                archive.addfile(info)
+    return buffer.getvalue()
+
+
+class TestExtractTree(unittest.TestCase):
+    def setUp(self):
+        self.target = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.target, ignore_errors=True))
+
+    def test_files_dirs_and_inside_links_with_normalized_modes(self):
+        raw = _tree([("top", None, "dir"), ("top/bin/node", BINARY, "file"),
+                     ("top/lib/npm/cli.js", b"js", "file"),
+                     ("top/bin/npm", "../lib/npm/cli.js", "link")])
+        self.assertEqual(2, runtimes._extract_tree(raw, "top", self.target))
+        self.assertEqual(BINARY, (self.target / "bin/node").read_bytes())
+        self.assertEqual(0o755, (self.target / "bin/node").stat().st_mode & 0o777)
+        self.assertEqual("../lib/npm/cli.js", os.readlink(self.target / "bin/npm"))
+
+    def test_refusals(self):
+        cases = {
+            "escaping link": [("top/bin/x", "../../outside", "link")],
+            "absolute link": [("top/bin/x", "/etc/passwd", "link")],
+            "hard link": [("top/a", b"a", "file"), ("top/b", "top/a", "hard")],
+            "dot-dot name": [("top/../evil", b"x", "file")],
+            "absolute name": [("/top/evil", b"x", "file")],
+            "outside strip": [("other/evil", b"x", "file")],
+        }
+        for label, members in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as target:
+                with self.assertRaises(runtimes.RuntimeStoreError):
+                    runtimes._extract_tree(_tree(members), "top", Path(target))
+
+
+class TestTreeInstallAndNodeChoice(StoreFixture):
+    def setUp(self):
+        super().setUp()
+        self.archive = _tree([("node-v1", None, "dir"), ("node-v1/bin/node", BINARY, "file")])
+        (self.package / "node.json").write_text(json.dumps({"versions": {"1.0.0": {
+            "version": "1.0.0", "platforms": {"linux-x86_64": {
+                "url": "https://example.invalid/node.tar.gz", "strip": "node-v1",
+                "archive_sha256": hashlib.sha256(self.archive).hexdigest()}}}}}))
+        (self.package / "lock").mkdir()
+        (self.package / "lock/package-lock.json").write_text(json.dumps({"packages": {"": {}, "node_modules/x": {}}}))
+        self.catalog["prerequisites"] = {"node": {
+            "kind": "tree", "executable": "node", "installer": True, "default": "1.0.0",
+            "versions": {"1.0.0": {"pin": "node.json#1.0.0"}}}}
+        self.catalog["harnesses"]["npmtool"] = {
+            "kind": "npm", "executable": "npmtool", "installer": True, "default": "2.0.0",
+            "versions": {"2.0.0": {"pin": "pin.json", "lock_dir": "lock", "node": "1.0.0"}}}
+
+    def test_tree_install_records_a_tree_digest(self):
+        result = runtimes.add("node", root=self.store, catalog=self.catalog, key="linux-x86_64",
+                              fetch=self.fetch())
+        self.assertEqual(BINARY, (self.store / "node/1.0.0/bin/node").read_bytes())
+        self.assertRegex(result["install_record"]["tree_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIn(str(self.store / "node/1.0.0/bin"), runtimes.bin_dirs(self.store, self.catalog))
+
+    def plan_npm(self, path_node):
+        return runtimes.plan("npmtool", root=self.store, catalog=self.catalog,
+                             key="linux-x86_64", path_node=path_node)
+
+    def test_exact_node_on_path_is_used_and_nothing_extra_downloaded(self):
+        steps = self.plan_npm({"path": "/usr/bin/node", "version": "1.0.0"})
+        self.assertEqual("path", steps["node"]["source"])
+        self.assertEqual([], steps["prerequisites"])
+
+    def test_other_node_on_path_means_the_pinned_node_is_planned_into_the_store(self):
+        for path_node in (None, {"path": "/usr/bin/node", "version": "0.9.0"}):
+            with self.subTest(path_node=path_node):
+                steps = self.plan_npm(path_node)
+                self.assertEqual("store", steps["node"]["source"])
+                self.assertEqual(["https://example.invalid/node.tar.gz"],
+                                 [d["url"] for d in steps["downloads"] if d["url"].startswith("https")])
+
+    def test_store_node_already_installed_is_reused(self):
+        runtimes.add("node", root=self.store, catalog=self.catalog, key="linux-x86_64", fetch=self.fetch())
+        steps = self.plan_npm(None)
+        self.assertEqual("store", steps["node"]["source"])
+        self.assertEqual([], steps["prerequisites"])
 
 
 class TestAdd(StoreFixture):

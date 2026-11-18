@@ -120,9 +120,11 @@ def cmd_harness(args) -> int:
     try:
         if args.action == "list":
             rows = runtimes.describe()
+            prerequisites = runtimes.describe_prerequisites()
             if args.json:
                 json.dump({"store": str(runtimes.store_root()), "platform": runtimes.platform_key(),
-                           "harnesses": rows}, sys.stdout, indent=2, sort_keys=True)
+                           "harnesses": rows, "prerequisites": prerequisites},
+                          sys.stdout, indent=2, sort_keys=True)
                 sys.stdout.write("\n")
                 return 0
             print("Runtime store: %s (%s)" % (runtimes.store_root(), runtimes.platform_key()))
@@ -139,6 +141,12 @@ def cmd_harness(args) -> int:
                     row["display"], row["default_version"], "; ".join(where),
                     ", ".join(modes) or "none",
                     "  (needs sign-in)" if row["sign_in"] else ""))
+            print("Prerequisites (fetched automatically when a harness needs them):")
+            for row in prerequisites:
+                where = ["on PATH: " + row["on_path"]] if row["on_path"] else []
+                where.extend("store: " + i["version"] for i in row["installed"])
+                print("  %-17s %-11s %s" % (row["display"], row["default_version"],
+                                            "; ".join(where) or "not installed"))
             return 0
         if args.action == "add":
             steps = runtimes.plan(args.harness, args.version)
@@ -146,6 +154,10 @@ def cmd_harness(args) -> int:
                 print("%s %s is already installed: %s" % (args.harness, steps["version"], steps["destination"]))
                 return 0
             print("Install %s %s into %s" % (args.harness, steps["version"], steps["destination"]))
+            if steps.get("node"):
+                node = steps["node"]
+                print("  uses Node %s from %s" % (node["version"],
+                      "PATH" if node["source"] == "path" else "the store (" + node["bin"] + ")"))
             for item in steps["downloads"]:
                 print("  download %s\n    sha256 %s" % (item["url"], item["sha256"]))
             if not args.yes:
@@ -156,7 +168,7 @@ def cmd_harness(args) -> int:
                     return 1
             result = runtimes.add(args.harness, args.version)
             print("Installed %s %s: %s" % (args.harness, steps["version"], result["path"]))
-            entry = runtimes.load_catalog()["harnesses"][args.harness]
+            entry = runtimes.load_catalog()["harnesses"].get(args.harness, {})
             if entry.get("sign_in"):
                 print("Next: " + entry["sign_in"])
             return 0
