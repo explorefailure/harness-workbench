@@ -119,6 +119,7 @@ class TestShippedCatalog(unittest.TestCase):
         self.assertEqual("/bin/pi", rows["pi"]["on_path"])
         self.assertIsNone(rows["opencode"]["on_path"])
         self.assertFalse(rows["claude"]["installable_here"])  # npm installer is Pi-only so far
+        self.assertTrue(rows["hermes"]["installable_here"])
         self.assertTrue(rows["claude"]["sign_in"])
 
 
@@ -254,6 +255,77 @@ class TestTreeInstallAndNodeChoice(StoreFixture):
         steps = self.plan_npm(None)
         self.assertEqual("store", steps["node"]["source"])
         self.assertEqual([], steps["prerequisites"])
+
+
+def _git(cwd, *args):
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
+                          text=True, env=env).stdout.strip()
+
+
+class TestHermesSource(unittest.TestCase):
+    """The uv-source checks against a real local repository with an annotated tag."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        _git(self.repo, "init", "-q")
+        (self.repo / "uv.lock").write_text("lock\n")
+        (self.repo / "app.py").write_text("print(1)\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "release")
+        _git(self.repo, "tag", "-a", "v1.0.0", "-m", "v1.0.0")
+        self.pin = {"release_tag": "v1.0.0",
+                    "source_commit": _git(self.repo, "rev-parse", "HEAD"),
+                    "tag_object": _git(self.repo, "rev-parse", "v1.0.0^{tag}"),
+                    "uv_lock_sha256": hashlib.sha256(b"lock\n").hexdigest()}
+
+    def test_matching_checkout_passes_and_tree_digest_is_checked_when_pinned(self):
+        identity = runtimes._verify_hermes_source(self.repo, self.pin)
+        self.assertEqual(self.pin["source_commit"], identity["source_commit"])
+        tree = runtimes._source_tree_digest(self.repo)["source_tree_sha256"]
+        self.assertEqual(tree, runtimes._verify_hermes_source(
+            self.repo, dict(self.pin, source_tree_sha256=tree))["source_tree_sha256"])
+        with self.assertRaisesRegex(runtimes.RuntimeStoreError, "tracked source"):
+            runtimes._verify_hermes_source(self.repo, dict(self.pin, source_tree_sha256="0" * 64))
+
+    def test_each_mismatch_is_refused(self):
+        cases = {"commit": dict(self.pin, source_commit="0" * 40),
+                 "tag object": dict(self.pin, tag_object="0" * 40),
+                 "uv.lock": dict(self.pin, uv_lock_sha256="0" * 64)}
+        for label, pin in cases.items():
+            with self.subTest(label), self.assertRaises(runtimes.RuntimeStoreError):
+                runtimes._verify_hermes_source(self.repo, pin)
+        (self.repo / "app.py").write_text("changed\n")
+        with self.assertRaisesRegex(runtimes.RuntimeStoreError, "dirty"):
+            runtimes._verify_hermes_source(self.repo, self.pin)
+
+    def test_failed_uv_sync_leaves_no_version_dir(self):
+        fake = self.tmp / "fakeuv"
+        fake.mkdir()
+        (fake / "uv").write_text("#!/bin/sh\necho boom >&2\nexit 7\n")
+        (fake / "uv").chmod(0o755)
+        store = self.tmp / "store"
+        steps = {"version": "1.0.0", "platform": "linux-x86_64",
+                 "uv": {"version": "9", "source": "path", "bin": str(fake)}}
+        entry = {"executable": "hermes"}
+        spec = {"repository": self.repo.as_uri(), "pin": "unused"}
+        with mock.patch.object(runtimes, "_pin", return_value=self.pin):
+            with self.assertRaisesRegex(runtimes.RuntimeStoreError, "uv sync failed"):
+                runtimes._install_uv_source("hermes", entry, spec, steps, store, {}, None, "linux-x86_64")
+        self.assertFalse((store / "hermes" / "1.0.0").exists())
+
+    def test_shipped_hermes_entries_plan_a_pinned_clone(self):
+        with tempfile.TemporaryDirectory() as store:
+            for version in ("0.22.5", "0.20.5"):
+                with self.subTest(version=version):
+                    steps = runtimes.plan("hermes", version, root=Path(store), key="linux-x86_64")
+                    pin = runtimes._pin(runtimes.load_catalog()["harnesses"]["hermes"]["versions"][version])
+                    self.assertIn("--branch " + pin["release_tag"], steps["downloads"][-2]["url"])
+                    self.assertEqual("0.12.21", steps["uv"]["version"])
 
 
 class TestAdd(StoreFixture):

@@ -154,6 +154,10 @@ def cmd_harness(args) -> int:
                 print("%s %s is already installed: %s" % (args.harness, steps["version"], steps["destination"]))
                 return 0
             print("Install %s %s into %s" % (args.harness, steps["version"], steps["destination"]))
+            if steps.get("uv"):
+                uv = steps["uv"]
+                print("  uses uv %s from %s" % (uv["version"],
+                      "PATH" if uv["source"] == "path" else "the store (" + uv["bin"] + ")"))
             if steps.get("node"):
                 node = steps["node"]
                 print("  uses Node %s from %s" % (node["version"],

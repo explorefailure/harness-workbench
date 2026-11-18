@@ -7,6 +7,15 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb harness add hermes [--version 0.22.5|0.20.5]` installs Hermes Agent into
+  the runtime store: a shallow clone of the pinned release tag, checked against
+  the pinned commit, annotated tag object, `uv.lock` and (for 0.22.5) tracked
+  source tree before anything from it runs; then `uv sync --frozen` with a
+  uv-managed Python kept inside the install. uv is used from PATH when it is
+  exactly the pinned 0.12.21, otherwise it is installed into the store first.
+  git is required. A store Hermes works for `hwb try` and the builder, but not
+  for certification: uv writes the install path into the launcher, so its hash
+  cannot equal the certified one.
 - `hwb harness add pi [--version 0.84.1|1.4.0]` installs Pi into the runtime
   store with `npm ci --ignore-scripts` from a shipped lockfile (npm checks every
   package's sha512), then checks the result with the Pi builder's own verifier

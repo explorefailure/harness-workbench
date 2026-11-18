@@ -153,7 +153,7 @@ def bin_dirs(root: Optional[Path] = None, catalog: Optional[Dict[str, Any]] = No
     return dirs
 
 
-INSTALLER_KINDS = ("binary", "tree", "npm")
+INSTALLER_KINDS = ("binary", "tree", "npm", "uv-source")
 
 
 def _has_installer(entry: Dict[str, Any]) -> bool:
@@ -166,10 +166,10 @@ def available_here(entry: Dict[str, Any], version: str, key: Optional[str] = Non
         return False
     key = key or platform_key()
     spec = entry["versions"][version]
-    if entry["kind"] == "npm":
+    if entry["kind"] in ("npm", "uv-source"):
         catalog = load_catalog() if catalog is None else catalog
-        node = catalog["prerequisites"]["node"]
-        return available_here(node, spec["node"], key, catalog)
+        tool = "node" if entry["kind"] == "npm" else "uv"
+        return available_here(catalog["prerequisites"][tool], spec[tool], key, catalog)
     return key in _pin(spec)["platforms"]
 
 
@@ -206,27 +206,39 @@ def describe_prerequisites(root: Optional[Path] = None, catalog: Optional[Dict[s
             for n, e in sorted(catalog.get("prerequisites", {}).items())]
 
 
-def node_version_on_path(which: Callable[[str], Optional[str]] = shutil.which) -> Optional[Dict[str, str]]:
-    node = which("node")
-    if not node:
+def tool_version_on_path(tool: str, which: Callable[[str], Optional[str]] = shutil.which
+                         ) -> Optional[Dict[str, str]]:
+    """`node --version` -> v22.22.3; `uv --version` -> uv 0.12.21 (...)."""
+    path = which(tool)
+    if not path:
         return None
     try:
-        done = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=20)
+        done = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return None
-    version = done.stdout.strip().lstrip("v")
-    return {"path": node, "version": version} if done.returncode == 0 and version else None
+    words = done.stdout.split()
+    if done.returncode != 0 or not words:
+        return None
+    version = (words[1] if tool == "uv" and len(words) > 1 else words[0]).lstrip("v")
+    return {"path": path, "version": version}
+
+
+def node_version_on_path(which: Callable[[str], Optional[str]] = shutil.which) -> Optional[Dict[str, str]]:
+    return tool_version_on_path("node", which)
+
+
+def _tool_for(tool: str, wanted: str, root: Path, on_path: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    """The exact pinned version on PATH, else the store's copy of it."""
+    if on_path and on_path["version"] == wanted:
+        return {"version": wanted, "source": "path", "bin": str(Path(on_path["path"]).parent)}
+    stored = version_dir(root, tool, wanted)
+    return {"version": wanted, "source": "store", "bin": str(stored / "bin"),
+            "installed": read_install_record(stored) is not None}
 
 
 def _node_for(spec: Dict[str, Any], root: Path,
               path_node: Optional[Dict[str, str]]) -> Dict[str, Any]:
-    """Which Node runs npm and the harness: the exact version on PATH, else the store's."""
-    wanted = spec["node"]
-    if path_node and path_node["version"] == wanted:
-        return {"version": wanted, "source": "path", "bin": str(Path(path_node["path"]).parent)}
-    stored = version_dir(root, "node", wanted)
-    return {"version": wanted, "source": "store", "bin": str(stored / "bin"),
-            "installed": read_install_record(stored) is not None}
+    return _tool_for("node", spec["node"], root, path_node)
 
 
 def plan(name: str, version: Optional[str] = None, root: Optional[Path] = None,
@@ -255,6 +267,21 @@ def plan(name: str, version: Optional[str] = None, root: Optional[Path] = None,
                                     % (name, chosen, key, ", ".join(sorted(pin["platforms"]))))
         asset = pin["platforms"][key]
         result["downloads"].append({"url": asset["url"], "sha256": asset["archive_sha256"]})
+    elif entry["kind"] == "uv-source":
+        uv = _tool_for("uv", spec["uv"], root, tool_version_on_path("uv"))
+        result["uv"] = uv
+        if uv["source"] == "store" and not uv["installed"] and not result["already_installed"]:
+            prerequisite = plan("uv", uv["version"], root, catalog, key)
+            result["prerequisites"].append(prerequisite)
+            result["downloads"].extend(prerequisite["downloads"])
+        pin = _pin(spec)
+        result["downloads"].append({"url": "git clone --depth 1 --branch %s %s"
+                                           % (pin["release_tag"], spec["repository"]),
+                                    "sha256": "commit %s, tag object %s, uv.lock %s"
+                                              % (pin["source_commit"][:12], pin["tag_object"][:12],
+                                                 pin["uv_lock_sha256"][:12])})
+        result["downloads"].append({"url": "uv sync --frozen: Python + packages from uv.lock",
+                                    "sha256": "per-package hashes in uv.lock"})
     else:  # npm: the lockfile's registry downloads, each checked by npm against its integrity
         if path_node == "probe":
             path_node = node_version_on_path()
@@ -506,6 +533,120 @@ def _verify_npm_harness(name: str, launcher: Path, pin: Dict[str, Any]) -> Dict[
     return json.loads(done.stdout)
 
 
+def _git(source: Path, *args: str) -> str:
+    done = subprocess.run(["git", "-C", str(source), *args], capture_output=True, text=True, timeout=120,
+                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    if done.returncode != 0:
+        raise RuntimeStoreError("git %s failed: %s" % (" ".join(args), done.stderr.strip()[-500:]))
+    return done.stdout.strip()
+
+
+def _source_tree_digest(source: Path) -> Dict[str, Any]:
+    """Tracked files' working bytes (link targets for symlinks); the Hermes builder's rule."""
+    names = sorted(filter(None, _git(source, "ls-files", "-z").split("\0")))
+    digest = hashlib.sha256()
+    for name in names:
+        path = source / name
+        content = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+        digest.update(name.encode() + b"\0" + hashlib.sha256(content).digest())
+    return {"source_file_count": len(names), "source_tree_sha256": digest.hexdigest()}
+
+
+def _verify_hermes_source(source: Path, pin: Dict[str, Any]) -> Dict[str, Any]:
+    commit = _git(source, "rev-parse", "HEAD")
+    if commit != pin["source_commit"]:
+        raise RuntimeStoreError("Hermes source commit %s does not match the pin" % commit)
+    if _git(source, "rev-parse", pin["release_tag"] + "^{tag}") != pin["tag_object"]:
+        raise RuntimeStoreError("Hermes release tag object does not match the pin")
+    if _git(source, "rev-parse", pin["release_tag"] + "^{commit}") != commit:
+        raise RuntimeStoreError("Hermes release tag does not point at the source commit")
+    if _git(source, "status", "--porcelain", "--untracked-files=normal"):
+        raise RuntimeStoreError("Hermes source checkout is dirty")
+    lock = hashlib.sha256((source / "uv.lock").read_bytes()).hexdigest()
+    if lock != pin["uv_lock_sha256"].removeprefix("sha256:"):
+        raise RuntimeStoreError("Hermes uv.lock does not match the pin")
+    identity = {"source_commit": commit, "tag_object": pin["tag_object"], "uv_lock_sha256": lock}
+    if "source_tree_sha256" in pin:
+        identity.update(_source_tree_digest(source))
+        if identity["source_tree_sha256"] != pin["source_tree_sha256"]:
+            raise RuntimeStoreError("Hermes tracked source does not match the pin")
+    return identity
+
+
+def _install_uv_source(name, entry, spec, steps, root, catalog, fetch, key):
+    """Hermes: pinned git tag + `uv sync --frozen`, built IN PLACE.
+
+    uv writes absolute paths into the venv (script shebangs, pyvenv.cfg), so a
+    venv cannot be built in .partial/ and renamed. The version dir is built
+    where it will live, install.json is written last, and any failure removes
+    the whole directory.
+    """
+    if not shutil.which("git"):
+        raise RuntimeStoreError("git is required to install %s; install git and try again" % name)
+    uv = steps["uv"]
+    if uv["source"] == "store" and not read_install_record(version_dir(root, "uv", uv["version"])):
+        add("uv", uv["version"], root=root, catalog=catalog, fetch=fetch, key=key)
+    uv_bin = Path(uv["bin"]) / "uv"
+    pin = _pin(spec)
+    destination = version_dir(root, name, steps["version"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.mkdir()
+    try:
+        source = destination / "source"
+        done = subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch", pin["release_tag"],
+                               spec["repository"], str(source)], capture_output=True, text=True,
+                              timeout=600, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        if done.returncode != 0:
+            raise RuntimeStoreError("git clone failed: %s" % done.stderr.strip()[-1000:])
+        identity = _verify_hermes_source(source, pin)  # before running anything from the checkout
+        env = dict(os.environ)
+        env.pop("UV_OFFLINE", None)
+        env.pop("VIRTUAL_ENV", None)
+        env.update({"UV_CACHE_DIR": str(root / ".cache" / "uv"),
+                    "UV_PYTHON_INSTALL_DIR": str(destination / "python"),
+                    "UV_PYTHON_PREFERENCE": "only-managed"})
+        command = [str(uv_bin), "sync", "--frozen", "--no-dev"]
+        for extra in pin.get("extras", []):
+            command += ["--extra", extra]
+        if pin.get("python_version"):
+            command += ["--python", pin["python_version"]]
+        done = subprocess.run(command, cwd=source, env=env, capture_output=True, text=True, timeout=1800)
+        if done.returncode != 0:
+            raise RuntimeStoreError("uv sync failed (exit %d): %s" % (done.returncode, done.stderr[-2000:]))
+        launcher = source / ".venv" / "bin" / entry["executable"]
+        if not launcher.is_file():
+            raise RuntimeStoreError("uv sync produced no %s launcher" % entry["executable"])
+        (destination / "bin").mkdir()
+        os.symlink(os.path.join("..", "source", ".venv", "bin", entry["executable"]),
+                   destination / "bin" / entry["executable"])
+        probe = subprocess.run([str(destination / "bin" / entry["executable"]), "--version"],
+                               capture_output=True, text=True, timeout=120,
+                               env=dict(env, HERMES_HOME=str(destination / ".probe-home")))
+        shutil.rmtree(destination / ".probe-home", ignore_errors=True)
+        words = probe.stdout.split()
+        reported = words[2].lstrip("v") if len(words) > 2 else ""
+        if probe.returncode != 0 or reported != steps["version"]:
+            raise RuntimeStoreError("installed %s reports %r, expected %s"
+                                    % (name, probe.stdout.strip()[:200], steps["version"]))
+        from . import __version__
+        record = {
+            "schema": RECORD_SCHEMA, "harness": name, "version": steps["version"],
+            "kind": "uv-source", "platform": steps["platform"], "catalog_sha256": catalog_digest(),
+            "repository": spec["repository"], "release_tag": pin["release_tag"],
+            "identity": identity, "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
+            "uv": {k: uv[k] for k in ("version", "source", "bin")},
+            "source_root": str(source),
+            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "workbench_version": __version__,
+        }
+        (destination / "install.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n",
+                                                  encoding="utf-8")
+    except BaseException:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+    return {"installed": True, "path": str(destination), "install_record": record}
+
+
 def add(name: str, version: Optional[str] = None, root: Optional[Path] = None,
         catalog: Optional[Dict[str, Any]] = None, fetch: Callable[[str], bytes] = _default_fetch,
         key: Optional[str] = None, path_node: Any = "probe") -> Dict[str, Any]:
@@ -525,6 +666,8 @@ def add(name: str, version: Optional[str] = None, root: Optional[Path] = None,
         return _install_binary(name, entry, spec, steps, root, fetch)
     if entry["kind"] == "tree":
         return _install_tree(name, entry, spec, steps, root, fetch)
+    if entry["kind"] == "uv-source":
+        return _install_uv_source(name, entry, spec, steps, root, catalog, fetch, steps["platform"])
     return _install_npm(name, entry, spec, steps, root, catalog, fetch, steps["platform"])
 
 
