@@ -228,7 +228,7 @@ files and permission changes. Custom workloads retain their own semantics.
 
 ## Local custom-task evidence bridge
 
-The unreleased candidate also provides `hwb-adapter spec HARNESS CONFIG
+Workbench also provides `hwb-adapter spec HARNESS CONFIG
 --launcher OWNED_RUNTIME --output NEW_SPEC.json`. Use `pi` as `HARNESS`;
 for Hermes the launcher argument is the owned source directory, while Pi and
 OpenCode take their pinned executable. It stages declared task inputs afresh

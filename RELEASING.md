@@ -1,25 +1,27 @@
 # Releasing Harness Workbench
 
-> **0.2.0 preparation, 2026-11-07:** [v0.1.0 was published on 2026-08-25](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0).
-> The commands below now target the unused `0.2.0` / `v0.2.0` identity. The
+> **0.3.0 preparation, 2026-11-17:** [v0.2.0 was published on 2026-11-08](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
+> The commands below now target the unused `0.3.0` / `v0.3.0` identity. The
 > source version alone does not make that release public; every gate in this
 > procedure still applies.
 
 This is the maintainer procedure for a GitHub release. A build on a laptop is
 not a release. A version is public only after its tag and GitHub release exist.
-The historical 0.1.0 procedure and evidence remain in
-[`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md).
+The historical 0.1.0 and 0.2.0 records remain in
+[`docs/release-conformance-0.1.0.md`](docs/release-conformance-0.1.0.md) and
+[`docs/release-conformance-0.2.0.md`](docs/release-conformance-0.2.0.md).
 The current candidate policy is:
 
 | Stage | Python package version | Git tag | GitHub release |
 |---|---|---|---|
 | first public release | `0.1.0` | `v0.1.0` | full release — **published 2026-08-25** |
-| current promotion | `0.2.0` | `v0.2.0` | full release — not yet created |
+| second public release | `0.2.0` | `v0.2.0` | full release — **published 2026-11-08** |
+| current promotion | `0.3.0` | `v0.3.0` | full release — not yet created |
 
 A version that has already been published is history: never retarget its tag or
-reuse its number. The 0.2.0 promotion carries the merged builder integrations,
-Reality Check, and reviewed live certification into a new release commit and
-new build. PR and certification evidence does not transfer to release bytes.
+reuse its number. The 0.3.0 promotion carries the local web Lab, the
+any-version Reality Check, the newcomer install fixes, and the reviewed
+2026-11-17 live certification into a new release commit and new build. PR and certification evidence does not transfer to release bytes.
 
 Tags are signed, annotated, immutable, and must point at the exact commit whose
 source produced the uploaded files. Never move or reuse a failed tag; fix the
@@ -56,8 +58,8 @@ release-gate actions, not changes this procedure or a local commit can perform.
 
 First turn the preparation branch into a release commit: keep the README status
 as an accurate unreleased-candidate statement, move the candidate changelog
-entries under `## 0.2.0 — YYYY-MM-DD` with the date of this release commit, and
-review [`docs/release-conformance-0.2.0.md`](docs/release-conformance-0.2.0.md).
+entries under `## 0.3.0 — YYYY-MM-DD` with the date of this release commit, and
+review [`docs/release-conformance-0.3.0.md`](docs/release-conformance-0.3.0.md).
 That record must continue to say that no final GitHub release exists yet and must
 not promote preparation self-runs to release evidence. Commit the release-only
 edits.
@@ -159,8 +161,8 @@ this check pass; start another fresh clone.
 For the current final promotion, these variables and their agreement check are exact:
 
 ```sh
-VERSION=0.2.0
-TAG=v0.2.0
+VERSION=0.3.0
+TAG=v0.3.0
 test "$(PYTHONPATH=src python -c 'import harness_workbench as p; print(p.__version__)')" = "$VERSION"
 python tools/verify_release_tag.py "$TAG"
 python -m unittest discover -s tests -v
@@ -257,10 +259,19 @@ gate. Only a commit that already passed step 2 gets pushed.
 
 ```sh
 cd "$SOURCE_REPO"
-git push origin "$RELEASE_COMMIT":refs/heads/release/0.2.0
+git push origin "$RELEASE_COMMIT":refs/heads/release-prep/0.3.0
 git fetch origin
-test "$(git rev-parse 'origin/release/0.2.0^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release-prep/0.3.0^{commit}')" = "$RELEASE_COMMIT"
 ```
+
+Push to `release-prep/`, not `release/`. The repository ruleset protects
+`release/**` like `main`: a ref there must point at a commit whose required
+checks already passed, so GitHub refuses a new release commit pushed straight
+to it. Open a pull request from `release-prep/0.3.0` to `main`; that runs the
+required checks on this exact commit. Merge it only with a **merge commit**,
+never squash or rebase, so `main` contains `$RELEASE_COMMIT` itself and the tag
+can point at the bytes that passed the gate. After the checks pass, also push
+`$RELEASE_COMMIT` to `refs/heads/release/0.3.0` as the protected release ref.
 
 Now re-run the gate against what GitHub actually serves. Step 2 proved the
 commit is sound; this proves the remote holds that commit and nothing else, and
@@ -273,7 +284,7 @@ test ! -e hwb-release-remote
 git clone https://github.com/explorefailure/harness-workbench.git hwb-release-remote
 cd hwb-release-remote
 git fetch --tags origin
-test "$(git rev-parse 'origin/release/0.2.0^{commit}')" = "$RELEASE_COMMIT"
+test "$(git rev-parse 'origin/release-prep/0.3.0^{commit}')" = "$RELEASE_COMMIT"
 git checkout --detach "$RELEASE_COMMIT"
 test -z "$(git status --porcelain --untracked-files=all)"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_COMMIT")"
@@ -397,7 +408,7 @@ Stop and mark the release with a clear warning if uploaded bytes or first-run
 behavior differ. Never replace assets silently.
 
 After the downloaded bytes pass, finalize the release copy of
-`docs/release-conformance-0.2.0.md` with the exact release commit, tag and
+`docs/release-conformance-0.3.0.md` with the exact release commit, tag and
 verification, run URLs, setting/route evidence, asset filenames and SHA-256
 values, downloaded-asset result, assessor/approver, and residual limitations.
 Publish that finalized copy beside the assets or in the GitHub release body.
@@ -409,5 +420,5 @@ an author-side run.
 ## 6. Close the final promotion
 
 Only after the final GitHub release and downloaded assets pass verification may
-the README say that v0.2.0 is released. Publishing to a package index is a
+the README say that v0.3.0 is released. Publishing to a package index is a
 separate, explicitly authorized operation and is not part of this procedure.

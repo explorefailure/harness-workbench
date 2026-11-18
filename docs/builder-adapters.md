@@ -27,11 +27,12 @@ A compatible model can still choose the wrong files, make a bad edit or fail
 checks. Neither a fixture pass nor one repair establishes universal compatibility
 or model quality. Workbench records execution and evaluates declared checks.
 
-## Current release candidate
+## Released integrations
 
-These integrations are merged on `main` and prepared for 0.2.0, but remain
-unreleased until the signed tag, GitHub assets, and downloaded-artifact checks
-pass. Install the working checkout to try them before publication.
+These integrations shipped in
+[v0.2.0](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0),
+published 2026-11-08. Changes on `main` since then are prepared for v0.3.0 and
+are unreleased until its release gates pass.
 
 | Harness | Pinned runtime | Model selection | Detailed guide |
 | --- | --- | --- | --- |
@@ -375,7 +376,7 @@ and process cleanup provide no OS/network sandbox.
 
 ## Seal a local custom task with the evidence bridge
 
-The unreleased candidate adds `hwb-adapter spec`. Unlike the reference
+Since v0.2.0, `hwb-adapter spec` is available. Unlike the reference
 `coding.json`, it generates an outer spec for the config/task you select.
 This first bridge revision accepts scripted providers or unauthenticated HTTP
 **loopback** endpoints. It rejects credential references and native hosted
@@ -939,10 +940,9 @@ case retain their original scope. Successful normal model tasks are separate
 from this cancellation evidence. Commands, failures and audits are retained
 under the local `outputs/opencode-cleanup-fix/` evidence bundle.
 
-The [existing v0.1.0 release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
-predates these adapters. Source on `main` now reports 0.2.0, but that version is
-not public until its release gates and GitHub publication complete. Do not use
-the public 0.1.0 package as installation instructions for this work.
+The [v0.1.0 release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.1.0)
+predates these adapters; they first shipped in
+[v0.2.0](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
 The [implementation plan](model-provider-plan.md#remaining-validation-and-documentation-gaps)
 records the concrete blocked actions and remaining installation limits. Commands,
 results, failures and source hashes are retained in the local `validation-gaps/`

@@ -1,5 +1,10 @@
 # Explore Failure - Harness Workbench 0.2.0 release conformance record
 
+The separate current-candidate record is
+[`docs/release-conformance-0.3.0.md`](release-conformance-0.3.0.md); it does not
+alter or transfer this release's evidence. v0.2.0 was published on 2026-11-08
+from commit `ef37c76df8910c75d676897ef4a2a9e1b196ab50`.
+
 > **Prepared candidate record — NOT RELEASED.** This source record describes
 > the intended 0.2.0 release boundary. It must not be read as proof that a
 > `v0.2.0` tag, GitHub release, or downloadable assets exist. Release-final

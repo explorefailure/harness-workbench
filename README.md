@@ -83,8 +83,8 @@ dependencies; the coding agent, Node, and Ollama are separate prerequisites
 (next section). Installing from source may download build dependencies.
 
 Install from `main`. The local web GUI (`hwb lab`), the setup hints, and the
-Reality Check on any Pi, Node, and Python version are not in v0.2.0 yet; the
-next release will include them.
+Reality Check on any Pi, Node, and Python version are not in v0.2.0. They are
+prepared for v0.3.0, which is not released yet.
 
 ```sh
 git clone https://github.com/explorefailure/harness-workbench.git
@@ -274,9 +274,10 @@ useful results you can inspect and reuse.
 - **Share and challenge discoveries.** Publish privacy-reviewed Proof Cards
   and try the same public task on another machine.
 
-These are development directions, not v0.2.0 features. A basic Lab prototype
-is in development and unreleased. Automatic recommendations, Proof Cards,
-the challenge command, and a shared compatibility map are future work.
+These are development directions, not released features. A basic Lab
+(`hwb lab`) is on `main` and prepared for v0.3.0, which is not released yet.
+Automatic recommendations, Proof Cards, the challenge command, and a shared
+compatibility map are future work.
 The immediate priority is making the first Reality Check useful to fresh
 users and publishing concrete results.
 
@@ -390,6 +391,7 @@ local; inspect your chosen route. See [SECURITY.md](SECURITY.md).
 | Define an experiment | [The specification](docs/the-spec.md) |
 | Write a feature | [Feature interface](docs/writing-a-feature.md) |
 | Inspect current release assurance | [v0.2.0 conformance record](docs/release-conformance-0.2.0.md) |
+| Inspect the next release candidate | [v0.3.0 prepared record](docs/release-conformance-0.3.0.md) |
 | Inspect historical release assurance | [v0.1.0 source conformance record](docs/release-conformance-0.1.0.md) |
 
 ## Compatibility

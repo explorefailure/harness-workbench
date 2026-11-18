@@ -1,7 +1,9 @@
 # Explore Failure - Harness Workbench 0.1.0 release conformance record
 
-The separate current-candidate record is
-[`docs/release-conformance-0.2.0.md`](release-conformance-0.2.0.md); it does not
+The later records are
+[`docs/release-conformance-0.2.0.md`](release-conformance-0.2.0.md) (published
+v0.2.0) and the current candidate
+[`docs/release-conformance-0.3.0.md`](release-conformance-0.3.0.md); they do not
 alter or transfer this release's evidence.
 
 > **Historical preparation record:** read-only verification on 2026-10-31

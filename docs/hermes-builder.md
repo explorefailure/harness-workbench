@@ -4,7 +4,7 @@
 
 `hwb-hermes` materializes owned adapter sources for Hermes Agent 0.22.5, checks
 runtime identity, records native stream-json events and independently evaluates
-a coding repair. This is an unreleased candidate; it does not promote the
+a coding repair. It shipped in v0.2.0 as an experimental integration; it does not promote the
 experimental universal cross-harness envelope.
 
 ## Choose your model: local working draft
@@ -309,7 +309,7 @@ even when a check exits successfully. The final input hashes are recorded as `in
 
 ## Local custom-task evidence bridge
 
-The unreleased candidate also provides `hwb-adapter spec HARNESS CONFIG
+Workbench also provides `hwb-adapter spec HARNESS CONFIG
 --launcher OWNED_RUNTIME --output NEW_SPEC.json`. Use `hermes` as `HARNESS`;
 for Hermes the launcher argument is the owned source directory, while Pi and
 OpenCode take their pinned executable. It stages declared task inputs afresh

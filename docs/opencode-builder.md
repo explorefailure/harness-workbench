@@ -4,7 +4,7 @@
 
 `hwb-opencode` creates an owned adapter workspace, checks a pinned OpenCode
 binary, captures CLI JSON events, and independently evaluates a reference repair.
-This is an unreleased integration candidate. The cross-harness envelope remains
+It shipped in v0.2.0 as an experimental integration. The cross-harness envelope remains
 experimental and is not extended or promoted by this integration.
 
 ## Choose your model: local working draft
@@ -271,7 +271,7 @@ even when a check exits successfully. The final input hashes are recorded as `in
 
 ## Local custom-task evidence bridge
 
-The unreleased candidate also provides `hwb-adapter spec HARNESS CONFIG
+Workbench also provides `hwb-adapter spec HARNESS CONFIG
 --launcher OWNED_RUNTIME --output NEW_SPEC.json`. Use `opencode` as `HARNESS`;
 for Hermes the launcher argument is the owned source directory, while Pi and
 OpenCode take their pinned executable. It stages declared task inputs afresh
