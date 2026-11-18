@@ -7,6 +7,20 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb harness add pi [--version 0.84.1|1.4.0]` installs Pi into the runtime
+  store with `npm ci --ignore-scripts` from a shipped lockfile (npm checks every
+  package's sha512), then checks the result with the Pi builder's own verifier
+  against the existing pin (package, launcher and file-tree hashes). Node comes
+  from PATH when it is exactly the pinned version, otherwise the pinned Node
+  (22.22.3 for Pi 0.84.1, 26.13.0 for Pi 1.4.0) is downloaded from nodejs.org,
+  checked against its SHA-256, and installed into the store first. `hwb harness
+  add node|uv` install those prerequisites directly. Archives unpack only
+  regular files, directories, and symlinks that stay inside the install.
+- Fix: the Pi 0.84.1 pin (`pi_builder/pin.json` and its experiment copy)
+  recorded a wrong `npm_integrity`; it now holds the registry's value. Nothing
+  checked that field before, and installs were verified by file-tree hash, which
+  was and is correct. Experiment runs that list `pin.json` as an input will
+  record a new digest for it.
 - `hwb harness list|add|remove` (first step of one-install): a shared,
   versioned runtime store at `$HWB_RUNTIME_STORE`, else
   `$XDG_DATA_HOME/hwb/runtimes`, else `~/.local/share/hwb/runtimes`. `list`
