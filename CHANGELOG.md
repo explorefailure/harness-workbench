@@ -16,15 +16,19 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
   git is required. A store Hermes works for `hwb try` and the builder, but not
   for certification: uv writes the install path into the launcher, so its hash
   cannot equal the certified one.
-- `hwb harness add pi [--version 0.84.1|1.4.0]` installs Pi into the runtime
-  store with `npm ci --ignore-scripts` from a shipped lockfile (npm checks every
-  package's sha512), then checks the result with the Pi builder's own verifier
-  against the existing pin (package, launcher and file-tree hashes). Node comes
-  from PATH when it is exactly the pinned version, otherwise the pinned Node
-  (22.22.3 for Pi 0.84.1, 26.13.0 for Pi 1.4.0) is downloaded from nodejs.org,
-  checked against its SHA-256, and installed into the store first. `hwb harness
-  add node|uv` install those prerequisites directly. Archives unpack only
-  regular files, directories, and symlinks that stay inside the install.
+- `hwb harness add pi` installs Pi 1.4.0 into the runtime store with
+  `npm ci --ignore-scripts` from the Pi builder's lockfile (npm checks every
+  package's sha512; the lockfile overrides vulnerable dependencies and passes
+  `npm audit`), then checks the result with the Pi builder's own verifier
+  against its pin (package, launcher and file-tree hashes). Node comes from
+  PATH when it is exactly the pinned 26.13.0, otherwise it is downloaded from
+  nodejs.org, checked against its SHA-256, and installed into the store first.
+  `hwb harness add node|uv` install those prerequisites directly (Node 22.22.3
+  is also available). Archives unpack only regular files, directories, and
+  symlinks that stay inside the install. Pi 0.84.1 is not offered: its own
+  npm-shrinkwrap pins dependency versions with known advisories, which npm
+  overrides cannot replace. Certification still uses the pinned 0.84.1,
+  installed by the certifier.
 - Fix: the Pi 0.84.1 pin (`pi_builder/pin.json` and its experiment copy)
   recorded a wrong `npm_integrity`; it now holds the registry's value. Nothing
   checked that field before, and installs were verified by file-tree hash, which

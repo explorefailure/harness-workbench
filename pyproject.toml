@@ -129,7 +129,6 @@ harness_workbench = [
     # `hwb harness` catalog: points at the shipped pins, never copies their hashes.
     "harness_catalog.json",
     "runtime_pins/*.json",
-    "runtime_pins/*/*.json",
     # `hwb lab` (MVP) serves this single static page; it is data, not a module.
     "lab_static/*.html",
 ]
