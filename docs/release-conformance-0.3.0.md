@@ -1,5 +1,11 @@
 # Explore Failure - Harness Workbench 0.3.0 release conformance record
 
+> **Published 2026-11-17:** [v0.3.0](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0)
+> from commit `7edf0ff906cf424886087ad05855c35baab5e95f`. The release-final
+> record with run URLs and asset SHA-256 values is the release asset
+> `harness-workbench-release-conformance-0.3.0.md`. The prepared-record wording
+> below is kept as it was tagged.
+
 > **Prepared candidate record — NOT RELEASED.** This source record describes
 > the intended 0.3.0 release boundary. It must not be read as proof that a
 > `v0.3.0` tag, GitHub release, or downloadable assets exist. Release-final
