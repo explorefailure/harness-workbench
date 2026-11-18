@@ -89,14 +89,18 @@
       "display": "Hermes Agent",
       "kind": "uv-source",
       "executable": "hermes",
-      "installer": false,
+      "installer": true,
       "default": "0.22.5",
       "versions": {
         "0.22.5": {
-          "pin": "hermes_builder/pin.json"
+          "pin": "hermes_builder/pin.json",
+          "uv": "0.12.21",
+          "repository": "https://github.com/NousResearch/hermes-agent.git"
         },
         "0.20.5": {
-          "pin": "subjects/pin.json#hermes_agent"
+          "pin": "subjects/pin.json#hermes_agent",
+          "uv": "0.12.21",
+          "repository": "https://github.com/NousResearch/hermes-agent.git"
         }
       },
       "sign_in": null,
