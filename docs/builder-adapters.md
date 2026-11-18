@@ -31,8 +31,9 @@ or model quality. Workbench records execution and evaluates declared checks.
 
 These integrations shipped in
 [v0.2.0](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0),
-published 2026-11-08. Changes on `main` since then are prepared for v0.3.0 and
-are unreleased until its release gates pass.
+published 2026-11-08, and are current in
+[v0.3.0](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0),
+published 2026-11-17.
 
 | Harness | Pinned runtime | Model selection | Detailed guide |
 | --- | --- | --- | --- |

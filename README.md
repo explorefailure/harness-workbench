@@ -72,7 +72,8 @@ runs are needed to explore consistency.
 ## Try it
 
 The latest public GitHub release is
-[**v0.2.0**](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0),
+[**v0.3.0**](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0),
+published 2026-11-17 from commit `7edf0ff906cf424886087ad05855c35baab5e95f`,
 with a signed tag, wheel, source archive, checksums, and release-conformance
 record. The package is not published to PyPI.
 
@@ -82,12 +83,12 @@ Use Python 3.11–3.14 on Linux or macOS. Workbench has zero Python runtime
 dependencies; the coding agent, Node, and Ollama are separate prerequisites
 (next section). Installing from source may download build dependencies.
 
-Install from `main`. The local web GUI (`hwb lab`), the setup hints, and the
-Reality Check on any Pi, Node, and Python version are not in v0.2.0. They are
-prepared for v0.3.0, which is not released yet.
+Install v0.3.0. It includes the local web GUI (`hwb lab`), the setup hints,
+and the Reality Check on any Pi, Node, and Python version. Drop `--branch
+v0.3.0` to try unreleased changes from `main`.
 
 ```sh
-git clone https://github.com/explorefailure/harness-workbench.git
+git clone --branch v0.3.0 https://github.com/explorefailure/harness-workbench.git
 cd harness-workbench
 python3 -m venv .venv
 . .venv/bin/activate
@@ -99,8 +100,8 @@ On Debian and Ubuntu, `python3 -m venv` fails until the venv package is
 installed: `sudo apt install python3-venv`, then delete `.venv` and run the
 `venv` line again.
 
-Release wheels and source archives for v0.2.0 are available from the
-[release page](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
+Release wheels and source archives for v0.3.0 are available from the
+[release page](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0).
 
 ### Prepare the local coding setup
 
@@ -148,7 +149,7 @@ A GPU is not required. Without one, Ollama runs the model on the CPU: on a
 12-core laptop-class CPU the whole check took about 3 to 4 minutes.
 
 v0.2.0 enforced a historical Ollama model digest and could return `INVALID`
-before the agent started; `main` records your model's identity instead and
+before the agent started; v0.3.0 records your model's identity instead and
 flags a change for another proof.
 
 ### Run the Reality Check
@@ -193,8 +194,8 @@ Certification still refuses `HWB_MODEL_PROFILES`; owner overlays are local
 runtime evidence, not committed certification inputs.
 
 `hwb setup` checks first whether this machine can run the check, and
-`hwb try --json` prints the result document instead of the summary. An
-unreleased local web GUI, `hwb lab`, opens a localhost page for the same check:
+`hwb try --json` prints the result document instead of the summary. A
+local web GUI, `hwb lab`, opens a localhost page for the same check:
 discover your setup, run it, read the proof, choose the Recipe's model, and
 browse sealed runs. It listens on 127.0.0.1 only, on a free port chosen per
 launch, and every request needs that launch's secret token, which is in the URL
@@ -275,7 +276,7 @@ useful results you can inspect and reuse.
   and try the same public task on another machine.
 
 These are development directions, not released features. A basic Lab
-(`hwb lab`) is on `main` and prepared for v0.3.0, which is not released yet.
+(`hwb lab`) ships in v0.3.0.
 Automatic recommendations, Proof Cards, the challenge command, and a shared
 compatibility map are future work.
 The immediate priority is making the first Reality Check useful to fresh
@@ -390,8 +391,8 @@ local; inspect your chosen route. See [SECURITY.md](SECURITY.md).
 | Compare runs and test controls | [Measurement campaigns](docs/measuring.md) |
 | Define an experiment | [The specification](docs/the-spec.md) |
 | Write a feature | [Feature interface](docs/writing-a-feature.md) |
-| Inspect current release assurance | [v0.2.0 conformance record](docs/release-conformance-0.2.0.md) |
-| Inspect the next release candidate | [v0.3.0 prepared record](docs/release-conformance-0.3.0.md) |
+| Inspect current release assurance | [v0.3.0 conformance record](docs/release-conformance-0.3.0.md) |
+| Inspect the previous release | [v0.2.0 conformance record](docs/release-conformance-0.2.0.md) |
 | Inspect historical release assurance | [v0.1.0 source conformance record](docs/release-conformance-0.1.0.md) |
 
 ## Compatibility
@@ -433,6 +434,16 @@ and the tagged [Pi](https://github.com/explorefailure/harness-workbench/actions/
 and [Hermes](https://github.com/explorefailure/harness-workbench/actions/runs/42446370784)
 compatibility matrices. Its published assets were downloaded and independently
 reverified after publication.
+
+Final `0.3.0`, exact commit
+`7edf0ff906cf424886087ad05855c35baab5e95f`, passed its [CI and package
+run](https://github.com/explorefailure/harness-workbench/actions/runs/44233663788),
+[CodeQL run](https://github.com/explorefailure/harness-workbench/actions/runs/44233663550),
+and the tagged [CI](https://github.com/explorefailure/harness-workbench/actions/runs/44237334406),
+[Pi](https://github.com/explorefailure/harness-workbench/actions/runs/44237334482),
+[OpenCode](https://github.com/explorefailure/harness-workbench/actions/runs/44237334446),
+and [Hermes](https://github.com/explorefailure/harness-workbench/actions/runs/44237334408)
+runs. Its published assets were downloaded and reverified after publication.
 
 The current engine depends on POSIX behavior: seam budgets use `SIGALRM`, interruption campaigns
 terminate a direct child at published checkpoints, filesystem measurements

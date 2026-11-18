@@ -1,9 +1,9 @@
 # Releasing Harness Workbench
 
-> **0.3.0 preparation, 2026-11-17:** [v0.2.0 was published on 2026-11-08](https://github.com/explorefailure/harness-workbench/releases/tag/v0.2.0).
-> The commands below now target the unused `0.3.0` / `v0.3.0` identity. The
-> source version alone does not make that release public; every gate in this
-> procedure still applies.
+> **v0.3.0 was published on 2026-11-17** ([release](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0)).
+> The commands below still name `0.3.0` / `v0.3.0`, which are now spent. Before
+> the next release, select an unused version and update every version, tag,
+> and branch name below; every gate still applies.
 
 This is the maintainer procedure for a GitHub release. A build on a laptop is
 not a release. A version is public only after its tag and GitHub release exist.
@@ -16,7 +16,7 @@ The current candidate policy is:
 |---|---|---|---|
 | first public release | `0.1.0` | `v0.1.0` | full release — **published 2026-08-25** |
 | second public release | `0.2.0` | `v0.2.0` | full release — **published 2026-11-08** |
-| current promotion | `0.3.0` | `v0.3.0` | full release — not yet created |
+| third public release | `0.3.0` | `v0.3.0` | full release — **published 2026-11-17** |
 
 A version that has already been published is history: never retarget its tag or
 reuse its number. The 0.3.0 promotion carries the local web Lab, the

@@ -938,13 +938,18 @@ class TestReleaseSurfaces(unittest.TestCase):
         )
         self.assertIn("public GitHub release", readme)
         self.assertIn(
-            "releases/tag/v0.2.0)",
+            "releases/tag/v0.3.0)",
+            readme,
+        )
+        self.assertIn(
+            "7edf0ff906cf424886087ad05855c35baab5e95f",
             readme,
         )
         self.assertIn(
             "ef37c76df8910c75d676897ef4a2a9e1b196ab50",
             readme,
         )
+        self.assertIn("0.3.0 — 2026-11-17", changelog)
         self.assertIn("not published to PyPI", readme)
         self.assertNotIn("has not been tagged, released, or made public", readme)
         self.assertIn("0.2.0 — 2026-11-07", changelog)
