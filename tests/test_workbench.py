@@ -4197,7 +4197,11 @@ class TestTheFirstRunDeadEnds(Base):
         sub = [a for a in cli.build_parser()._actions
                if isinstance(a, argparse._SubParsersAction)][0]
         for name, parser in sub.choices.items():
-            positionals = [a.dest for a in parser._actions if not a.option_strings]
+            # A positional with a closed `choices` set (a verb group such as
+            # `hwb harness list|add|remove`) cannot silently accept a spec
+            # path: argparse refuses anything outside the set by name.
+            positionals = [a.dest for a in parser._actions
+                           if not a.option_strings and not a.choices]
             if not positionals or name in spec_takers:
                 continue
             self.assertTrue(

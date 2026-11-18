@@ -1,0 +1,49 @@
+{
+  "schema": "hwb-harness-catalog/v1",
+  "harnesses": {
+    "claude": {
+      "display": "Claude Code", "kind": "npm", "executable": "claude", "installer": false,
+      "default": "2.1.319", "versions": {"2.1.319": {"pin": "subjects/pin.json#claude_code"}},
+      "sign_in": "Run `claude` once and sign in with your own account; Workbench never stores keys.",
+      "modes": {"certified": true, "your_task": false}
+    },
+    "codex": {
+      "display": "Codex CLI", "kind": "npm", "executable": "codex", "installer": false,
+      "default": "0.144.1", "versions": {"0.144.1": {"pin": "subjects/pin.json#codex_cli"}},
+      "sign_in": "Run `codex login` with your own account; Workbench never stores keys.",
+      "modes": {"certified": true, "your_task": false}
+    },
+    "deepseek": {
+      "display": "DeepSeek Harness", "kind": "npm", "executable": "dsh", "installer": false,
+      "default": "0.1.0-rc.6", "versions": {"0.1.0-rc.6": {"pin": "subjects/pin.json#deepseek_harness"}},
+      "sign_in": null,
+      "modes": {"certified": true, "your_task": false}
+    },
+    "hermes": {
+      "display": "Hermes Agent", "kind": "uv-source", "executable": "hermes", "installer": false,
+      "default": "0.22.5",
+      "versions": {
+        "0.22.5": {"pin": "hermes_builder/pin.json"},
+        "0.20.5": {"pin": "subjects/pin.json#hermes_agent"}
+      },
+      "sign_in": null,
+      "modes": {"certified": "0.20.5", "your_task": "0.22.5"}
+    },
+    "opencode": {
+      "display": "OpenCode", "kind": "binary", "executable": "opencode", "installer": true,
+      "default": "1.19.5", "versions": {"1.19.5": {"pin": "opencode_builder/pin.json", "member": "opencode"}},
+      "sign_in": null,
+      "modes": {"certified": false, "your_task": true}
+    },
+    "pi": {
+      "display": "Pi", "kind": "npm", "executable": "pi", "installer": false,
+      "default": "0.84.1",
+      "versions": {
+        "0.84.1": {"pin": "pi_builder/pin.json"},
+        "1.4.0": {"pin": "pi_builder/pin-pi-1.4.0-node-26.13.0.json"}
+      },
+      "sign_in": null,
+      "modes": {"certified": true, "your_task": true}
+    }
+  }
+}

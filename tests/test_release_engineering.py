@@ -1589,6 +1589,8 @@ class TestReleaseSurfaces(unittest.TestCase):
         "efficacy", "features", "fidelity", "interrupt", "reality", "replay", "runner",
         # Setup discovery and the local Lab server behind `hwb setup`/`hwb lab` (MVP).
         "discover", "lab",
+        # Shared runtime store behind `hwb harness`; CLI surface, no Python API promise.
+        "runtimes",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
         "sweep", "_pi_cli", "_opencode_cli", "_hermes_cli",
         # CLI implementation and versioned adapter validator; no Python API promise.
