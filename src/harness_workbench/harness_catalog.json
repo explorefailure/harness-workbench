@@ -6,7 +6,7 @@
       "kind": "tree",
       "executable": "node",
       "installer": true,
-      "default": "22.22.3",
+      "default": "26.13.0",
       "versions": {
         "22.22.3": {
           "pin": "runtime_pins/node.json#22.22.3"
@@ -132,13 +132,8 @@
       "kind": "npm",
       "executable": "pi",
       "installer": true,
-      "default": "0.84.1",
+      "default": "1.4.0",
       "versions": {
-        "0.84.1": {
-          "pin": "pi_builder/pin.json",
-          "lock_dir": "runtime_pins/pi-0.84.1",
-          "node": "22.22.3"
-        },
         "1.4.0": {
           "pin": "pi_builder/pin-pi-1.4.0-node-26.13.0.json",
           "lock_dir": "pi_builder/runtime",
