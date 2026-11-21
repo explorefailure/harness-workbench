@@ -7,6 +7,13 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb try`, `hwb setup` and the Lab find harnesses installed with
+  `hwb harness add` when none is on PATH. A harness already on PATH still wins
+  and nothing changes for it. For a store harness, its `bin/` and the Node it
+  was installed and verified with go in front of PATH for the subject process
+  only (Pi starts with `#!/usr/bin/env node`), and a store Hermes gets
+  `HERMES_AGENT_ROOT` unless one is set. `hwb setup` marks store tools
+  "(runtime store)", and its Pi and Node hints now suggest `hwb harness add`.
 - `hwb harness add hermes [--version 0.22.5|0.20.5]` installs Hermes Agent into
   the runtime store: a shallow clone of the pinned release tag, checked against
   the pinned commit, annotated tag object, `uv.lock` and (for 0.22.5) tracked

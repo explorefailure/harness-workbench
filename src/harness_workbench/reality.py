@@ -724,6 +724,13 @@ def run_check(
         # would look like an attempted redefinition of that embedded profile.
         environment.pop(LOCAL_PROFILES_ENV, None)
         environment["HWB_PYTHON"] = sys.executable
+        # Harnesses installed with `hwb harness add` are found when none is on
+        # PATH; a PATH copy still wins. The adapter records what actually ran.
+        from . import runtimes
+        try:
+            environment = runtimes.subject_environment(environment)["environment"]
+        except (runtimes.RuntimeStoreError, OSError, ValueError):
+            pass  # an unreadable store must never block a run that needs no store
         record = runner.execute(
             specification, loaded, runs_root, environment=environment,
             observer=observe, stop=stop,

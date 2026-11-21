@@ -14,6 +14,7 @@ the run itself remains the only evidence.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -89,14 +90,14 @@ def machine() -> dict[str, Any]:
     return info
 
 
-def tool(name: str, which=shutil.which) -> dict[str, Any]:
-    """Locate an executable on PATH and ask it for its version."""
+def tool(name: str, which=shutil.which, env: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Locate an executable on PATH and ask it for its version (in `env`, if given)."""
     path = which(name)
     if not path:
         return {"name": name, "found": False, "path": None, "version": None}
     try:
         out = subprocess.run([path, "--version"], capture_output=True, text=True,
-                             timeout=_PROBE_TIMEOUT, check=False)
+                             timeout=_PROBE_TIMEOUT, check=False, env=env)
         text = (out.stdout or out.stderr).strip().splitlines()
         version = text[0].strip() if text else None
     except (OSError, subprocess.SubprocessError):
@@ -294,11 +295,12 @@ PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent"
 def install_hint(code: str, *, model: str | None = None, llama: bool = False) -> str | None:
     """How to fix one setup blocker; Workbench never installs these itself."""
     if code == "pi_missing":
-        return (f"Install it with `npm install -g {PI_NPM_PACKAGE}` (prefix sudo "
-                "if npm's global folder belongs to root, as on Ubuntu).")
+        return ("Run `hwb harness add pi`: it downloads pinned Pi (and Node, if "
+                "needed) into Workbench's own runtime store, no sudo. Or install it "
+                f"yourself with `npm install -g {PI_NPM_PACKAGE}`.")
     if code == "node_missing":
-        return ("Install Node.js and npm from https://nodejs.org/en/download "
-                "(Debian/Ubuntu: `sudo apt install nodejs npm`).")
+        return ("Run `hwb harness add node`, or install Node.js and npm from "
+                "https://nodejs.org/en/download (Debian/Ubuntu: `sudo apt install nodejs npm`).")
     if code == "ollama_unreachable":
         return ("Install Ollama from https://ollama.com/download and make sure it "
                 "is running.")
@@ -315,7 +317,24 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
     recipe = recipe_state(recipe_dir, profile)
     inventory = runtime(recipe, opener=opener)
     label = inventory["label"]
-    tools = {name: tool(name, which=which) for name in ("pi", "node")}
+    store_dirs: list[str] = []
+    probe_env: Optional[dict[str, str]] = None
+    if which is shutil.which:
+        # Look where a run will look: PATH first, then `hwb harness add` installs.
+        from . import runtimes
+        try:
+            probe_env = runtimes.subject_environment(dict(os.environ))["environment"]
+        except (runtimes.RuntimeStoreError, OSError, ValueError):
+            probe_env = dict(os.environ)
+        search = probe_env.get("PATH")
+        original = os.environ.get("PATH", "").split(os.pathsep)
+        store_dirs = [d for d in (search or "").split(os.pathsep) if d and d not in original]
+        which = lambda name: shutil.which(name, path=search)  # noqa: E731
+    probe = {"env": probe_env} if probe_env is not None else {}
+    tools = {name: tool(name, which=which, **probe) for name in ("pi", "node")}
+    for entry in tools.values():
+        entry["source"] = (None if not entry["found"] else
+                           "store" if str(Path(entry["path"]).parent) in store_dirs else "path")
 
     blockers: list[dict[str, str]] = []
     notes: list[dict[str, str]] = []
@@ -405,7 +424,8 @@ def print_setup(doc: dict[str, Any]) -> None:
           + (f" · {len(o['models'])} model(s)" if o["reachable"] else "")
           + (f" · build {o['build']}" if o.get("build") else ""))
     for t in doc["tools"].values():
-        print(f"  {t['name']:<9} {t['version'] or 'found' if t['found'] else 'not found'}")
+        print(f"  {t['name']:<9} {t['version'] or 'found' if t['found'] else 'not found'}"
+              + ("  (runtime store)" if t.get("source") == "store" else ""))
     r = doc["recipe"]
     print(f"  Model     {r['model'] or 'unknown'} ({r['source']}, {r.get('profile')})")
     print("Ready" if doc["ready"] else "Not ready")
