@@ -65,6 +65,13 @@ def main(argv=None):
             finally:
                 os.close(fd)
         os.chdir(config.parent)
+        # An OpenCode installed with `hwb harness add opencode` is found when
+        # none is on PATH; a PATH OpenCode still wins.
+        from . import runtimes
+        try:
+            os.environ.update(runtimes.subject_environment(dict(os.environ))["environment"])
+        except (runtimes.RuntimeStoreError, OSError, ValueError):
+            pass
         os.execv(sys.executable, command)
     except (ValueError, OSError) as error:
         print(json.dumps({'schema': 'opencode-hwb-builder-error/v0.1', 'error': str(error)}), file=sys.stderr)

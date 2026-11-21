@@ -139,15 +139,23 @@ class OpenCodeBuilderTests(unittest.TestCase):
             self.assertEqual('true', env['npm_config_offline'])
             self.assertEqual(str(root / 'empty.npmrc'), env['npm_config_userconfig'])
 
-    def test_wrong_binary_is_rejected_before_execution(self):
+    def test_a_non_opencode_binary_is_refused_and_another_version_is_recorded(self):
+        # Since Phase 1 (owner decision): any OpenCode may run and what differs
+        # from the pin is recorded. Something that does not answer `--version`
+        # like OpenCode is still refused.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); dest = root / 'owned'; self.command('init', dest)
-            marker = root / 'executed'
-            fake = root / 'opencode'; fake.write_text(f'#!/bin/sh\ntouch {marker}\n'); fake.chmod(0o755)
-            result = self.command('doctor', dest, '--opencode', fake)
+            silent = root / 'silent'; silent.write_text('#!/bin/sh\nexit 0\n'); silent.chmod(0o755)
+            result = self.command('doctor', dest, '--opencode', silent)
             self.assertEqual(2, result.returncode)
-            self.assertIn('identity mismatch', json.loads(result.stdout)['error'])
-            self.assertFalse(marker.exists())
+            self.assertIn('version probe failed', json.loads(result.stdout)['error'])
+            other = root / 'opencode'; other.write_text('#!/bin/sh\necho 9.9.9\n'); other.chmod(0o755)
+            result = self.command('doctor', dest, '--opencode', other)
+            runtime = json.loads(result.stdout)['runtime']
+            self.assertEqual('9.9.9', runtime['version'])
+            self.assertEqual(['version', 'binary_sha256'], runtime['differs_from_pin'])
+            self.assertEqual('1.19.5', runtime['pinned']['version'])
+            self.assertIsNone(runtime['source_commit'])
 
     def test_normalizer_retains_nonzero_exit_and_rejects_incomplete_or_mixed_streams(self):
         result = normalizer.summarize(encoded(EVENTS))

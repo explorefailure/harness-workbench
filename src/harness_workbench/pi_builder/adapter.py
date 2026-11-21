@@ -89,9 +89,33 @@ def package_tree_digest(root: Path) -> tuple[int, str]:
     return count, digest_bytes(b"".join(parts))
 
 
-def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
+def _digest_if_present(path: Path, strict: bool) -> str | None:
+    """Strict mode needs the file; relaxed mode records its absence (a global npm install has no lock)."""
+    if strict or path.is_file():
+        return digest_file(path)
+    return None
+
+
+def pi_family(version: str) -> str:
+    """Event/behaviour profile for a Pi version: '0.x' (0.84.1 reviewed) or '1.x' (1.4.0 reviewed).
+
+    Any other major has no reviewed event profile and is refused (fail closed).
+    """
+    major = version.split(".", 1)[0]
+    if major == "0":
+        return "0.x"
+    if major == "1":
+        return "1.x"
+    raise AdapterError(f"Pi {version!r} has no known event profile; reviewed families are 0.x and 1.x")
+
+
+def verify_pi_install(pi_path: Path, pin: dict[str, Any], strict: bool = True) -> dict[str, Any]:
+    """Identify the installed Pi package. strict=True refuses any pin mismatch;
+    strict=False records the mismatches under `pin_mismatches` instead."""
     launcher = pi_path.resolve(strict=True)
     bundled = pin.get("schema") == "pi-hwb-pin/v0.2"
+    if not strict:
+        bundled = launcher.parent.name == "bundle"
     if bundled:
         if launcher.name != "cli.js" or launcher.parent.name != "bundle" or launcher.parent.parent.name != "dist":
             raise AdapterError(f"Pi bundled launcher has unexpected installed shape: {launcher}")
@@ -105,7 +129,7 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
     package = json.loads(package_json_path.read_text(encoding="utf-8"))
     if package.get("name") != pin["npm_package"]:
         raise AdapterError(f"installed package name is {package.get('name')!r}")
-    if package.get("version") != pin["version"]:
+    if package.get("version") != pin["version"] and strict:
         raise AdapterError(f"installed package version is {package.get('version')!r}")
 
     identities = {
@@ -113,24 +137,29 @@ def verify_pi_install(pi_path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         "package_name": package["name"],
         "package_version": package["version"],
         "package_json_sha256": digest_file(package_json_path),
-        **({"installation_lock_sha256": digest_file(package_root.parents[2] / "package-lock.json")}
-           if bundled else {"npm_shrinkwrap_sha256": digest_file(shrinkwrap_path)}),
+        **({"installation_lock_sha256": _digest_if_present(package_root.parents[2] / "package-lock.json", strict)}
+           if bundled else {"npm_shrinkwrap_sha256": _digest_if_present(shrinkwrap_path, strict)}),
         "launcher_sha256": digest_file(launcher),
     }
     file_count, tree_digest = package_tree_digest(package_root)
     identities["package_tree_file_count"] = file_count
     identities["package_tree_sha256"] = tree_digest
 
+    # Strict mode needs every pinned field; relaxed mode counts an absent one
+    # (another Pi layout than the pin's) as a recorded difference.
+    field = (lambda key: pin[key]) if strict else pin.get
     expected = {
-        "package_json_sha256": pin["package_json_sha256"],
-        **({"installation_lock_sha256": pin["installation_lock_sha256"]}
-           if bundled else {"npm_shrinkwrap_sha256": pin["npm_shrinkwrap_sha256"]}),
-        "launcher_sha256": pin["launcher_sha256"],
-        "package_tree_sha256": pin["package_tree_sha256"],
+        "package_json_sha256": field("package_json_sha256"),
+        **({"installation_lock_sha256": field("installation_lock_sha256")}
+           if bundled else {"npm_shrinkwrap_sha256": field("npm_shrinkwrap_sha256")}),
+        "launcher_sha256": field("launcher_sha256"),
+        "package_tree_sha256": field("package_tree_sha256"),
     }
-    mismatches = [key for key, value in expected.items() if identities[key] != value]
-    if mismatches:
+    mismatches = [key for key, value in expected.items() if identities.get(key) != value]
+    if mismatches and strict:
         raise AdapterError("installed Pi identity mismatch: " + ", ".join(mismatches))
+    if not strict:
+        identities["pin_mismatches"] = mismatches
     return identities
 
 
@@ -370,23 +399,24 @@ def check_runtime(config_path: Path, pi_name: str = "pi") -> dict[str, Any]:
         raise AdapterError("Pi executable not found")
     pi_path = Path(pi_resolved)
     try:
-        # Reject altered Pi code before invoking even its version command.
-        install_identity = verify_pi_install(pi_path, pin)
+        # Identify the Pi code before invoking even its version command. Any
+        # Pi/Node version may run; what differs from the pin is recorded.
+        install_identity = verify_pi_install(pi_path, pin, strict=False)
         pi_version = command_output([str(pi_path), "--version"], cwd=base)
         node_version = command_output(["node", "--version"], cwd=base).removeprefix("v")
     except (OSError, ValueError, KeyError) as error:
         raise AdapterError(str(error)) from error
+    family = pi_family(pi_version)
+    differences = list(install_identity.get("pin_mismatches", []))
     if pi_version != pin["version"]:
-        raise AdapterError(
-            f"Pi version {pi_version!r} does not match {pin['version']!r}"
-        )
+        differences.append("pi_version")
     if node_version != pin["node_version"]:
-        raise AdapterError(
-            f"Node version {node_version!r} does not match {pin['node_version']!r}"
-        )
+        differences.append("node_version")
 
-    return {"pi_path": str(pi_path), "pi_version": pi_version,
-            "node_version": node_version, "install_identity": install_identity}
+    return {"pi_path": str(pi_path), "pi_version": pi_version, "pi_family": family,
+            "node_version": node_version, "install_identity": install_identity,
+            "pinned": {"pi_version": pin["version"], "node_version": pin["node_version"]},
+            "differs_from_pin": differences}
 
 
 def capture(
@@ -435,6 +465,9 @@ def capture(
     input_digests = {name: digest_file(path) for name, path in inputs.items()}
     pin = json.loads(pin_path.read_text(encoding="utf-8"))
     runtime = check_runtime(config_path, pi_name)
+    runtime.setdefault("pi_family", pi_family(runtime["pi_version"]))
+    runtime.setdefault("pinned", {})
+    runtime.setdefault("differs_from_pin", [])
     pi_path = Path(runtime["pi_path"])
     pi_version = runtime["pi_version"]
     node_version = runtime["node_version"]
@@ -544,8 +577,8 @@ def capture(
     provider_env = {}
     provider_name = None
     if 'provider' in config:
-        if pi_version != '1.4.0':
-            raise AdapterError('explicit provider selection requires the Pi 1.4.0 profile')
+        if runtime["pi_family"] != '1.x':
+            raise AdapterError('explicit provider selection requires a Pi 1.x runtime')
         from provider_config import prepare
         try:
             provider_name, provider_env, provider_secrets = prepare(config['provider'], retained_root / 'pi-config')
@@ -593,7 +626,7 @@ def capture(
             raise StreamError("stdout is not valid UTF-8")
         stdout_text = stdout_capture["text"]
         summary = (normalize_jsonl(stdout_text, system_messages=True)
-                   if pin.get("schema") == "pi-hwb-pin/v0.2" and pi_version == "1.4.0"
+                   if runtime["pi_family"] == "1.x"
                    else normalize_jsonl(stdout_text))
     except StreamError as error:
         normalization_error = str(error)
@@ -702,6 +735,9 @@ def capture(
             "pi_version": pi_version,
             "node_version": node_version,
             "pi_install": install_identity,
+            "pi_family": runtime["pi_family"],
+            "pinned": runtime["pinned"],
+            "differs_from_pin": runtime["differs_from_pin"],
         },
         "isolation": {
             "network_mode": config["network_mode"],

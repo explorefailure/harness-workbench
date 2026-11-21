@@ -7,6 +7,19 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Change: `hwb-pi` and `hwb-opencode` run on the Pi, Node or OpenCode you have
+  instead of refusing everything but their pins, and record what differs from
+  the pin (`runtime.differs_from_pin`, with the pinned values beside it). They
+  also find a runtime installed with `hwb harness add` when none is on PATH.
+  Pi behaviour follows the reviewed family of its version: any 0.x Pi gets the
+  0.84.1 event handling, any 1.x the 1.4.0 handling (and may select a model
+  provider); any other major is refused. The session-format check still
+  rejects a changed event stream. Trade-off: a non-pinned OpenCode binary is
+  now executed (for `--version`) instead of refused unseen; something that does
+  not answer like OpenCode is still refused. The built-in reference demo's
+  exact-digest oracle stays version-specific, so an untested version can fail
+  the demo but cannot falsely pass it. Workspaces made by `init` before this
+  change keep their own copy of the strict adapter; re-run `init` to update.
 - `hwb try`, `hwb setup` and the Lab find harnesses installed with
   `hwb harness add` when none is on PATH. A harness already on PATH still wins
   and nothing changes for it. For a store harness, its `bin/` and the Node it

@@ -145,8 +145,6 @@ def doctor(config_path, launcher, root):
     if pin.get('schema') != 'opencode-hwb-pin/v0.1':
         raise ValueError('unsupported runtime pin schema')
     key = platform.system().lower() + '-' + platform.machine().lower()
-    if key not in pin['platforms']:
-        raise ValueError('runtime platform not pinned: ' + key)
     # Managed host policy cannot be isolated with HOME/XDG. Refuse such
     # environments instead of bypassing policy or merging unrecorded settings.
     managed = Path('/Library/Application Support/opencode') if platform.system() == 'Darwin' else Path('/etc/opencode')
@@ -163,14 +161,19 @@ def doctor(config_path, launcher, root):
         raise ValueError('OpenCode launcher not found: ' + launcher)
     binary = Path(resolved).resolve(strict=True)
     observed = digest_file(binary)
-    if observed != pin['platforms'][key]['binary_sha256']:
-        raise ValueError('OpenCode binary identity mismatch; use the pinned official runtime')
     result = run_bounded([str(binary), '--version'], cwd=root, env=environment(root),
         timeout=10, stdout_limit=65536, stderr_limit=65536, termination_grace=1)
-    if not clean_exit(result) or result.stdout.decode().strip() != pin['version']:
+    version = result.stdout.decode(errors='replace').strip()
+    if not clean_exit(result) or not version or len(version.split()) != 1:
         raise ValueError('OpenCode version probe failed')
-    return config, binary, {'version': pin['version'], 'binary_sha256': observed,
-        'platform': key, 'source_commit': pin['source_commit'], 'probe': process_record(result)}
+    # Any OpenCode version may run; what differs from the pin is recorded.
+    pinned = pin['platforms'].get(key, {})
+    differs = [name for name, ok in (('version', version == pin['version']),
+                                     ('binary_sha256', observed == pinned.get('binary_sha256'))) if not ok]
+    return config, binary, {'version': version, 'binary_sha256': observed,
+        'platform': key, 'source_commit': pin['source_commit'] if not differs else None,
+        'pinned': {'version': pin['version'], 'binary_sha256': pinned.get('binary_sha256')},
+        'differs_from_pin': differs, 'probe': process_record(result)}
 
 
 def runtime_config(provider, base_url):

@@ -791,3 +791,51 @@ try {
                               capture_output=True,text=True,timeout=20)
         self.assertEqual(0,result.returncode,result.stderr)
         self.assertEqual({'version':'8.12.3','ok':True,'source':'loopback'},json.loads(result.stdout))
+
+
+class PiBuilderAnyVersionTests(unittest.TestCase):
+    """Since Phase 1 the builder records any Pi/Node version; behaviour follows the
+    reviewed family (0.x or 1.x) and an unknown family is refused. The builder
+    adapter loads its siblings by path, so it runs in its own interpreter here."""
+
+    def run_adapter(self, code):
+        script = ("import json, sys\nfrom pathlib import Path\n"
+                  f"sys.path.insert(0, {str(DATA)!r})\nimport adapter\n" + code)
+        done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                              env=dict(os.environ, PYTHONPATH=str(ROOT / "src")), timeout=60)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return json.loads(done.stdout)
+
+    def test_family_mapping_and_unknown_major_is_refused(self):
+        result = self.run_adapter(
+            "out = {v: adapter.pi_family(v) for v in ('0.84.1', '0.90.0', '1.4.0', '1.9.2')}\n"
+            "try:\n    adapter.pi_family('2.0.0'); out['2'] = 'accepted'\n"
+            "except adapter.AdapterError as e:\n    out['2'] = str(e)\n"
+            "print(json.dumps(out))")
+        self.assertEqual("0.x", result["0.84.1"])
+        self.assertEqual("0.x", result["0.90.0"])
+        self.assertEqual("1.x", result["1.9.2"])
+        self.assertIn("no known event profile", result["2"])
+
+    def test_relaxed_install_check_records_mismatches_and_strict_refuses(self):
+        with tempfile.TemporaryDirectory() as temp:
+            package = Path(temp) / "lib/node_modules/@earendil-works/pi-coding-agent"
+            (package / "dist/bundle").mkdir(parents=True)
+            (package / "dist/bundle/cli.js").write_text("console.log('1.9.0')\n")
+            (package / "package.json").write_text(json.dumps(
+                {"name": "@earendil-works/pi-coding-agent", "version": "1.9.0"}))
+            launcher = package / "dist/bundle/cli.js"
+            pin = DATA / "pin-pi-1.4.0-node-26.13.0.json"
+            result = self.run_adapter(
+                f"pin = json.loads(Path({str(pin)!r}).read_text())\n"
+                f"pin['version'] = '1.9.0'\n"
+                f"relaxed = adapter.verify_pi_install(Path({str(launcher)!r}), pin, strict=False)\n"
+                "try:\n"
+                f"    adapter.verify_pi_install(Path({str(launcher)!r}), pin); strict = 'accepted'\n"
+                "except (adapter.AdapterError, OSError) as e:\n    strict = str(e)\n"
+                "print(json.dumps({'mismatches': relaxed['pin_mismatches'],\n"
+                "                  'lock': relaxed['installation_lock_sha256'], 'strict': strict}))")
+        self.assertIn("launcher_sha256", result["mismatches"])
+        self.assertIn("package_tree_sha256", result["mismatches"])
+        self.assertIsNone(result["lock"])  # a global npm install has no install-root lockfile
+        self.assertNotEqual("accepted", result["strict"])
