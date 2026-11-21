@@ -328,6 +328,66 @@ class TestHermesSource(unittest.TestCase):
                     self.assertEqual("0.12.21", steps["uv"]["version"])
 
 
+class TestSubjectEnvironment(unittest.TestCase):
+    """Store harnesses are found only when PATH has none, and run on their own Node."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.store = self.tmp / "store"
+        self.catalog = runtimes.load_catalog()
+
+    def fake_install(self, name, version, executable, record):
+        directory = self.store / name / version
+        (directory / "bin").mkdir(parents=True)
+        launcher = directory / "bin" / executable
+        launcher.write_text("#!/bin/sh\n")
+        launcher.chmod(0o755)
+        record = dict(record, schema=runtimes.RECORD_SCHEMA, harness=name, version=version)
+        (directory / "install.json").write_text(json.dumps(record))
+        return directory
+
+    def path_with(self, *names):
+        directory = self.tmp / "userbin"
+        directory.mkdir(exist_ok=True)
+        for name in names:
+            (directory / name).write_text("#!/bin/sh\n")
+            (directory / name).chmod(0o755)
+        return str(directory) + os.pathsep + "/usr/bin:/bin"
+
+    def env(self, path, **extra):
+        return runtimes.subject_environment(dict({"PATH": path}, **extra), root=self.store,
+                                            catalog=self.catalog)
+
+    def test_store_pi_goes_in_front_with_its_own_node_when_path_has_none(self):
+        pi = self.fake_install("pi", "1.4.0", "pi", {"kind": "npm",
+                               "node": {"version": "26.13.0", "source": "store", "bin": "/store/node/bin"}})
+        result = self.env(self.path_with("node"))
+        parts = result["environment"]["PATH"].split(os.pathsep)
+        self.assertEqual([str(pi / "bin"), "/store/node/bin"], parts[:2])
+        self.assertEqual([{"harness": "pi", "version": "1.4.0", "path": str(pi / "bin"), "node": "26.13.0"}],
+                         result["used"])
+
+    def test_a_pi_already_on_path_wins_and_nothing_changes(self):
+        self.fake_install("pi", "1.4.0", "pi", {"kind": "npm", "node": {"bin": "/store/node/bin"}})
+        path = self.path_with("pi", "node")
+        result = self.env(path)
+        self.assertEqual(path, result["environment"]["PATH"])
+        self.assertEqual([], result["used"])
+
+    def test_store_hermes_sets_its_source_root_unless_one_is_set(self):
+        self.fake_install("hermes", "0.22.5", "hermes", {"kind": "uv-source", "source_root": "/store/src"})
+        self.assertEqual("/store/src", self.env(self.path_with())["environment"]["HERMES_AGENT_ROOT"])
+        kept = self.env(self.path_with(), HERMES_AGENT_ROOT="/mine")["environment"]
+        self.assertEqual("/mine", kept["HERMES_AGENT_ROOT"])
+
+    def test_empty_or_incomplete_store_changes_nothing(self):
+        path = self.path_with()
+        self.assertEqual(path, self.env(path)["environment"]["PATH"])
+        (self.store / "pi" / "1.4.0" / "bin").mkdir(parents=True)  # no install.json
+        self.assertEqual(path, self.env(path)["environment"]["PATH"])
+
+
 class TestAdd(StoreFixture):
     def test_installs_verified_binary_with_record(self):
         result = self.add()

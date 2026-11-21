@@ -689,3 +689,53 @@ def remove(name: str, version: Optional[str] = None, root: Optional[Path] = None
         shutil.rmtree(target)
         removed.append(str(target))
     return removed
+
+
+def _default_install(root: Path, name: str, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    installs = installed(root, name)
+    if not installs:
+        return None
+    return ([i for i in installs if i["version"] == entry["default"]] or installs[-1:])[0]
+
+
+def subject_environment(environment: Dict[str, str], root: Optional[Path] = None,
+                        catalog: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Make store harnesses findable for a subject process, without overriding PATH copies.
+
+    For each catalog harness: if its executable is already on `environment`'s
+    PATH it wins and nothing changes. Otherwise, if the store holds it, its
+    `bin/` goes IN FRONT of PATH together with the Node it was installed and
+    verified with (an npm harness runs `#!/usr/bin/env node`), and a store
+    Hermes gets `HERMES_AGENT_ROOT` unless one is already set. Returns
+    {"environment": new_env, "used": [...]} and never touches os.environ.
+    """
+    root = store_root(environment) if root is None else root
+    catalog = load_catalog() if catalog is None else catalog
+    env = dict(environment)
+    original = env.get("PATH", os.defpath)
+    front: List[str] = []
+    used = []
+    for name, entry in sorted(catalog["harnesses"].items()):
+        if shutil.which(entry["executable"], path=original):
+            continue
+        install = _default_install(root, name, entry)
+        if install is None:
+            continue
+        bin_dir = Path(install["path"]) / "bin"
+        if not (bin_dir / entry["executable"]).exists():
+            continue
+        record = install["install_record"]
+        dirs = [str(bin_dir)]
+        node = record.get("node") if isinstance(record.get("node"), dict) else None
+        if node and node.get("bin"):
+            dirs.append(str(node["bin"]))
+        for directory in dirs:
+            if directory not in front:
+                front.append(directory)
+        if record.get("kind") == "uv-source" and record.get("source_root") and not env.get("HERMES_AGENT_ROOT"):
+            env["HERMES_AGENT_ROOT"] = record["source_root"]
+        used.append({"harness": name, "version": install["version"], "path": str(bin_dir),
+                     "node": node.get("version") if node else None})
+    if front:
+        env["PATH"] = os.pathsep.join(front + [original])
+    return {"environment": env, "used": used}

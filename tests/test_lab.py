@@ -117,6 +117,7 @@ class DiscoverTests(unittest.TestCase):
         doc = self.run_discover(dead_ollama, which=lambda name: None)
         hints = {b["code"]: b.get("hint", "") for b in doc["blockers"]}
         self.assertIn("npm install -g " + discover.PI_NPM_PACKAGE, hints["pi_missing"])
+        self.assertIn("hwb harness add pi", hints["pi_missing"])
         self.assertIn("nodejs.org", hints["node_missing"])
         self.assertIn("ollama.com/download", hints["ollama_unreachable"])
         model, _ = shipped_model()
@@ -680,7 +681,7 @@ class LabApiTests(unittest.TestCase):
             stream.write(b"\ntampered\n")
 
         the_lab = lab.Lab(self.runs, recipe, opener=fake_ollama([(self.model, GOOD)]))
-        with mock.patch.object(discover, "tool", side_effect=lambda name, which=None: {
+        with mock.patch.object(discover, "tool", side_effect=lambda name, which=None, **_: {
             "name": name, "found": True, "path": f"/usr/bin/{name}", "version": "1.0",
         }):
             setup = the_lab.setup()
