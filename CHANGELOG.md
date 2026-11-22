@@ -7,6 +7,18 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- `hwb try`, `hwb setup` and `hwb lab` take `--harness pi|hermes|deepseek`:
+  the Python bug-fix Reality Check can now drive Hermes or DeepSeek Harness
+  through the same certified adapter as Pi, with no certified file changed.
+  Each harness gets its own Recipe (`coding-python-bug-fix-hermes`, ...); an
+  existing Recipe keeps its harness and refuses another. Pi Recipes are
+  unchanged. The verdict reads the harness from the sealed run's step. The
+  Hermes adapter accepts only the certified source (0.20.5), so for a Reality
+  Check a Hermes on PATH wins only when its source is at that commit;
+  otherwise the runtime store's 0.20.5 is used. `hwb setup` checks each
+  harness's own tools, blocks a Hermes that is not the certified version, and
+  says how to install what is missing. The Lab names the harness it runs.
+
 - Change: `hwb-hermes` runs on the Hermes checkout you have instead of refusing
   everything but its pin. The source bytes are still identified before any
   Hermes code runs, and a missing or dirty checkout is still refused. The

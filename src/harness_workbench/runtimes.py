@@ -698,8 +698,24 @@ def _default_install(root: Path, name: str, entry: Dict[str, Any]) -> Optional[D
     return ([i for i in installs if i["version"] == entry["default"]] or installs[-1:])[0]
 
 
+def _hermes_path_matches(environment: Dict[str, str], commit: str) -> bool:
+    """A PATH Hermes is usable for an exact-pin run only if its source is at `commit`.
+
+    The certified Hermes adapter reads the checkout at HERMES_AGENT_ROOT (else
+    ~/.hermes/hermes-agent) and refuses any other commit, so a PATH copy of
+    another version could only be refused.
+    """
+    configured = environment.get("HERMES_AGENT_ROOT")
+    source = Path(configured).expanduser() if configured else Path.home() / ".hermes" / "hermes-agent"
+    try:
+        return _git(source, "rev-parse", "HEAD") == commit
+    except (RuntimeStoreError, OSError, subprocess.SubprocessError):
+        return False
+
+
 def subject_environment(environment: Dict[str, str], root: Optional[Path] = None,
-                        catalog: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        catalog: Optional[Dict[str, Any]] = None,
+                        versions: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Make store harnesses findable for a subject process, without overriding PATH copies.
 
     For each catalog harness: if its executable is already on `environment`'s
@@ -708,17 +724,36 @@ def subject_environment(environment: Dict[str, str], root: Optional[Path] = None
     verified with (an npm harness runs `#!/usr/bin/env node`), and a store
     Hermes gets `HERMES_AGENT_ROOT` unless one is already set. Returns
     {"environment": new_env, "used": [...]} and never touches os.environ.
+
+    `versions` names the store version a caller needs per harness (a Reality
+    Check needs the certified Hermes). For Hermes, whose certified adapter
+    refuses any other source commit, a PATH copy then wins only when its
+    source is at that version's pinned commit; otherwise the store's version
+    is used and its source becomes `HERMES_AGENT_ROOT`.
     """
     root = store_root(environment) if root is None else root
     catalog = load_catalog() if catalog is None else catalog
+    versions = versions or {}
     env = dict(environment)
     original = env.get("PATH", os.defpath)
     front: List[str] = []
     used = []
     for name, entry in sorted(catalog["harnesses"].items()):
+        wanted = versions.get(name)
+        exact_hermes = name == "hermes" and wanted is not None
         if shutil.which(entry["executable"], path=original):
-            continue
-        install = _default_install(root, name, entry)
+            if not exact_hermes:
+                continue
+            try:
+                commit = _pin(entry["versions"][wanted])["source_commit"]
+            except (KeyError, OSError, ValueError):
+                continue
+            if _hermes_path_matches(env, commit):
+                continue
+        if wanted is not None:
+            install = next((i for i in installed(root, name) if i["version"] == wanted), None)
+        else:
+            install = _default_install(root, name, entry)
         if install is None:
             continue
         bin_dir = Path(install["path"]) / "bin"
@@ -732,8 +767,9 @@ def subject_environment(environment: Dict[str, str], root: Optional[Path] = None
         for directory in dirs:
             if directory not in front:
                 front.append(directory)
-        if record.get("kind") == "uv-source" and record.get("source_root") and not env.get("HERMES_AGENT_ROOT"):
-            env["HERMES_AGENT_ROOT"] = record["source_root"]
+        if record.get("kind") == "uv-source" and record.get("source_root"):
+            if exact_hermes or not env.get("HERMES_AGENT_ROOT"):
+                env["HERMES_AGENT_ROOT"] = record["source_root"]
         used.append({"harness": name, "version": install["version"], "path": str(bin_dir),
                      "node": node.get("version") if node else None})
     if front:

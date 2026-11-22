@@ -88,6 +88,39 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual((doc["blockers"], doc["notes"]), ([], []))
         self.assertEqual(doc["recipe"]["live_digest"], OTHER)
 
+    def test_each_harness_checks_its_own_tools(self):
+        model, _ = shipped_model()
+        ollama = fake_ollama([(model, OTHER)])
+        missing = lambda name: None  # noqa: E731
+        doc = discover.discover(self.recipe, profile="local-ollama", which=missing, opener=ollama,
+                                harness="deepseek")
+        self.assertEqual("deepseek", doc["harness"])
+        self.assertEqual(["dsh", "node"], list(doc["tools"]))
+        self.assertEqual(["dsh_missing", "node_missing"], [b["code"] for b in doc["blockers"]])
+        self.assertIn(discover.DSH_NPM_PACKAGE, doc["blockers"][0]["hint"])
+        with mock.patch.object(discover, "_hermes_certified", return_value=None):
+            doc = discover.discover(self.recipe, profile="local-ollama", which=which_all, opener=ollama,
+                                    harness="hermes")
+        self.assertEqual(["hermes", "git"], list(doc["tools"]))
+        self.assertTrue(doc["ready"], doc["blockers"])
+
+    def test_a_hermes_that_is_not_the_certified_version_blocks(self):
+        model, _ = shipped_model()
+        from harness_workbench import runtimes
+        with mock.patch.object(runtimes, "_hermes_path_matches", return_value=False):
+            doc = discover.discover(self.recipe, profile="local-ollama", which=which_all,
+                                    opener=fake_ollama([(model, OTHER)]), harness="hermes")
+        self.assertEqual(["hermes_not_certified"], [b["code"] for b in doc["blockers"]])
+        version = reality.certified_versions()["hermes"]
+        self.assertIn(f"hwb harness add hermes --version {version}", doc["blockers"][0]["hint"])
+
+    def test_an_existing_recipe_keeps_its_harness(self):
+        with mock.patch.object(reality, "_local_model_digest", return_value=None):
+            reality.prepare_recipe(self.recipe, harness="hermes")
+        doc = self.run_discover(fake_ollama([]))
+        self.assertEqual("hermes", doc["recipe"]["harness"])
+        self.assertEqual("hermes", doc["harness"])
+
     def test_changed_model_is_a_note_not_a_blocker(self):
         model, _ = shipped_model()
         with mock.patch.object(reality, "_local_model_digest", return_value=GOOD):
@@ -227,7 +260,7 @@ class LabServer:
         self.calls = []
         self.profiles = []
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             self.calls.append((check, runs_root, recipe_dir))
             self.profiles.append(profile)
             self.release.wait(5)
@@ -235,7 +268,7 @@ class LabServer:
                     "facts": [], "setup": {}}
 
         self.lab = lab.Lab(runs_root, recipe, run_check=run_check,
-                           discover=lambda r, opener=None, profile=None: {
+                           discover=lambda r, opener=None, profile=None, harness=None: {
                                "ready": True, "recipe": str(r), "profile": profile},
                            opener=opener)
         self.server = lab.make_server(self.lab, port=0)
@@ -563,7 +596,7 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(self.srv.calls[0][2], str(self.recipe))
 
     def test_failed_run_is_reported_not_swallowed(self):
-        def boom(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def boom(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             raise reality.RealityError("recipe directory exists without recipe.json")
         self.srv.lab._run_check = boom
         self.srv.json("/api/runs", "POST", {})
@@ -620,6 +653,32 @@ class LabApiTests(unittest.TestCase):
         with self.assertRaises(lab.LabError) as refused:
             the_lab.set_model("other:7b")
         self.assertEqual(422, refused.exception.status)
+
+    def test_lab_harness_reaches_setup_runs_and_model_choice(self):
+        recipe = Path(self.tmp.name) / "hermes-recipe"
+        seen = {}
+        def run_check(check, **kwargs):
+            seen["run"] = kwargs.get("harness")
+            raise reality.RealityError("stub")
+        def discover(recipe_dir, **kwargs):
+            seen["setup"] = kwargs.get("harness")
+            return {}
+        with mock.patch.object(reality, "_llamacpp_identity", return_value=("c" * 64, "b1")):
+            the_lab = lab.Lab(self.runs, recipe, opener=fake_llamacpp(), profile="local-llamacpp",
+                              harness="hermes", run_check=run_check, discover=discover)
+            the_lab.setup()
+            the_lab.set_model("qwen3.8:27b")
+        self.assertEqual("hermes", seen["setup"])
+        self.assertEqual("hermes", reality.recipe_harness(recipe))
+        local = json.loads((recipe / "model_selection.json").read_text())["profiles"]["local-llamacpp"]
+        self.assertEqual("qwen3.8:27b", local["models"]["hermes"])
+        reopened = lab.Lab(self.runs, recipe)
+        self.assertEqual("hermes", reopened.harness)
+        with self.assertRaises(lab.LabError) as refused:
+            lab.Lab(self.runs, recipe, harness="pi")
+        self.assertIn("runs Hermes", str(refused.exception))
+        with self.assertRaises(lab.LabError):
+            lab.Lab(self.runs, Path(self.tmp.name) / "x", harness="claude")
 
     def test_unknown_lab_profile_is_refused(self):
         with self.assertRaises(lab.LabError):
@@ -836,7 +895,7 @@ class LabProgressTests(unittest.TestCase):
 
     def lab(self, run_check, profile="local-ollama", opener=dead_ollama):
         return lab.Lab(self.runs, self.recipe, run_check=run_check, opener=opener,
-                       discover=lambda r, opener=None, profile=None: {"ready": True},
+                       discover=lambda r, opener=None, profile=None, harness=None: {"ready": True},
                        profile=profile)
 
     @staticmethod
@@ -848,7 +907,7 @@ class LabProgressTests(unittest.TestCase):
         return [entry["event"] for entry in view["events"]["entries"]]
 
     def test_a_run_reports_lifecycle_and_every_phase_in_backend_shape(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             for phase in reality.PROGRESS_PHASES:
                 progress(phase, {"run_id": "R7"} if phase == "run_started" else {})
             return {"verdict": "fail", "record": os.path.join(runs_root, "R7")}
@@ -883,7 +942,7 @@ class LabProgressTests(unittest.TestCase):
         self.assertNotIn("_events", view)
 
     def test_a_run_that_cannot_start_completes_as_failed(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             progress("recipe", {})
             raise reality.RealityError("recipe.json is missing")
 
@@ -899,7 +958,7 @@ class LabProgressTests(unittest.TestCase):
     def test_after_returns_only_newer_events_and_pages_past_the_limit(self):
         release = threading.Event()
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             release.wait(5)
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
@@ -920,7 +979,7 @@ class LabProgressTests(unittest.TestCase):
         self.assertTrue(self.finished(the_lab))
 
     def test_the_next_run_knows_how_long_the_last_one_took(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
         the_lab = self.lab(run_check)
@@ -933,7 +992,7 @@ class LabProgressTests(unittest.TestCase):
     def test_llamacpp_activity_reports_when_metrics_go_away(self):
         release = threading.Event()
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             release.wait(5)
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
@@ -951,7 +1010,7 @@ class LabProgressTests(unittest.TestCase):
 
     def _sampled(self, profile):
         """Whether a run under `profile` starts the llama.cpp activity sampler."""
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None):
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
         with mock.patch.object(lab.Lab, "_sample_activity") as sampler:
@@ -1164,7 +1223,7 @@ class LabProgressTests(unittest.TestCase):
         self.assertEqual(25, activity["tokens_since_start"])
 
     def test_ollama_runs_report_no_activity(self):
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 
         the_lab = self.lab(run_check, opener=fake_metrics([1]))
@@ -1184,12 +1243,12 @@ class LabShutdownTests(unittest.TestCase):
 
     def lab(self, run_check):
         return lab.Lab(self.runs, self.recipe, run_check=run_check, opener=dead_ollama,
-                       discover=lambda r, opener=None, profile=None: {"ready": True})
+                       discover=lambda r, opener=None, profile=None, harness=None: {"ready": True})
 
     def test_shutdown_stops_the_running_check_and_returns_its_end(self):
         seen = {}
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             seen["stopped"] = stop.wait(5)
             return {"verdict": "invalid", "record": os.path.join(runs_root, "R9")}
 
@@ -1205,7 +1264,7 @@ class LabShutdownTests(unittest.TestCase):
     def test_a_check_that_will_not_stop_is_reported_as_running(self):
         release = threading.Event()
 
-        def run_check(check, *, runs_root, recipe_dir, profile=None, progress=None, stop=None):
+        def run_check(check, *, runs_root, recipe_dir, profile=None, harness=None, progress=None, stop=None):
             release.wait(5)  # ignores stop
             return {"verdict": "pass", "record": os.path.join(runs_root, "R1")}
 

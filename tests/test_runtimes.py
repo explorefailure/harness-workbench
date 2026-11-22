@@ -381,6 +381,30 @@ class TestSubjectEnvironment(unittest.TestCase):
         kept = self.env(self.path_with(), HERMES_AGENT_ROOT="/mine")["environment"]
         self.assertEqual("/mine", kept["HERMES_AGENT_ROOT"])
 
+    def test_reality_check_hermes_takes_the_certified_store_copy_over_another_path_version(self):
+        self.fake_install("hermes", "0.22.5", "hermes", {"kind": "uv-source", "source_root": "/store/0.22.5"})
+        certified = self.fake_install("hermes", "0.20.5", "hermes", {"kind": "uv-source", "source_root": "/store/0.20.5"})
+        path = self.path_with("hermes")
+        mine = self.tmp / "mine"; mine.mkdir()  # not a checkout at the certified commit
+        result = runtimes.subject_environment({"PATH": path, "HERMES_AGENT_ROOT": str(mine)}, root=self.store,
+                                              catalog=self.catalog, versions={"hermes": "0.20.5"})
+        self.assertEqual(str(certified / "bin"), result["environment"]["PATH"].split(os.pathsep)[0])
+        self.assertEqual("/store/0.20.5", result["environment"]["HERMES_AGENT_ROOT"])
+        self.assertEqual("0.20.5", result["used"][0]["version"])
+        # Without a wanted version the PATH copy still wins.
+        self.assertEqual(path, self.env(path)["environment"]["PATH"])
+
+    def test_a_path_hermes_at_the_certified_commit_still_wins(self):
+        self.fake_install("hermes", "0.20.5", "hermes", {"kind": "uv-source", "source_root": "/store/0.20.5"})
+        path = self.path_with("hermes")
+        with mock.patch.object(runtimes, "_hermes_path_matches", return_value=True) as matches:
+            result = runtimes.subject_environment({"PATH": path}, root=self.store, catalog=self.catalog,
+                                                  versions={"hermes": "0.20.5"})
+        self.assertEqual(path, result["environment"]["PATH"])
+        self.assertEqual([], result["used"])
+        pinned = runtimes._pin(self.catalog["harnesses"]["hermes"]["versions"]["0.20.5"])["source_commit"]
+        self.assertEqual(pinned, matches.call_args[0][1])
+
     def test_empty_or_incomplete_store_changes_nothing(self):
         path = self.path_with()
         self.assertEqual(path, self.env(path)["environment"]["PATH"])

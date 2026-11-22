@@ -4,8 +4,9 @@
 machine attempt `coding/python-bug-fix` right now, and if not, what is
 missing?  Discovery never writes, installs, pulls, or starts anything.
 
-It deliberately probes the same things a real run will use -- `pi` and `node`
-on PATH, the model runtime the chosen profile declares (Ollama for
+It deliberately probes the same things a real run will use -- the chosen
+harness's tools (`pi` and `node`, `hermes` and its certified source, or `dsh`
+and `node`) on PATH or in the runtime store, the model runtime the chosen profile declares (Ollama for
 `local-ollama`, llama-server for `local-llamacpp`), and the digest rule the
 adapter enforces -- so "ready" predicts what the run will
 check instead of describing the machine in general.  It is still a prediction:
@@ -32,6 +33,8 @@ PROFILE = reality.DEFAULT_RECIPE_PROFILE
 PROFILES = reality.RECIPE_PROFILES
 _CONTENT_ADDRESSED_GGUF = reality._CONTENT_ADDRESSED_GGUF
 _PROBE_TIMEOUT = 5
+# Hermes starts a Python app for --version; a cold start measured about 9 s.
+_SLOW_PROBE_TIMEOUTS = {"hermes": 30}
 
 
 def _shipped_selection() -> dict[str, Any]:
@@ -97,7 +100,8 @@ def tool(name: str, which=shutil.which, env: Optional[dict[str, str]] = None) ->
         return {"name": name, "found": False, "path": None, "version": None}
     try:
         out = subprocess.run([path, "--version"], capture_output=True, text=True,
-                             timeout=_PROBE_TIMEOUT, check=False, env=env)
+                             timeout=_SLOW_PROBE_TIMEOUTS.get(name, _PROBE_TIMEOUT),
+                             check=False, env=env)
         text = (out.stdout or out.stderr).strip().splitlines()
         version = text[0].strip() if text else None
     except (OSError, subprocess.SubprocessError):
@@ -250,14 +254,17 @@ def runtime(state: dict[str, Any], opener=urlopen) -> dict[str, Any]:
     return {"kind": kind, "label": label, **block}
 
 
-def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
+def recipe_state(recipe_dir: Path, profile: str = PROFILE,
+                 harness: str = reality.DEFAULT_HARNESS) -> dict[str, Any]:
     """The model a run would use: the Recipe's, or the shipped default.
 
-    An existing Recipe keeps the profile it was made with; `profile` only
-    chooses which shipped profile a new Recipe would start from.
+    An existing Recipe keeps the profile and harness it was made with;
+    `profile` and `harness` only choose what a new Recipe would start from.
     """
     selection_path = recipe_dir / "model_selection.json"
     exists = (recipe_dir / "recipe.json").is_file()
+    if exists:
+        harness = reality.recipe_harness(recipe_dir)
     source = "recipe" if exists else "shipped default"
     name = profile
     stale = exists and reality.recipe_is_stale(recipe_dir.resolve())
@@ -268,7 +275,7 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
                      if exists else _shipped_selection())
         name = str(selection["active"]) if exists else profile
         local = selection["profiles"][name]
-        model = str(local["models"]["pi"])
+        model = str(local["models"][harness])
         # A Recipe's reference is its baseline (this machine's digest when the
         # Recipe was made or the model was chosen).  The shipped default has no
         # meaningful baseline: a new Recipe takes the live digest.
@@ -278,11 +285,11 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
         kind = "llama.cpp" if local.get("runtime") == "llama.cpp" else "ollama"
     except (OSError, ValueError, KeyError, TypeError, reality.RealityError) as error:
         return {"path": str(recipe_dir), "exists": exists, "source": source,
-                "profile": name, "runtime": None,
+                "profile": name, "harness": harness, "runtime": None,
                 "model": None, "recorded_digest": None, "recorded_build": None,
                 "base_url": None, "error": f"Recipe unreadable: {error}"}
     return {"path": str(recipe_dir), "exists": exists, "source": source,
-            "profile": name, "runtime": kind,
+            "profile": name, "harness": harness, "runtime": kind,
             "model": model, "recorded_digest": digest, "recorded_build": build,
             "base_url": base_url, "error": None, "stale": stale}
 
@@ -290,6 +297,12 @@ def recipe_state(recipe_dir: Path, profile: str = PROFILE) -> dict[str, Any]:
 # The npm package the Reality Check's Pi subject is pinned to (pin.json); a
 # test keeps the two equal.
 PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent"
+DSH_NPM_PACKAGE = "@deepseek-ai/dsh"
+
+# What each harness's run needs on PATH (after the runtime store is added).
+HARNESS_TOOLS = {"pi": ("pi", "node"), "hermes": ("hermes", "git"), "deepseek": ("dsh", "node")}
+TOOL_LABELS = {"pi": "Pi coding agent", "node": "Node.js", "hermes": "Hermes Agent",
+               "git": "git", "dsh": "DeepSeek Harness"}
 
 
 def install_hint(code: str, *, model: str | None = None, llama: bool = False) -> str | None:
@@ -298,6 +311,15 @@ def install_hint(code: str, *, model: str | None = None, llama: bool = False) ->
         return ("Run `hwb harness add pi`: it downloads pinned Pi (and Node, if "
                 "needed) into Workbench's own runtime store, no sudo. Or install it "
                 f"yourself with `npm install -g {PI_NPM_PACKAGE}`.")
+    if code in ("hermes_missing", "hermes_not_certified"):
+        version = reality.certified_versions().get("hermes", "")
+        return (f"Run `hwb harness add hermes --version {version}`: the Reality Check's "
+                "Hermes adapter runs only the certified version, and the store copy is "
+                "used when the one on PATH is another version.")
+    if code == "git_missing":
+        return "Install git (macOS: `xcode-select --install`; Debian/Ubuntu: `sudo apt install git`)."
+    if code == "dsh_missing":
+        return f"Install it with `npm install -g {DSH_NPM_PACKAGE}`."
     if code == "node_missing":
         return ("Run `hwb harness add node`, or install Node.js and npm from "
                 "https://nodejs.org/en/download (Debian/Ubuntu: `sudo apt install nodejs npm`).")
@@ -312,9 +334,10 @@ def install_hint(code: str, *, model: str | None = None, llama: bool = False) ->
 
 
 def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
-             opener=urlopen) -> dict[str, Any]:
+             opener=urlopen, harness: str = reality.DEFAULT_HARNESS) -> dict[str, Any]:
     """Return the setup document used by `hwb setup` and the Lab."""
-    recipe = recipe_state(recipe_dir, profile)
+    recipe = recipe_state(recipe_dir, profile, harness)
+    harness = recipe["harness"]
     inventory = runtime(recipe, opener=opener)
     label = inventory["label"]
     store_dirs: list[str] = []
@@ -323,7 +346,8 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
         # Look where a run will look: PATH first, then `hwb harness add` installs.
         from . import runtimes
         try:
-            probe_env = runtimes.subject_environment(dict(os.environ))["environment"]
+            probe_env = runtimes.subject_environment(
+                dict(os.environ), versions=reality.certified_versions())["environment"]
         except (runtimes.RuntimeStoreError, OSError, ValueError):
             probe_env = dict(os.environ)
         search = probe_env.get("PATH")
@@ -331,7 +355,7 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
         store_dirs = [d for d in (search or "").split(os.pathsep) if d and d not in original]
         which = lambda name: shutil.which(name, path=search)  # noqa: E731
     probe = {"env": probe_env} if probe_env is not None else {}
-    tools = {name: tool(name, which=which, **probe) for name in ("pi", "node")}
+    tools = {name: tool(name, which=which, **probe) for name in HARNESS_TOOLS[harness]}
     for entry in tools.values():
         entry["source"] = (None if not entry["found"] else
                            "store" if str(Path(entry["path"]).parent) in store_dirs else "path")
@@ -344,12 +368,15 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
         notes.append({"code": "recipe_refresh", "message": (
             "The Recipe was made by another Workbench version. The next run "
             "updates its files from this version and keeps your model choice.")})
-    if not tools["pi"]["found"]:
-        blockers.append({"code": "pi_missing",
-                         "message": "Pi coding agent (`pi`) was not found on PATH."})
-    if not tools["node"]["found"]:
-        blockers.append({"code": "node_missing",
-                         "message": "Node.js (`node`) was not found on PATH; Pi needs it."})
+    for name, entry in tools.items():
+        if not entry["found"]:
+            needs = "" if name == HARNESS_TOOLS[harness][0] else f"; {reality.HARNESSES[harness]} needs it"
+            blockers.append({"code": f"{name}_missing",
+                             "message": f"{TOOL_LABELS[name]} (`{name}`) was not found on PATH{needs}."})
+    if harness == "hermes" and tools["hermes"]["found"]:
+        blocker = _hermes_certified(probe_env if probe_env is not None else dict(os.environ))
+        if blocker:
+            blockers.append(blocker)
     live_digest = None
     llama = inventory["kind"] == "llama.cpp"
     if not inventory["reachable"]:
@@ -393,6 +420,7 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
     return {
         "schema": SCHEMA,
         "check": CHECK,
+        "harness": harness,
         "ready": not blockers,
         "blockers": blockers,
         "notes": notes,
@@ -408,14 +436,31 @@ def discover(recipe_dir: Path, *, profile: str = PROFILE, which=shutil.which,
     }
 
 
-def default_recipe_dir(profile: str = PROFILE) -> Path:
-    return reality._default_recipe(profile)
+def _hermes_certified(env: dict[str, str]) -> Optional[dict[str, str]]:
+    """A blocker when the Hermes a run would use is not the certified source commit."""
+    from . import runtimes
+    version = reality.certified_versions().get("hermes")
+    try:
+        entry = runtimes.load_catalog()["harnesses"]["hermes"]
+        commit = runtimes._pin(entry["versions"][version])["source_commit"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if runtimes._hermes_path_matches(env, commit):
+        return None
+    return {"code": "hermes_not_certified", "message": (
+        f"The Hermes a run would use is not the certified {version}; the Reality "
+        "Check's Hermes adapter refuses any other version.")}
+
+
+def default_recipe_dir(profile: str = PROFILE, harness: str = reality.DEFAULT_HARNESS) -> Path:
+    return reality._default_recipe(profile, harness)
 
 
 def print_setup(doc: dict[str, Any]) -> None:
     m = doc["machine"]
     mem = m["memory_bytes"]
-    print(f"Setup for Reality Check {doc['check']}")
+    print(f"Setup for Reality Check {doc['check']} with "
+          f"{reality.HARNESSES.get(doc['recipe'].get('harness') or 'pi', 'Pi')}")
     print(f"  Machine   {m.get('model') or m['system']} · {m.get('cpu') or m['arch']}"
           + (f" · {mem / 2**30:.0f} GB" if mem else ""))
     print(f"  Python    {doc['python']['version']} · Workbench {doc['workbench']['version']}")

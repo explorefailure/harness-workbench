@@ -24,7 +24,37 @@ RECIPE_SCHEMA = "hwb-recipe/v0.1"
 RESULT_SCHEMA = "hwb-reality-check-result/v0.1"
 SPEC_NAME = "reality-check.json"
 RECIPE_NAME = "recipe.json"
+# Harnesses a Reality Check can run: each is a certified subject the shared
+# adapter already drives. Pi is the default and keeps its original step id.
+HARNESSES = {"pi": "Pi", "hermes": "Hermes", "deepseek": "DeepSeek Harness"}
+DEFAULT_HARNESS = "pi"
 STEP_ID = "pi-python-bug-fix"
+
+
+def step_id(harness: str) -> str:
+    return f"{harness}-python-bug-fix"
+
+
+def _harness(value: Optional[str]) -> str:
+    harness = value or DEFAULT_HARNESS
+    if harness not in HARNESSES:
+        raise RealityError(f"unknown harness {harness!r}; choose one of: " + ", ".join(HARNESSES))
+    return harness
+
+
+def certified_versions() -> dict[str, str]:
+    """Store versions a Reality Check needs: the catalog's certified version per harness.
+
+    Hermes's certified adapter refuses any other source commit; the others
+    record whatever runs, so they need no particular version.
+    """
+    from . import runtimes
+    try:
+        entry = runtimes.load_catalog()["harnesses"]["hermes"]
+        certified = entry["modes"]["certified"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    return {"hermes": certified} if isinstance(certified, str) else {}
 CANONICAL_FILES = (
     "repair_fixture/slugger.py",
     "repair_fixture/test_slugger.py",
@@ -34,7 +64,7 @@ BLIND_SPOTS = (
     "Workloads and callbacks are trusted code; this is not a security sandbox.",
     "Only the disposable workspace manifests, declared inputs, process evidence, and tests are observed.",
     "Network, host-wide filesystem, child processes outside the owned group, and model quality beyond this job are unobserved.",
-    "A pass applies only to the recorded Pi, model, runtime, prompt, fixture, and sensors.",
+    "A pass applies only to the recorded harness, model, runtime, prompt, fixture, and sensors.",
 )
 MODEL_DIGEST_CONTRACT = "recorded_digest_not_pinned_reproduction"
 EDITABLE_RECIPE_FILE = "model_selection.json"
@@ -122,9 +152,9 @@ def _llamacpp_identity(model: str, base_url: str) -> tuple[Optional[str], Option
     return (match.group(1) if match else None), build
 
 
-def _live_identity(profile: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+def _live_identity(profile: dict[str, Any], harness: str = DEFAULT_HARNESS) -> tuple[Optional[str], Optional[str]]:
     """(model digest, runtime build) for a Recipe profile; build is llama.cpp only."""
-    model, base_url = str(profile["models"]["pi"]), str(profile["base_url"])
+    model, base_url = str(profile["models"][harness]), str(profile["base_url"])
     if profile.get("runtime") == "llama.cpp":
         return _llamacpp_identity(model, base_url)
     return _local_model_digest(model, base_url), None
@@ -152,14 +182,15 @@ def refresh_live_digest(destination: Path) -> None:
     nothing changes and the adapter's own check still fails the run.
     """
     path = destination / EDITABLE_RECIPE_FILE
+    harness = recipe_harness(destination)
     try:
         selection = json.loads(path.read_text(encoding="utf-8"))
         _, local = _recipe_profile(selection)
-        if not isinstance(local["models"]["pi"], str) or not isinstance(local["base_url"], str):
-            raise TypeError("profile must name a Pi model and a base_url")
+        if not isinstance(local["models"][harness], str) or not isinstance(local["base_url"], str):
+            raise TypeError(f"profile must name a {HARNESSES[harness]} model and a base_url")
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RealityError(f"editable model selection is malformed: {error}") from error
-    live, build = _live_identity(local)
+    live, build = _live_identity(local, harness)
     if not live:
         return
     baseline = local.get("baseline_digest")
@@ -218,10 +249,23 @@ class RealityError(ValueError):
     """A Reality Check could not be prepared or interpreted honestly."""
 
 
-def _default_recipe(profile: str = DEFAULT_RECIPE_PROFILE) -> Path:
+def recipe_harness(destination: Path) -> str:
+    """The harness a Recipe was made for; Recipes made before the choice existed are Pi."""
+    try:
+        manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
+        value = manifest.get("subject") if isinstance(manifest, dict) else None
+    except (OSError, UnicodeError, ValueError):
+        value = None
+    return value if value in HARNESSES else DEFAULT_HARNESS
+
+
+def _default_recipe(profile: str = DEFAULT_RECIPE_PROFILE, harness: str = DEFAULT_HARNESS) -> Path:
     if _PROFILE_NAME.fullmatch(profile) is None:
         raise RealityError(f"unsafe Recipe profile name {profile!r}")
+    harness = _harness(harness)
     name = "coding-python-bug-fix"
+    if harness != DEFAULT_HARNESS:
+        name += "-" + harness
     if profile != DEFAULT_RECIPE_PROFILE:
         name += "-" + profile
     return Path.cwd() / ".hwb" / "recipes" / name
@@ -236,12 +280,15 @@ def _canonical_digests() -> dict[str, str]:
     return {name: digest_file(root / name) for name in CANONICAL_FILES}
 
 
-def _spec() -> dict[str, Any]:
+def _spec(harness: str = DEFAULT_HARNESS) -> dict[str, Any]:
     definition = (
         Path(__file__).resolve().parent
         / "reality_checks" / "coding_python_bug_fix.json"
     )
     value = json.loads(definition.read_text(encoding="utf-8"))
+    # One packaged definition; the harness is the certified runner's --subject.
+    value["steps"][0]["id"] = step_id(harness)
+    value["steps"][0]["argv"][1] = harness
     value["env"] = ["HWB_PYTHON"]
     value["steps"][0]["inputs"].append(RECIPE_NAME)
     return value
@@ -281,9 +328,12 @@ def _validate_recipe(destination: Path) -> Path:
     }
     if not isinstance(manifest, dict) or set(manifest) != required_manifest:
         raise RealityError("Recipe manifest is incomplete or has unknown fields")
+    harness = manifest.get("subject")
+    if harness not in HARNESSES:
+        raise RealityError(f"Recipe field 'subject' must be one of {sorted(HARNESSES)!r}")
     expected_values = {
         "schema": RECIPE_SCHEMA, "check": CHECK, "spec": SPEC_NAME,
-        "subject": "pi", "workload": "repair",
+        "subject": harness, "workload": "repair",
         "model_profile": manifest.get("model_profile"),
         "model_digest_contract": MODEL_DIGEST_CONTRACT,
         "editable_files": [EDITABLE_RECIPE_FILE],
@@ -297,7 +347,7 @@ def _validate_recipe(destination: Path) -> Path:
         specification = json.loads(spec_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
         raise RealityError(f"Recipe spec is missing or malformed: {error}") from error
-    if specification != _spec():
+    if specification != _spec(harness):
         raise RealityError("Recipe spec differs from the packaged Reality Check")
     required_files = _required_inputs(specification)
     expected_bound = manifest.get("bound_file_digests")
@@ -330,8 +380,8 @@ def _validate_recipe(destination: Path) -> Path:
     if name == "local-llamacpp" and local.get("runtime") != "llama.cpp":
         raise RealityError("local-llamacpp must keep the llama.cpp runtime")
     models = local.get("models")
-    if not isinstance(models, dict) or not isinstance(models.get("pi"), str) or not models["pi"]:
-        raise RealityError(f"{name} must name a Pi model")
+    if not isinstance(models, dict) or not isinstance(models.get(harness), str) or not models[harness]:
+        raise RealityError(f"{name} must name a {HARNESSES[harness]} model")
     return spec_path
 
 
@@ -381,7 +431,7 @@ def recipe_is_stale(destination: Path) -> bool:
     manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
     try:
         spec_current = json.loads(
-            (destination / SPEC_NAME).read_text(encoding="utf-8")) == _spec()
+            (destination / SPEC_NAME).read_text(encoding="utf-8")) == _spec(recipe_harness(destination))
     except (OSError, UnicodeError, ValueError):
         spec_current = False
     files_current = (
@@ -403,6 +453,7 @@ def refresh_stale_recipe(destination: Path) -> bool:
     if not recipe_is_stale(destination):
         return False
     manifest = json.loads((destination / RECIPE_NAME).read_text(encoding="utf-8"))
+    harness = recipe_harness(destination)
     staging = destination.with_name(destination.name + ".refreshing")
     retired = destination.with_name(destination.name + ".retired")
     for leftover in (staging, retired):
@@ -412,16 +463,16 @@ def refresh_stale_recipe(destination: Path) -> bool:
         staging.mkdir()
         subject_tree.materialize(str(staging))
         shutil.copyfile(destination / EDITABLE_RECIPE_FILE, staging / EDITABLE_RECIPE_FILE)
-        _write_json(staging / SPEC_NAME, _spec())
+        _write_json(staging / SPEC_NAME, _spec(harness))
         bound_names = [
-            name for name in _required_inputs(_spec()) if name != EDITABLE_RECIPE_FILE
+            name for name in _required_inputs(_spec(harness)) if name != EDITABLE_RECIPE_FILE
         ]
         _write_json(staging / RECIPE_NAME, {
             **{key: manifest[key] for key in ("model_profile", "rerun")},
             "schema": RECIPE_SCHEMA,
             "check": CHECK,
             "spec": SPEC_NAME,
-            "subject": "pi",
+            "subject": harness,
             "workload": "repair",
             "model_digest_contract": MODEL_DIGEST_CONTRACT,
             "editable_files": [EDITABLE_RECIPE_FILE],
@@ -442,13 +493,17 @@ def refresh_stale_recipe(destination: Path) -> bool:
     return True
 
 
-def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Path, bool]:
+def prepare_recipe(destination: Path, profile: Optional[str] = None,
+                   harness: Optional[str] = None) -> tuple[Path, bool]:
     """Create the thin manifest/spec over the existing subject tree.
 
-    `profile` chooses the model profile for a NEW Recipe (default Ollama).  An
-    existing Recipe keeps the profile it was made with; asking for another one
-    is refused rather than silently ignored.
+    `profile` chooses the model profile and `harness` the harness for a NEW
+    Recipe (defaults: Ollama, Pi).  An existing Recipe keeps the profile and
+    harness it was made with; asking for another is refused rather than
+    silently ignored.
     """
+    if harness is not None:
+        _harness(harness)
     manifest_path = destination / RECIPE_NAME
     if destination.exists():
         if not manifest_path.is_file():
@@ -463,8 +518,15 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
                 f"Recipe at {destination} uses {existing}; choose another --recipe "
                 f"directory for {profile}"
             )
+        made_for = recipe_harness(destination)
+        if harness is not None and harness != made_for:
+            raise RealityError(
+                f"Recipe at {destination} runs {HARNESSES[made_for]}; choose another "
+                f"--recipe directory for {HARNESSES[harness]}"
+            )
         return spec_path, False
     profile = profile or DEFAULT_RECIPE_PROFILE
+    harness = _harness(harness)
 
     available = _available_selection()
     choices = _local_profile_names(available)
@@ -486,21 +548,21 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
     local["digest_contract"] = MODEL_DIGEST_CONTRACT
     # Baseline from this machine's runtime, never the digest the package
     # shipped; empty when it cannot be read now (the first run adopts it).
-    live, build = _live_identity(local)
+    live, build = _live_identity(local, harness)
     local["baseline_digest"] = live or ""
     local["model_digest"] = live or ""
     if local.get("runtime") == "llama.cpp" and build:
         local["baseline_runtime_build"] = build
         local["runtime_build"] = build
     _write_json(selection_path, selection)
-    _write_json(destination / SPEC_NAME, _spec())
-    required_files = _required_inputs(_spec())
+    _write_json(destination / SPEC_NAME, _spec(harness))
+    required_files = _required_inputs(_spec(harness))
     bound_names = [name for name in required_files if name != EDITABLE_RECIPE_FILE]
     _write_json(manifest_path, {
         "schema": RECIPE_SCHEMA,
         "check": CHECK,
         "spec": SPEC_NAME,
-        "subject": "pi",
+        "subject": harness,
         "workload": "repair",
         "model_profile": profile,
         "model_digest_contract": MODEL_DIGEST_CONTRACT,
@@ -512,15 +574,41 @@ def prepare_recipe(destination: Path, profile: Optional[str] = None) -> tuple[Pa
     return _validate_recipe(destination), True
 
 
-def _attempt_document(run_dir: Path) -> dict[str, Any]:
-    path = run_dir / "steps" / STEP_ID / "attempts" / "0" / "stdout.bin"
+def run_harness(run_dir: Path) -> str:
+    """The harness a sealed Reality Check run measured, from its own step directory."""
+    steps = run_dir / "steps"
+    for harness in HARNESSES:
+        if (steps / step_id(harness)).is_dir():
+            return harness
+    return DEFAULT_HARNESS
+
+
+def _attempt_document(run_dir: Path, harness: str = DEFAULT_HARNESS) -> dict[str, Any]:
+    path = run_dir / "steps" / step_id(harness) / "attempts" / "0" / "stdout.bin"
+    label = HARNESSES[harness]
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
-        raise RealityError(f"sealed Pi attempt is not readable JSON: {error}") from error
+        raise RealityError(f"sealed {label} attempt is not readable JSON: {error}") from error
     if not isinstance(value, dict):
-        raise RealityError("sealed Pi attempt is not a JSON object")
+        raise RealityError(f"sealed {label} attempt is not a JSON object")
     return value
+
+
+def _setup(harness: str, subject: dict[str, Any]) -> dict[str, Any]:
+    """What ran, for the summary. Pi keeps its original pi_version/node_version keys."""
+    setup = {
+        "subject": HARNESSES[harness],
+        "harness": harness,
+        "harness_version": subject.get("version", "unobserved"),
+        "model": subject.get("model", "unobserved"),
+        "model_profile": subject.get("model_profile", "unobserved"),
+        "model_digest": subject.get("model_digest", "unobserved"),
+    }
+    if harness == "pi":
+        setup["pi_version"] = subject.get("version", "unobserved")
+        setup["node_version"] = subject.get("node_version", "unobserved")
+    return setup
 
 
 def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
@@ -543,8 +631,9 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     if not template_ok:
         errors.append("Recipe fixture/template differs from the shipped canonical bytes")
 
+    harness = run_harness(run_dir)
     try:
-        document = _attempt_document(run_dir)
+        document = _attempt_document(run_dir, harness)
     except RealityError as error:
         return {
             "verdict": "invalid", "facts": facts,
@@ -556,9 +645,7 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
         return {
             "verdict": "invalid", "facts": facts,
             "changed_files": [], "errors": errors,
-            "setup": {"subject": "Pi", "model": "unobserved",
-                      "model_profile": "unobserved", "pi_version": "unobserved",
-                      "node_version": "unobserved"},
+            "setup": {**_setup(harness, {}), "model_digest": "unobserved"},
         }
 
     adapter = document.get("adapter")
@@ -641,7 +728,7 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
     if not allowed_changes:
         errors.append(f"changed files were {changed!r}; only slugger.py is permitted")
     if not measured:
-        errors.append("Pi adapter measurement was invalid")
+        errors.append(f"{HARNESSES[harness]} adapter measurement was invalid")
     if not independent_outcome:
         errors.extend(str(item) for item in outcome.get("errors", []) if isinstance(item, str))
 
@@ -659,14 +746,7 @@ def verify_run(run_dir: Path, recipe_dir: Path) -> dict[str, Any]:
         "facts": facts,
         "changed_files": changed,
         "errors": errors,
-        "setup": {
-            "subject": "Pi",
-            "model": subject.get("model", "unobserved"),
-            "model_profile": subject.get("model_profile", "unobserved"),
-            "model_digest": subject.get("model_digest", "unobserved"),
-            "pi_version": subject.get("version", "unobserved"),
-            "node_version": subject.get("node_version", "unobserved"),
-        },
+        "setup": _setup(harness, subject),
     }
 
 
@@ -675,6 +755,7 @@ PROGRESS_PHASES = ("recipe", "model_identity", "run_started", "agent", "verifyin
 
 def run_check(
     check: str, *, runs_root: str, recipe_dir: str | None, profile: str | None = None,
+    harness: str | None = None,
     progress: Callable[[str, dict[str, Any]], None] | None = None,
     stop: threading.Event | None = None,
 ) -> dict[str, Any]:
@@ -692,18 +773,21 @@ def run_check(
     def observe(event: str, detail: dict[str, Any]) -> None:
         if event == "run_started":
             phase("run_started", run_id=detail.get("run_id"))
-        elif event == "step_started" and detail.get("step_id") == STEP_ID:
+        elif event == "step_started" and detail.get("step_id") in {step_id(h) for h in HARNESSES}:
             phase("agent")
 
     if check != CHECK:
         raise RealityError(f"unknown Reality Check: {check}")
+    if harness is not None:
+        _harness(harness)
     phase("recipe")
     destination = (
         Path(recipe_dir).expanduser() if recipe_dir
-        else _default_recipe(profile or DEFAULT_RECIPE_PROFILE)
+        else _default_recipe(profile or DEFAULT_RECIPE_PROFILE, harness or DEFAULT_HARNESS)
     ).resolve()
     refreshed = destination.exists() and refresh_stale_recipe(destination)
-    spec_path, created = prepare_recipe(destination, profile)
+    spec_path, created = prepare_recipe(destination, profile, harness)
+    harness = recipe_harness(destination)
     phase("model_identity")
     refresh_live_digest(destination)
     specification_value = json.loads(spec_path.read_text(encoding="utf-8"))
@@ -728,7 +812,8 @@ def run_check(
         # PATH; a PATH copy still wins. The adapter records what actually ran.
         from . import runtimes
         try:
-            environment = runtimes.subject_environment(environment)["environment"]
+            environment = runtimes.subject_environment(
+                environment, versions=certified_versions())["environment"]
         except (runtimes.RuntimeStoreError, OSError, ValueError):
             pass  # an unreadable store must never block a run that needs no store
         record = runner.execute(
@@ -743,6 +828,7 @@ def run_check(
     return {
         "schema": RESULT_SCHEMA,
         "job": CHECK,
+        "harness": harness,
         **verified,
         "model_change": model_change(destination, verified.get("setup", {})),
         "record": str(run_dir),
@@ -791,10 +877,10 @@ def print_result(result: dict[str, Any]) -> None:
     print(f"Reality Check: {result['job']}")
     setup = result.get("setup", {})
     print(
-        "Setup: {subject} {pi_version} (Node {node_version}) · {model} ({model_profile}) · digest {model_digest}".format(
+        "Setup: {subject} {version}{node} · {model} ({model_profile}) · digest {model_digest}".format(
             subject=setup.get("subject", "Pi"),
-            pi_version=setup.get("pi_version", "unobserved"),
-            node_version=setup.get("node_version", "unobserved"),
+            version=setup.get("harness_version", setup.get("pi_version", "unobserved")),
+            node=(" (Node %s)" % setup["node_version"]) if "node_version" in setup else "",
             model=setup.get("model", "unobserved"),
             model_profile=setup.get("model_profile", "unobserved"),
             model_digest=setup.get("model_digest", "unobserved"),
