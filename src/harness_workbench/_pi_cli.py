@@ -143,6 +143,13 @@ def main(argv: list[str] | None = None) -> int:
             # The reference oracle intentionally checks modes as well as bytes.
             os.umask(0o022)
         os.chdir(config.parent)
+        # A Pi installed with `hwb harness add pi` is found when none is on
+        # PATH (with the Node it was verified with); a PATH Pi still wins.
+        from . import runtimes
+        try:
+            os.environ.update(runtimes.subject_environment(dict(os.environ))["environment"])
+        except (runtimes.RuntimeStoreError, OSError, ValueError):
+            pass
         # Replace the wrapper so cancellation reaches the adapter's existing
         # signal handling rather than leaving it behind a parent process.
         os.execv(sys.executable, command)
