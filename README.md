@@ -174,6 +174,21 @@ GGUF's SHA-256 and the llama.cpp build:
 hwb try coding/python-bug-fix --profile local-llamacpp
 ```
 
+The same check can drive Hermes or DeepSeek Harness instead of Pi with
+`--harness hermes` or `--harness deepseek` (on `hwb setup`, `hwb try` and
+`hwb lab`). Each harness gets its own Recipe, for example
+`.hwb/recipes/coding-python-bug-fix-hermes`, and an existing Recipe keeps the
+harness it was made with. Hermes must be the certified version, because the
+check's Hermes adapter accepts only that source: `hwb harness add hermes
+--version 0.20.5` installs it, and that copy is used when the Hermes on PATH is
+another version. DeepSeek Harness is installed with
+`npm install -g @deepseek-ai/dsh`.
+
+```sh
+hwb setup --harness hermes
+hwb try coding/python-bug-fix --harness hermes
+```
+
 You can also select an owner-side local profile without adding machine-specific
 configuration to the repository. Point `HWB_MODEL_PROFILES` at the external
 profile file described in the [subject guide](src/harness_workbench/subjects/README.md#your-own-endpoints),

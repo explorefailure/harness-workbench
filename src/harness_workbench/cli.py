@@ -75,6 +75,7 @@ def cmd_try(args) -> int:
             runs_root=args.root,
             recipe_dir=args.recipe,
             profile=args.profile,
+            harness=args.harness,
         )
     except reality.RealityError as error:
         return _fail(str(error))
@@ -94,8 +95,8 @@ def cmd_setup(args) -> int:
     from . import discover
 
     recipe = (Path(args.recipe).expanduser() if args.recipe
-              else discover.default_recipe_dir(args.profile))
-    doc = discover.discover(recipe, profile=args.profile)
+              else discover.default_recipe_dir(args.profile, args.harness))
+    doc = discover.discover(recipe, profile=args.profile, harness=args.harness)
     if args.json:
         json.dump(doc, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -109,7 +110,7 @@ def cmd_lab(args) -> int:
 
     try:
         return lab.serve(args.root, args.recipe, args.port, not args.no_browser,
-                         args.profile)
+                         args.profile, args.harness)
     except lab.LabError as error:
         return _fail(str(error))
 
@@ -940,6 +941,8 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--profile", default=None,
                     help="local model profile for a new Recipe (default: local-ollama; "
                          "owner profiles may come from HWB_MODEL_PROFILES)")
+    tr.add_argument("--harness", default=None, choices=("pi", "hermes", "deepseek"),
+                    help="harness for a new Recipe (default: pi); an existing Recipe keeps its own")
     tr.add_argument("--json", action="store_true",
                     help="print the result document as JSON instead of the summary")
     tr.set_defaults(func=cmd_try)
@@ -951,6 +954,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--profile", default="local-ollama",
                     help="local model profile to check (default: local-ollama; owner "
                          "profiles may come from HWB_MODEL_PROFILES)")
+    st.add_argument("--harness", default="pi", choices=("pi", "hermes", "deepseek"),
+                    help="harness to check (default: pi)")
     st.set_defaults(func=cmd_setup)
 
     lb = command("lab")
@@ -963,6 +968,8 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("--profile", default=None,
                     help="local model profile for a new Recipe (default: local-ollama; "
                          "owner profiles may come from HWB_MODEL_PROFILES)")
+    lb.add_argument("--harness", default=None, choices=("pi", "hermes", "deepseek"),
+                    help="harness for a new Recipe (default: pi); an existing Recipe keeps its own")
     lb.set_defaults(func=cmd_lab)
 
     hn = command("harness")

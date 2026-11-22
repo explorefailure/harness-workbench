@@ -91,8 +91,13 @@ class Lab:
     def __init__(self, runs_root: str, recipe_dir: Path, *,
                  run_check: Callable[..., dict[str, Any]] = reality.run_check,
                  discover: Callable[..., dict[str, Any]] = discovermod.discover,
-                 opener=urlopen, profile: Optional[str] = None):
+                 opener=urlopen, profile: Optional[str] = None,
+                 harness: Optional[str] = None):
         requested_profile = profile
+        if harness is not None and harness not in reality.HARNESSES:
+            raise LabError(1, f"unknown harness {harness!r}")
+        requested_harness = harness
+        harness = harness or reality.DEFAULT_HARNESS
         profile = profile or discovermod.PROFILE
         profile_from_recipe = False
         manifest = recipe_dir / reality.RECIPE_NAME
@@ -105,7 +110,13 @@ class Lab:
                     raise LabError(1, f"Recipe uses profile {recipe_profile!r}, not "
                                    f"{requested_profile!r}; omit --profile, or point "
                                    "--recipe at another directory")
+                recipe_harness = reality.recipe_harness(recipe_dir.resolve())
+                if requested_harness is not None and requested_harness != recipe_harness:
+                    raise LabError(1, f"Recipe runs {reality.HARNESSES[recipe_harness]}, not "
+                                   f"{reality.HARNESSES[requested_harness]}; omit --harness, or "
+                                   "point --recipe at another directory")
                 profile = recipe_profile
+                harness = recipe_harness
                 profile_from_recipe = True
             except (reality.RealityError, OSError, ValueError, KeyError):
                 # Discovery reports the invalid Recipe as a blocker.  Keep the
@@ -121,6 +132,7 @@ class Lab:
         self.runs_root = runs_root
         self.recipe_dir = recipe_dir
         self.profile = profile
+        self.harness = harness
         self.profile_from_recipe = profile_from_recipe
         self._run_check = run_check
         self._discover = discover
@@ -133,7 +145,8 @@ class Lab:
 
     # -- discovery ---------------------------------------------------------
     def setup(self) -> dict[str, Any]:
-        return self._discover(self.recipe_dir, profile=self.profile, opener=self._opener)
+        return self._discover(self.recipe_dir, profile=self.profile, opener=self._opener,
+                              harness=self.harness)
 
     # -- runs --------------------------------------------------------------
     def start_run(self) -> dict[str, Any]:
@@ -195,6 +208,7 @@ class Lab:
         try:
             result = self._run_check(reality.CHECK, runs_root=self.runs_root,
                                      recipe_dir=str(self.recipe_dir), profile=self.profile,
+                                     harness=self.harness,
                                      progress=self._progress(job), stop=stop_run)
             update = {"state": "done", "result": result,
                       "run_id": Path(result["record"]).name}
@@ -377,7 +391,7 @@ class Lab:
                 "run_id": entry.name,
                 "lifecycle": life["state"],
                 "run_class": record.get("run_class"),
-                "reality_check": reality.STEP_ID in step_ids,
+                "reality_check": any(reality.step_id(h) in step_ids for h in reality.HARNESSES),
             })
         return rows
 
@@ -424,7 +438,7 @@ class Lab:
         """Select a local model and record its current digest (and llama.cpp build)."""
         if not isinstance(model, str) or not model or len(model) > 200:
             raise LabError(400, "Send {\"model\": \"<model name>\"}.")
-        state = discovermod.recipe_state(self.recipe_dir, self.profile)
+        state = discovermod.recipe_state(self.recipe_dir, self.profile, self.harness)
         inventory = discovermod.runtime(state, opener=self._opener)
         label = inventory["label"]
         if not inventory["reachable"]:
@@ -437,11 +451,12 @@ class Lab:
                 raise LabError(409, "Wait for the running check before changing the model.")
             try:
                 reality.prepare_recipe(self.recipe_dir.resolve(),
-                                       None if state["exists"] else self.profile)
+                                       None if state["exists"] else self.profile,
+                                       None if state["exists"] else self.harness)
                 path = self.recipe_dir / reality.EDITABLE_RECIPE_FILE
                 selection = json.loads(path.read_text(encoding="utf-8"))
                 local = selection["profiles"][selection["active"]]
-                local["models"]["pi"] = model
+                local["models"][self.harness] = model
                 # Choosing a model sets the person's baseline; the run itself
                 # refreshes the checked digest to whatever the runtime serves then.
                 local["baseline_digest"] = match["digest"]
@@ -661,11 +676,11 @@ def make_server(lab: Lab, port: int = DEFAULT_PORT,
 
 
 def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bool,
-          profile: Optional[str] = None) -> int:
+          profile: Optional[str] = None, harness: Optional[str] = None) -> int:
     default_profile = profile or discovermod.PROFILE
     recipe = (Path(recipe_dir).expanduser() if recipe_dir
-              else discovermod.default_recipe_dir(default_profile))
-    lab = Lab(runs_root, recipe, profile=profile)
+              else discovermod.default_recipe_dir(default_profile, harness or reality.DEFAULT_HARNESS))
+    lab = Lab(runs_root, recipe, profile=profile, harness=harness)
     try:
         server = make_server(lab, port)
     except OSError as error:
@@ -679,6 +694,7 @@ def serve(runs_root: str, recipe_dir: Optional[str], port: int, open_browser: bo
     print(f"  recipe {recipe}")
     source = "from existing Recipe" if lab.profile_from_recipe else "for a new Recipe"
     print(f"  profile {lab.profile} ({source})")
+    print(f"  harness {reality.HARNESSES[lab.harness]} ({source})")
     print("  localhost only; press Ctrl-C to stop", flush=True)
     if open_browser:
         webbrowser.open(url)

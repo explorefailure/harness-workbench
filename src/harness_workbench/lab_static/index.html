@@ -260,7 +260,7 @@
         <div>
           <span class="label">Reality Check</span>
           <h2 style="font-size:clamp(22px,2.6vw,30px)">Can a local coding agent fix one failing Python function, and leave everything else alone?</h2>
-          <p>Pi drives <b id="dRecModel">your local model</b> against a small disposable repository with one broken slug function. Workbench proves the test fails first, lets the agent work, then checks the result itself. What the agent says about its own work is never counted.</p>
+          <p><span class="harnessName">Pi</span> drives <b id="dRecModel">your local model</b> against a small disposable repository with one broken slug function. Workbench proves the test fails first, lets the agent work, then checks the result itself. What the agent says about its own work is never counted.</p>
           <div class="actions"><a class="pill" href="#try" id="dRun">Go to the run</a><code id="dCmd">hwb try coding/python-bug-fix</code></div>
         </div>
         <div class="side">
@@ -286,7 +286,7 @@
           <ol class="steps">
             <li><span class="num">01</span><div><b>Check the Recipe</b><small>Every locked file must match its recorded hash.</small></div></li>
             <li><span class="num">02</span><div><b>Prove the test fails</b><small>The required test runs before the agent touches anything.</small></div></li>
-            <li><span class="num">03</span><div><b>Let the agent work</b><small>Pi and the local model edit a disposable copy of the fixture.</small></div></li>
+            <li><span class="num">03</span><div><b>Let the agent work</b><small><span class="harnessName">Pi</span> and the local model edit a disposable copy of the fixture.</small></div></li>
             <li><span class="num">04</span><div><b>Run the test again</b><small>Workbench runs it itself, not the agent's report of it.</small></div></li>
             <li><span class="num">05</span><div><b>Seal and decide</b><small>The record is sealed and the verdict derived from facts alone.</small></div></li>
           </ol>
@@ -364,13 +364,13 @@
       </div>
       <div class="recipe">
         <div class="panel">
-          <div class="section-title"><h2>Python bug fix · Pi + local model</h2><span class="chip" id="rChip">—</span></div>
+          <div class="section-title"><h2>Python bug fix · <span class="harnessName">Pi</span> + local model</h2><span class="chip" id="rChip">—</span></div>
           <div class="rows">
             <div class="row"><span class="label">Job</span><div>Repair one failing function in a disposable Python fixture and leave the required test passing.</div></div>
             <div class="row"><span class="label">Model</span><div id="rModel">—</div></div>
             <div class="row"><span class="label">Baseline digest</span><div class="mono" id="rDigest">—</div></div>
             <div class="row"><span class="label">Success means</span><div>Test red before · test green after · only <code>slugger.py</code> changed · sealed record verifies</div></div>
-            <div class="row"><span class="label">Rerun when</span><div>The model, its digest, Pi, the runtime, the fixture or the machine changes</div></div>
+            <div class="row"><span class="label">Rerun when</span><div>The model, its digest, <span class="harnessName">Pi</span>, the runtime, the fixture or the machine changes</div></div>
             <div class="row"><span class="label">Location</span><div class="mono" id="rPath">—</div></div>
           </div>
         </div>
@@ -406,13 +406,15 @@
 (function () {
   "use strict";
   var VIEWS = ["discover", "try", "proof", "recipe", "runs"];
+  var HARNESS_NAMES = { pi: "Pi", hermes: "Hermes", deepseek: "DeepSeek Harness" };
+  var TOOL_LABELS = { pi: "Pi coding agent", node: "Node.js", hermes: "Hermes Agent", git: "git", dsh: "DeepSeek Harness" };
   var LABELS = {
     sealed_record: "Run record is sealed and unedited",
     original_template_unchanged: "Fixture matches the shipped bytes",
     baseline_failed_before_attempt: "Test failed before the agent started",
     required_test_passed_after_attempt: "Test passes after the attempt",
     only_permitted_files_changed: "Only slugger.py changed",
-    adapter_measurement_valid: "Pi adapter measurement is valid",
+    adapter_measurement_valid: "Harness adapter measurement is valid",
     independent_repair_oracle_passed: "Independent repair check passed"
   };
   var VERDICT = {
@@ -484,10 +486,13 @@
         [o.reachable, rt + " answering on this machine"],
         [!!live && !!live.digest, o.kind === "llama.cpp"
           ? "llama-server serving " + (r.model || "?") + " from a file named by its SHA-256"
-          : "The Recipe's model (" + (r.model || "?") + ") pulled in Ollama"],
-        [s.tools.pi.found, "Pi coding agent " + (s.tools.pi.version || "") + (s.tools.pi.found ? "" : "(not found)")],
-        [s.tools.node.found, "Node.js " + (s.tools.node.version || "") + (s.tools.node.found ? "" : "(not found)")]
-      ];
+          : "The Recipe's model (" + (r.model || "?") + ") pulled in Ollama"]
+      ].concat(Object.keys(s.tools).map(function (name) {
+        var t = s.tools[name];
+        return [t.found, (TOOL_LABELS[name] || name) + " " + (t.version || "") + (t.found ? "" : "(not found)")];
+      }));
+      var harness = HARNESS_NAMES[s.harness || "pi"] || "Pi";
+      Array.prototype.forEach.call(document.querySelectorAll(".harnessName"), function (n) { n.textContent = harness; });
       $("dNeeds").replaceChildren.apply($("dNeeds"), needs.map(function (n) { return el("li", { "data-ok": n[0] ? "1" : "0", text: n[1] }); }));
 
       $("dBlockers").hidden = s.ready;
@@ -595,7 +600,7 @@
     var runId = (result.record || "").split("/").pop();
     text("h-proof", "Proof · " + runId + (rederived ? " · re-derived from the record" : ""));
     var su = result.setup || {};
-    $("pSetup").replaceChildren.apply($("pSetup"), [su.subject ? "Pi " + (su.pi_version || "") : null, su.node_version && su.node_version !== "unobserved" ? "Node " + su.node_version : null, su.model, su.model_profile].filter(Boolean)
+    $("pSetup").replaceChildren.apply($("pSetup"), [su.subject ? su.subject + " " + (su.harness_version || su.pi_version || "") : null, su.node_version && su.node_version !== "unobserved" ? "Node " + su.node_version : null, su.model, su.model_profile].filter(Boolean)
       .map(function (t) { return el("span", { class: "chip", text: t }); }));
     var facts = (result.facts || []).filter(function (f) { return f.fact !== "model_completion_claim_used_as_verdict"; });
     var ok = facts.filter(function (f) { return f.observed; }).length;

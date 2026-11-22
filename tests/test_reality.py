@@ -243,6 +243,58 @@ class RealityCheckTests(unittest.TestCase):
             self.assertEqual(spec, same)
             self.assertFalse(created_again)
 
+    def test_hermes_recipe_runs_the_certified_hermes_subject(self):
+        with tempfile.TemporaryDirectory() as td:
+            destination = Path(td) / "recipe"
+            spec, created = reality.prepare_recipe(destination, harness="hermes")
+            self.assertTrue(created)
+            step = json.loads(spec.read_text(encoding="utf-8"))["steps"][0]
+            self.assertEqual("hermes-python-bug-fix", step["id"])
+            self.assertEqual(["./run_reality_subject.sh", "hermes", "repair"], step["argv"])
+            self.assertEqual("hermes", reality.recipe_harness(destination))
+            same, again = reality.prepare_recipe(destination)  # reopens through validation
+            self.assertFalse(again)
+            with self.assertRaisesRegex(reality.RealityError, "runs Hermes"):
+                reality.prepare_recipe(destination, harness="pi")
+            with self.assertRaisesRegex(reality.RealityError, "unknown harness"):
+                reality.prepare_recipe(Path(td) / "other", harness="claude")
+            # A manifest edited to another harness no longer matches its spec.
+            manifest = json.loads((destination / reality.RECIPE_NAME).read_text(encoding="utf-8"))
+            manifest["subject"] = "deepseek"
+            (destination / reality.RECIPE_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(reality.RealityError, "spec differs"):
+                reality._validate_recipe(destination)
+
+    def test_pi_recipes_keep_their_original_step_and_directory(self):
+        self.assertEqual(reality.STEP_ID, reality.step_id("pi"))
+        self.assertEqual(reality._spec(), reality._spec("pi"))
+        self.assertEqual("coding-python-bug-fix", reality._default_recipe().name)
+        self.assertEqual("coding-python-bug-fix-hermes", reality._default_recipe(harness="hermes").name)
+        self.assertEqual("coding-python-bug-fix-deepseek-local-llamacpp",
+                         reality._default_recipe("local-llamacpp", "deepseek").name)
+
+    def test_verify_reads_the_harness_from_the_sealed_step(self):
+        with tempfile.TemporaryDirectory() as td:
+            recipe = self.canonical_recipe(Path(td))
+            run = Path(td) / "run"
+            (run / "steps" / "hermes-python-bug-fix").mkdir(parents=True)
+            document = captured_document()
+            document["adapter"]["subject"].update(name="hermes", version="0.20.5")
+            seen = []
+            def attempt(run_dir, harness):
+                seen.append(harness)
+                return document
+            with mock.patch.object(reality.interrupt, "inspect_state", return_value={
+                "state": reality.interrupt.COMPLETE,
+            }), mock.patch.object(reality, "_attempt_document", side_effect=attempt):
+                result = reality.verify_run(run, recipe)
+            self.assertEqual(["hermes"], seen)
+            self.assertEqual("pass", result["verdict"])
+            self.assertEqual({"subject": "Hermes", "harness": "hermes", "harness_version": "0.20.5"},
+                             {k: result["setup"][k] for k in ("subject", "harness", "harness_version")})
+            self.assertNotIn("pi_version", result["setup"])
+            self.assertNotIn("node_version", result["setup"])
+
     def test_reality_check_passes_invoking_python_as_declared_runtime(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
