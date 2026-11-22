@@ -166,15 +166,90 @@ class HermesBuilderTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'dirty'):identity.verify_source(source,pin,env)
             git('add','.');git('commit','-qm','changed')
             with self.assertRaisesRegex(ValueError,'commit mismatch'):identity.verify_source(source,pin,env)
+            # The runtime path records instead: any checkout may run once identified.
+            seen = identity.inspect_source(source, pin, env)
+            self.assertEqual(['source_commit', 'release_tag', 'tag_object', 'source_tree_sha256'], seen['pin_mismatches'])
+            self.assertIsNone(seen['release_tag'])
+            (source / 'untracked').write_text('would run undigested')
+            with self.assertRaisesRegex(ValueError, 'dirty'):identity.inspect_source(source, pin, env)
+
+    def fixture_runtime(self, root, hermes_answer='Hermes Agent v9.9.9 (fixture)'):
+        source = root / 'source'; (source / '.venv/bin').mkdir(parents=True)
+        def git(*args):
+            return subprocess.check_output(['git', '-C', str(source), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+        git('init', '-q')
+        (source / '.gitignore').write_text('.venv/\n')
+        (source / 'uv.lock').write_text('graph')
+        (source / 'hermes').write_text('launcher')
+        git('add', '.'); git('commit', '-qm', 'Fixture'); git('tag', '-a', 'v9.9.9', '-m', 'fixture')
+        python = source / '.venv/bin/python'
+        python.write_text('#!/bin/sh\ncase "$*" in\n'
+            '*sys.version_info*) echo 3.12.1;;\n'
+            '*print_fast_version_info*) echo "%s";;\n'
+            '*) exit 1;;\nesac\n' % hermes_answer)
+        uv = root / 'uv'
+        uv.write_text('#!/bin/sh\n[ "$1" = --version ] && echo "uv 0.1.0" && exit 0\nexit 1\n')
+        for path in (python, uv): path.chmod(0o755)
+        return source, uv
+
+    def test_runtime_differences_are_recorded_not_refused(self):
+        pin = json.loads((DATA / 'pin.json').read_text())
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source, uv = self.fixture_runtime(root)
+            python, seen = identity.verify_runtime(source, pin, root / 'measurement', str(uv))
+            self.assertEqual(source / '.venv/bin/python', python)
+            self.assertEqual('9.9.9', seen['version'])
+            self.assertEqual('v9.9.9', seen['release_tag'])
+            self.assertEqual(['source_commit', 'release_tag', 'tag_object', 'uv_lock_sha256', 'source_tree_sha256',
+                              'uv_version', 'python_version', 'dependency_check', 'anthropic_version', 'version'],
+                             seen['differs_from_pin'])
+            self.assertEqual(pin['version'], seen['pinned']['version'])
+            self.assertFalse(seen['dependency_check']['passed'])
+            self.assertIsNone(seen['anthropic_sdk_version'])
+
+    def test_runtime_that_does_not_answer_like_hermes_is_refused(self):
+        pin = json.loads((DATA / 'pin.json').read_text())
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source, uv = self.fixture_runtime(root, hermes_answer='something else 1.0')
+            with self.assertRaisesRegex(ValueError, 'does not answer like Hermes'):
+                identity.verify_runtime(source, pin, root / 'measurement', str(uv))
+
+    def test_cli_falls_back_to_store_hermes_and_its_uv(self):
+        from harness_workbench import _hermes_cli
+        with tempfile.TemporaryDirectory() as temp:
+            store = Path(temp) / 'store'; version = store / 'hermes' / '0.22.5'
+            source = version / 'source'; (source / '.git').mkdir(parents=True)
+            uv_bin = store / 'uv' / '0.12.21' / 'bin'; uv_bin.mkdir(parents=True); (uv_bin / 'uv').write_text('')
+            from harness_workbench import runtimes
+            (version / 'install.json').write_text(json.dumps({'schema': runtimes.RECORD_SCHEMA, 'kind': 'uv-source',
+                'source_root': str(source), 'uv': {'version': '0.12.21', 'source': 'store', 'bin': str(uv_bin)}}))
+            with patch.dict(os.environ, {runtimes.STORE_ENV: str(store)}):
+                self.assertEqual((str(source), str(uv_bin / 'uv')), _hermes_cli.store_runtime())
+                (uv_bin / 'uv').unlink()
+                self.assertEqual((str(source), None), _hermes_cli.store_runtime())
+            with patch.dict(os.environ, {runtimes.STORE_ENV: str(Path(temp) / 'empty')}):
+                self.assertEqual((None, None), _hermes_cli.store_runtime())
+            dest = Path(temp) / 'builder'; self.assertEqual(0, self.command('init', dest).returncode)
+            seen = []
+            with patch.dict(os.environ, {runtimes.STORE_ENV: str(store)}), \
+                 patch.object(_hermes_cli.os, 'execv', lambda exe, argv: seen.append(argv)), \
+                 patch.object(_hermes_cli.os, 'chdir', lambda path: None):
+                _hermes_cli.main(['doctor', str(dest)])
+                (dest / 'runtime' / 'source').mkdir(parents=True)
+                _hermes_cli.main(['doctor', str(dest)])
+            self.assertIn('--runtime', seen[0]); self.assertEqual(str(source.resolve()), seen[0][seen[0].index('--runtime') + 1])
+            self.assertEqual('uv', seen[0][seen[0].index('--uv') + 1])  # store uv gone: PATH uv
+            self.assertNotIn('--runtime', seen[1])  # the workspace's own runtime wins
 
 
     @unittest.skipUnless(os.environ.get('HWB_HERMES_BASE_RUNTIME'), 'requires retained core-only Hermes runtime')
-    def test_core_only_runtime_is_rejected_before_native_workload(self):
+    def test_core_only_runtime_differences_are_recorded(self):
         with tempfile.TemporaryDirectory() as temp:
             dest=Path(temp)/'builder';self.command('init',dest)
             result=self.command('doctor',dest,'--runtime',os.environ['HWB_HERMES_BASE_RUNTIME'])
-            self.assertEqual(2,result.returncode,result.stdout+result.stderr)
-            self.assertIn('runtime probe failed',json.loads(result.stdout)['error'])
+            # Missing extras are recorded, not refused; a run cannot pass on a check-only doctor.
+            self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+            self.assertIn('dependency_check',json.loads(result.stdout)['runtime']['differs_from_pin'])
             self.assertFalse(list(dest.glob('.hwb-hermes-*/hermes-home/gateway.pid')))
 
     @unittest.skipUnless(os.environ.get('HWB_HERMES_LIVE_TEST') == '1', 'requires pinned Hermes runtime')

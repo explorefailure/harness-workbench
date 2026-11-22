@@ -65,35 +65,103 @@ def verify_source(source, pin, env):
             'uv_lock_sha256': pin['uv_lock_sha256'], 'version': pin['version']}
 
 
+def inspect_source(source, pin, env):
+    """Identify a Hermes checkout's working bytes BEFORE anything in it runs.
+
+    Unlike verify_source (the installer's strict check of the pinned release),
+    any checkout may run: what differs from the pin is listed in
+    `pin_mismatches`. A missing or dirty checkout is still refused, because
+    untracked or modified files would run without being in the digest.
+    """
+    if not (source / '.git').exists():
+        raise ValueError('Hermes source checkout missing; run hwb harness add hermes')
+    commit = probe(['git', '-C', source, 'rev-parse', 'HEAD'], source, env)
+    if probe(['git', '-C', source, 'status', '--porcelain', '--untracked-files=normal'], source, env):
+        raise ValueError('Hermes source checkout is dirty')
+    tags = sorted(filter(None, probe(['git', '-C', source, 'tag', '--points-at', 'HEAD'], source, env).splitlines()))
+    release_tag = pin['release_tag'] if pin['release_tag'] in tags else (tags[0] if tags else None)
+    tag_object = None
+    if release_tag is not None:
+        try:
+            tag_object = probe(['git', '-C', source, 'rev-parse', release_tag + '^{tag}'], source, env)
+        except ValueError:
+            tag_object = None  # a lightweight tag has no tag object
+    lock = source / 'uv.lock'
+    uv_lock = digest_file(lock) if lock.is_file() else None
+    count, tree = source_digest(source, env)
+    identity = {'source_commit': commit, 'release_tag': release_tag, 'tag_object': tag_object,
+                'source_tree_sha256': tree, 'source_file_count': count, 'uv_lock_sha256': uv_lock}
+    identity['pin_mismatches'] = [key for key in ('source_commit', 'release_tag', 'tag_object',
+                                                  'uv_lock_sha256', 'source_tree_sha256')
+                                  if identity[key] != pin[key]]
+    return identity
+
+
+VERSION_PREFIX = 'Hermes Agent v'
+
+
+def hermes_version(python, source, root, env):
+    """The version a Hermes checkout reports, or a refusal if it does not answer like Hermes."""
+    probes = ([python, '-c', 'from hermes_cli._startup_fast import print_fast_version_info; print_fast_version_info(check_updates=False)'],
+              [python, source / 'hermes', '--version'])
+    for argv in probes:
+        try:
+            text = probe(argv, source, env, timeout=60)
+        except ValueError:
+            continue
+        line = next((l for l in text.splitlines() if l.startswith(VERSION_PREFIX)), None)
+        if line:
+            return line[len(VERSION_PREFIX):].split()[0], text
+    raise ValueError('Hermes version probe failed: the runtime does not answer like Hermes')
+
+
 def verify_runtime(source, pin, root, uv='uv'):
+    """Identify the Hermes runtime and record how it differs from the pin.
+
+    Any Hermes, Python, uv or dependency set may run; the source bytes are
+    identified before anything executes. Only a runtime that cannot be
+    identified at all is refused.
+    """
     env = environment(root)
-    identity = verify_source(source, pin, env)  # BEFORE executing Hermes/Python entry points.
+    identity = inspect_source(source, pin, env)  # BEFORE executing Hermes/Python entry points.
+    differences = list(identity.pop('pin_mismatches'))
     uv_path = shutil.which(uv)
     if not uv_path:
-        raise ValueError('uv not found; install the optional pinned runtime tool')
+        raise ValueError('uv not found; run hwb harness add hermes, or pass --uv')
     uv_version = probe([uv_path, '--version'], root, env)
     if uv_version.split()[:2] != ['uv', pin['uv_version']]:
-        raise ValueError('uv version mismatch')
+        differences.append('uv_version')
     python = source / '.venv/bin/python'
     if not python.is_file():
-        raise ValueError('Hermes runtime Python missing; run install_runtime.py')
+        raise ValueError('Hermes runtime Python missing; run hwb harness add hermes')
     version = probe([python, '-I', '-c', 'import sys; print(".".join(map(str,sys.version_info[:3])))'], root, env)
     if version != pin['python_version']:
-        raise ValueError('Hermes Python version mismatch: ' + version)
+        differences.append('python_version')
     extras = pin.get('extras', [])
     if extras not in ([], ['anthropic']):
         raise ValueError('unsupported Hermes dependency extras profile')
     extra_args = [arg for extra in extras for arg in ('--extra', extra)]
-    dependency_check = probe([uv_path, 'sync', '--frozen', '--check', '--offline', '--no-dev', *extra_args, '--python', python], source, env, timeout=30)
+    try:
+        stdout = probe([uv_path, 'sync', '--frozen', '--check', '--offline', '--no-dev', *extra_args, '--python', python], source, env, timeout=30)
+        dependency_check = {'passed': True, 'stdout': stdout}
+    except ValueError as error:
+        dependency_check = {'passed': False, 'error': str(error)}
+        differences.append('dependency_check')
+    dependency_check['mode'] = 'frozen offline check; no install'
     identity['optional_extras'] = extras
     if 'anthropic' in extras:
-        sdk_version = probe([python, '-I', '-c', 'import anthropic; print(anthropic.__version__)'], root, env)
+        try:
+            sdk_version = probe([python, '-I', '-c', 'import anthropic; print(anthropic.__version__)'], root, env)
+        except ValueError:
+            sdk_version = None
         if sdk_version != pin['anthropic_version']:
-            raise ValueError('Hermes Anthropic SDK version mismatch')
+            differences.append('anthropic_version')
         identity['anthropic_sdk_version'] = sdk_version
-    version_text = probe([python, '-c', 'from hermes_cli._startup_fast import print_fast_version_info; print_fast_version_info(check_updates=False)'], source, env)
-    if not version_text.startswith('Hermes Agent v' + pin['version'] + ' '):
-        raise ValueError('Hermes version probe mismatch')
-    identity.update({'python_version': version, 'uv_version': uv_version, 'dependency_check': {'passed': True, 'stdout': dependency_check, 'mode': 'frozen offline check; no install'},
-                     'source_root': str(source), 'version_probe': version_text})
+    hermes, version_text = hermes_version(python, source, root, env)
+    if hermes != pin['version']:
+        differences.append('version')
+    identity.update({'version': hermes, 'python_version': version, 'uv_version': uv_version,
+                     'dependency_check': dependency_check, 'source_root': str(source), 'version_probe': version_text,
+                     'pinned': {key: pin[key] for key in ('version', 'source_commit', 'python_version', 'uv_version')},
+                     'differs_from_pin': differences})
     return python, identity

@@ -78,12 +78,19 @@ identity is established through the tag, source and update-disabled version
 probe, which reports Hermes Agent 0.22.5.
 
 The source pin is commit bf0203a794a07aac3ff764972ab9087baa4e4f4e. Existing Hermes
-installations and accounts are not updated. --runtime SOURCE_DIR can reuse an
-exactly matching checkout/environment; otherwise the default is runtime/source.
-Doctor checks tracked source bytes before invoking runtime code, checks Python
-and uv versions, and requires uv sync --frozen --check --offline to report an
-unchanged environment. This validates the selected dependency graph, not every
-installed dependency or bytecode byte. Runtime pinning is not a vulnerability
+installations and accounts are not updated. The runtime is --runtime SOURCE_DIR
+if given, else the workspace's runtime/source, else the Hermes installed with
+`hwb harness add hermes` (with the uv that built it, unless --uv is given).
+Any Hermes checkout may run. Doctor identifies the tracked source bytes before
+invoking runtime code and refuses a missing or dirty checkout (untracked files
+would run undigested). The commit, tag, uv.lock, source tree, uv, Python,
+dependency check (uv sync --frozen --check --offline), Anthropic SDK and Hermes
+version are recorded, and whatever differs from the pin is listed in
+runtime.differs_from_pin beside the pinned values. A runtime that does not
+report a Hermes version is refused. The native-event normalizer still refuses
+event shapes it does not know, so an untested version can fail but cannot
+falsely pass. The dependency check validates the selected dependency graph, not
+every installed dependency or bytecode byte. Runtime pinning is not a vulnerability
 audit or hostile-code containment guarantee.
 
 ## Start with a deterministic control
@@ -194,7 +201,7 @@ files; evidence is never overwritten.
 ## Commands and custom tasks
 
 - hwb-hermes init DIR: NEW owned workspace.
-- hwb-hermes doctor DIR: pinned source/runtime and config check.
+- hwb-hermes doctor DIR: runtime identity (differences from the pin recorded) and config check.
 - hwb-hermes demo DIR: reference coding-repair oracle.
 - hwb-hermes run CONFIG: capture validity and optional declared independent checks.
 
