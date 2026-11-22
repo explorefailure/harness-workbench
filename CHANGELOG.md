@@ -7,6 +7,20 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Change: `hwb-hermes` runs on the Hermes checkout you have instead of refusing
+  everything but its pin. The source bytes are still identified before any
+  Hermes code runs, and a missing or dirty checkout is still refused. The
+  commit, tag, uv.lock, tree, uv, Python, dependency check, Anthropic SDK and
+  Hermes version are recorded, and what differs from the pin is listed in
+  `runtime.differs_from_pin` with the pinned values beside it. A runtime that
+  does not report a Hermes version is refused, and the event normalizer still
+  rejects event shapes it does not know. Without `--runtime` or a workspace
+  `runtime/source`, it uses the Hermes installed with `hwb harness add hermes`
+  and the uv that built it. A runtime missing the pinned extras (for example a
+  core-only install) is now recorded rather than refused before the run.
+  Workspaces made by `init` before this change keep their strict copy; re-run
+  `init` to update.
+
 - Change: `hwb-pi` and `hwb-opencode` run on the Pi, Node or OpenCode you have
   instead of refusing everything but their pins, and record what differs from
   the pin (`runtime.differs_from_pin`, with the pinned values beside it). They

@@ -17,6 +17,31 @@ def positive(value):
     return number
 
 
+def store_runtime():
+    """(source checkout, uv path) of the runtime-store Hermes, or (None, None).
+
+    Precedence is --runtime > the workspace's runtime/source > the store. The
+    store's default version is preferred, else the newest installed; its uv is
+    the one that built its environment.
+    """
+    from . import runtimes
+    try:
+        root = runtimes.store_root()
+        entry = runtimes.load_catalog()['harnesses']['hermes']
+        install = runtimes._default_install(root, 'hermes', entry)
+    except (runtimes.RuntimeStoreError, OSError, ValueError, KeyError):
+        return None, None
+    if install is None:
+        return None, None
+    record = install['install_record']
+    source = record.get('source_root')
+    if not source or not Path(source, '.git').exists():
+        return None, None
+    uv_bin = (record.get('uv') or {}).get('bin')
+    uv = Path(uv_bin) / 'uv' if uv_bin else None
+    return source, (str(uv) if uv is not None and uv.is_file() else None)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='hwb-hermes')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -25,8 +50,9 @@ def main(argv=None):
     for name in ('doctor', 'demo', 'run'):
         child = sub.add_parser(name)
         child.add_argument('target', type=Path, help='config file for run; owned directory otherwise')
-        child.add_argument('--runtime', type=Path, help='pinned Hermes source checkout; default owned runtime/source')
-        child.add_argument('--uv', default='uv')
+        child.add_argument('--runtime', type=Path, help='Hermes source checkout; default owned runtime/source, '
+                           'else the one installed with hwb harness add hermes')
+        child.add_argument('--uv', help='uv executable; default the one the store Hermes was built with, else uv on PATH')
         child.add_argument('--timeout', type=positive, default=90)
         child.add_argument('--output', type=Path)
         child.add_argument('--workspace-parent', type=Path)
@@ -41,17 +67,22 @@ def main(argv=None):
             for path in dest.rglob('*'):
                 if path.is_file():
                     path.chmod(0o755 if path.suffix == '.sh' else 0o644)
-            print(f'Created {dest}\nNext: read README.md, install the pinned runtime, then hwb-hermes doctor {dest}')
+            print(f'Created {dest}\nNext: hwb harness add hermes (if not installed), then hwb-hermes doctor {dest}')
             return 0
         target = args.target.resolve(strict=True)
         config = target if args.command == 'run' else target / 'adapter_config.json'
         script = config.parent / 'adapter.py'
         if not config.is_file() or not script.is_file():
             raise ValueError('owned config/adapter missing; use hwb-hermes init first')
-        uv = str(Path(args.uv).resolve(strict=True)) if os.sep in args.uv else args.uv
+        runtime, uv = args.runtime, args.uv
+        if runtime is None and not (config.parent / 'runtime' / 'source').exists():
+            runtime, store_uv = store_runtime()
+            uv = uv or store_uv
+        uv = uv or 'uv'
+        uv = str(Path(uv).resolve(strict=True)) if os.sep in uv else uv
         command = [sys.executable, str(script), str(config), '--uv', uv, '--timeout', str(args.timeout)]
-        if args.runtime is not None:
-            command.extend(['--runtime', str(args.runtime.resolve(strict=True))])
+        if runtime is not None:
+            command.extend(['--runtime', str(Path(runtime).resolve(strict=True))])
         if args.command == 'doctor':
             command.append('--check-only')
         elif args.command == 'demo':
