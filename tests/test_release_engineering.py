@@ -1591,6 +1591,8 @@ class TestReleaseSurfaces(unittest.TestCase):
         "discover", "lab",
         # Shared runtime store behind `hwb harness`; CLI surface, no Python API promise.
         "runtimes",
+        # Named model endpoints behind `hwb model` and the builders' init --model.
+        "models",
         "seams", "sensitivity", "spec", "steady", "stores", "subject_tree",
         "sweep", "_pi_cli", "_opencode_cli", "_hermes_cli",
         # CLI implementation and versioned adapter validator; no Python API promise.

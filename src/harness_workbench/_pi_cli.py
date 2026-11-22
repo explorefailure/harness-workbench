@@ -21,16 +21,47 @@ def _positive_seconds(value: str) -> float:
     return seconds
 
 
+
+def _write_model_config(root, provider, config_name, checks):
+    """Write a NEW model-backed config beside the coding demo's; validated by the owned provider code."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('owned_pi_provider_config', root / 'provider_config.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.validate(provider)
+    config = json.loads((root / 'coding_adapter_config.json').read_text())
+    config['provider'] = provider
+    config['extensions'] = []
+    config['pi_arguments'] = ['--mode', 'json', '--no-session', '--no-extensions',
+        '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-approve',
+        '--offline', '--tools', 'read,edit,bash']
+    config['network_mode'] = 'explicit model/provider requests; automatic Pi network activity disabled'
+    config['inputs'] = [p for p in config['inputs'] if p not in ('coding_adapter_config.json', 'coding_provider.ts')]
+    config['inputs'].extend([config_name, 'provider_config.py'])
+    if checks:
+        spec = importlib.util.spec_from_file_location('owned_task_checks', root / 'task_checks.py')
+        checks_module = importlib.util.module_from_spec(spec);spec.loader.exec_module(checks_module)
+        config['checks'] = [{'id': 'check-' + str(i+1), 'argv': json.loads(raw)} for i, raw in enumerate(checks)]
+        checks_module.validate(config['checks'])
+        config['inputs'].append('task_checks.py')
+    destination = root / config_name
+    with destination.open('x') as file:
+        file.write(json.dumps(config, indent=2) + '\n')
+    destination.chmod(0o600)
+    return destination
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hwb-pi")
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="create a new owned Pi builder workspace")
     init.add_argument("directory", type=Path)
+    init.add_argument("--model", help="saved model name (hwb model add): also write model_adapter_config.json for it")
     init.add_argument("--profile", choices=("baseline", "pi-1.4.0-node-26.13.0"), default="pi-1.4.0-node-26.13.0",
                       help="exact runtime profile; baseline is for historical comparisons only")
     configure = sub.add_parser('configure', help='write a NEW model-backed config using native Pi providers')
     configure.add_argument('directory', type=Path)
-    configure.add_argument('--model', required=True)
+    configure.add_argument('--model', required=True,
+                           help='model ID; or a saved model name (hwb model add) when neither --provider nor --base-url is given')
     configure.add_argument('--provider', help='built-in Pi provider name; otherwise a compatible endpoint')
     configure.add_argument('--base-url')
     configure.add_argument('--api-key-env', help='name of the explicitly selected credential environment variable')
@@ -59,6 +90,13 @@ def main(argv: list[str] | None = None) -> int:
             # links. No partial merge and no force mode for builder evidence.
             if destination.exists() or destination.is_symlink():
                 raise ValueError(f"destination already exists: {destination}")
+            saved = None
+            if args.model:
+                if args.profile == "baseline":
+                    raise ValueError("--model needs a Pi 1.x profile; the baseline profile is Pi 0.x, "
+                                     "which has no provider configuration")
+                from . import models
+                saved = models.provider_for(args.model, "pi")  # refuse an unknown name before creating anything
             source = Path(__file__).parent / "pi_builder"
             shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules"))
             if args.profile != "baseline":
@@ -66,46 +104,37 @@ def main(argv: list[str] | None = None) -> int:
             for path in destination.rglob("*"):
                 if path.is_file():
                     path.chmod(0o755 if path.suffix == ".sh" else 0o644)
+            if saved is not None:
+                saved.update(api='openai-completions', context_window=32768, max_tokens=4096)
+                written = _write_model_config(destination, saved, 'model_adapter_config.json', [])
+                print(f"Created {destination}\nModel: {args.model} ({saved['model']} at {saved['base_url']})"
+                      f"\nNext: hwb-pi run {written}")
+                return 0
             print(f"Created {destination}\nNext: hwb-pi doctor {destination}")
             return 0
 
         if args.command == 'configure':
-            import importlib.util
             root = args.directory.resolve(strict=True)
             if not root.is_dir() or Path(args.config_name).name != args.config_name or args.config_name in ('', '.', '..'):
                 raise ValueError('config-name must be a new filename inside an owned directory')
-            spec = importlib.util.spec_from_file_location('owned_pi_provider_config', root / 'provider_config.py')
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            provider = {'mode': 'native' if args.provider else 'compatible', 'model': args.model}
-            if args.provider:
-                if args.api != 'openai-completions' or args.context_window != 32768 or args.max_tokens != 4096:
-                    raise ValueError('native providers use their catalog API/context limits')
-                provider['name'] = args.provider
-            else:
+            if args.provider is None and args.base_url is None:
+                # No endpoint given: --model names a saved model.
+                from . import models
+                provider = models.provider_for(args.model, 'pi')
+                if args.api_key_env is not None:
+                    provider['api_key_env'] = args.api_key_env
                 provider.update(api=args.api, context_window=args.context_window, max_tokens=args.max_tokens)
-            if args.base_url is not None:provider['base_url'] = args.base_url
-            if args.api_key_env is not None:provider['api_key_env'] = args.api_key_env
-            module.validate(provider)
-            config = json.loads((root / 'coding_adapter_config.json').read_text())
-            config['provider'] = provider
-            config['extensions'] = []
-            config['pi_arguments'] = ['--mode', 'json', '--no-session', '--no-extensions',
-                '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-approve',
-                '--offline', '--tools', 'read,edit,bash']
-            config['network_mode'] = 'explicit model/provider requests; automatic Pi network activity disabled'
-            config['inputs'] = [p for p in config['inputs'] if p not in ('coding_adapter_config.json', 'coding_provider.ts')]
-            config['inputs'].extend([args.config_name, 'provider_config.py'])
-            if args.check:
-                spec = importlib.util.spec_from_file_location('owned_task_checks', root / 'task_checks.py')
-                checks_module = importlib.util.module_from_spec(spec);spec.loader.exec_module(checks_module)
-                config['checks'] = [{'id': 'check-' + str(i+1), 'argv': json.loads(raw)} for i, raw in enumerate(args.check)]
-                checks_module.validate(config['checks'])
-                config['inputs'].append('task_checks.py')
-            destination = root / args.config_name
-            with destination.open('x') as file:
-                file.write(json.dumps(config, indent=2) + '\n')
-            destination.chmod(0o600)
+            else:
+                provider = {'mode': 'native' if args.provider else 'compatible', 'model': args.model}
+                if args.provider:
+                    if args.api != 'openai-completions' or args.context_window != 32768 or args.max_tokens != 4096:
+                        raise ValueError('native providers use their catalog API/context limits')
+                    provider['name'] = args.provider
+                else:
+                    provider.update(api=args.api, context_window=args.context_window, max_tokens=args.max_tokens)
+                if args.base_url is not None:provider['base_url'] = args.base_url
+                if args.api_key_env is not None:provider['api_key_env'] = args.api_key_env
+            destination = _write_model_config(root, provider, args.config_name, args.check)
             print('Created ' + str(destination) + '\nNext: hwb-pi run ' + str(destination) + ' --pi YOUR_PINNED_PI_LAUNCHER')
             return 0
 

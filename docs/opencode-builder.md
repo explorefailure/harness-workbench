@@ -68,31 +68,28 @@ when the shell command exits nonzero.
 
 ## Run a local model and your own task
 
-From the initialized workspace above, select an already-running endpoint and
-its exact model ID. Set these two values for your server:
+Save an already-running endpoint and its exact model ID once, then create a
+workspace that uses it:
 
 ```sh
-export HWB_MODEL_URL=http://127.0.0.1:11434/v1
-export HWB_MODEL_ID=YOUR_INSTALLED_MODEL
-python3 - <<'PYMODEL'
-import json, os
-from pathlib import Path
-p = Path("adapter_config.json")
-c = json.loads(p.read_text())
-c["provider"] = {"mode": "local", "base_url": os.environ["HWB_MODEL_URL"],
-                 "model": os.environ["HWB_MODEL_ID"]}
-p.write_text(json.dumps(c, indent=2) + "\n")
-PYMODEL
-hwb-opencode demo . --opencode ./runtime/opencode --timeout 600 --output local.result.json
+hwb model add local --url http://127.0.0.1:11434/v1 --model YOUR_INSTALLED_MODEL
+hwb-opencode init my-local-opencode --model local
+hwb-opencode demo my-local-opencode --opencode ./runtime/opencode --timeout 600 --output local.result.json
 ```
+
+`hwb model add` writes `~/.config/hwb/models.json` (or under `$XDG_CONFIG_HOME`);
+`init --model` puts it in the new workspace's `adapter_config.json` as a
+`local` provider, or as `compatible` when the model was saved with
+`--api-key-env MY_MODEL_KEY`. Only the variable's name is stored; set the
+variable before running. `hwb model list` shows saved models and whether each
+key variable is set.
 
 This runs the shipped repair against your model and applies the strict reference
 oracle. The local Qwen 27B run passed that oracle; the placeholder model and
 endpoint above must be replaced and are not a claim about another server.
 
-For an authenticated compatible endpoint, change `mode` to `compatible` and add
-`"api_key_env": "MY_MODEL_KEY"` inside `provider`. Set that environment variable
-before running; see the [credential example](builder-adapters.md#choose-a-model-in-opencode-or-hermes).
+For an authenticated compatible endpoint, save it with `--api-key-env
+MY_MODEL_KEY` and set that environment variable before running; see the [credential example](builder-adapters.md#choose-a-model-in-opencode-or-hermes).
 For a native route, use this provider fragment with your explicit endpoint:
 
 ```json

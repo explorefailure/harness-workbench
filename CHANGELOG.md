@@ -7,6 +7,18 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- New `hwb model add NAME --url URL --model ID [--api-key-env VAR]`,
+  `hwb model list` and `hwb model remove NAME` keep named model endpoints in
+  `$XDG_CONFIG_HOME/hwb/models.json` (default `~/.config/hwb/models.json`,
+  mode 0600). Only the key's environment-variable NAME is stored; something
+  that looks like a key value is refused. `hwb-hermes init DIR --model NAME`
+  and `hwb-opencode init DIR --model NAME` write it into the new workspace's
+  provider (`local`, or `compatible` with a key); `hwb-pi init DIR --model
+  NAME` also writes `model_adapter_config.json`, and `hwb-pi configure DIR
+  --model NAME` reads a saved model when no `--provider` or `--base-url` is
+  given. This replaces the `python3 - <<'PYMODEL'` step in the builder guides.
+  An unknown name is refused before any workspace is created.
+
 - `hwb try`, `hwb setup` and `hwb lab` take `--harness pi|hermes|deepseek`:
   the Python bug-fix Reality Check can now drive Hermes or DeepSeek Harness
   through the same certified adapter as Pi, with no certified file changed.
