@@ -115,6 +115,36 @@ def cmd_lab(args) -> int:
         return _fail(str(error))
 
 
+def cmd_model(args) -> int:
+    from . import models
+
+    try:
+        if args.action == "list":
+            rows = models.describe()
+            if args.json:
+                json.dump({"path": str(models.path()), "models": rows}, sys.stdout, indent=2, sort_keys=True)
+                sys.stdout.write("\n")
+                return 0
+            print("Saved models: %s" % models.path())
+            if not rows:
+                print("  none yet; add one with `hwb model add NAME --url URL --model ID`")
+            for row in rows:
+                key = ("" if row["api_key_set"] is None else
+                       "  key: $%s (%s)" % (row["api_key_env"], "set" if row["api_key_set"] else "NOT SET"))
+                print("  %-16s %s  %s%s" % (row["name"], row["model"], row["base_url"], key))
+            return 0
+        if args.action == "add":
+            saved = models.add(args.name, args.url, args.model, args.api_key_env)
+            print("%s model %r in %s" % ("Replaced" if saved["replaced"] else "Saved", args.name, saved["path"]))
+            print("Use it: hwb-pi init DIR --model %s (also hwb-opencode, hwb-hermes)" % args.name)
+            return 0
+        removed = models.remove(args.name)
+        print("Removed model %r from %s" % (args.name, removed))
+        return 0
+    except models.ModelError as error:
+        return _fail(str(error))
+
+
 def cmd_harness(args) -> int:
     from . import runtimes
 
@@ -984,6 +1014,20 @@ def build_parser() -> argparse.ArgumentParser:
     hn_rm.add_argument("harness")
     hn_rm.add_argument("--version", default=None, help="one version (default: every installed version)")
     hn.set_defaults(func=cmd_harness)
+
+    md = command("model")
+    md_sub = md.add_subparsers(dest="action", required=True)
+    md_list = md_sub.add_parser("list", help="saved model endpoints")
+    md_list.add_argument("--json", action="store_true", help="print the list as JSON")
+    md_add = md_sub.add_parser("add", help="save (or replace) a named model endpoint")
+    md_add.add_argument("name")
+    md_add.add_argument("--url", required=True, help="OpenAI-compatible base URL, e.g. http://127.0.0.1:11434/v1")
+    md_add.add_argument("--model", required=True, help="model ID the endpoint serves")
+    md_add.add_argument("--api-key-env", default=None,
+                        help="NAME of the environment variable holding the key (never the key)")
+    md_rm = md_sub.add_parser("remove", help="forget a saved model")
+    md_rm.add_argument("name")
+    md.set_defaults(func=cmd_model)
 
     sj = command("subjects")
     # No positional: every id-taking positional has to be visible to the

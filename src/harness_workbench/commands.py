@@ -26,6 +26,8 @@ COMMANDS: Dict[str, Dict[str, Any]] = {
             "verdict_engine": False},
     "harness": {"help": "list, install or remove harness runtimes in the shared runtime store",
                 "verdict_engine": False},
+    "model": {"help": "save, list or remove named model endpoints for the builders",
+              "verdict_engine": False},
     "subjects": {"help": "copy the shipped external-harness subject tree into a directory",
                  "verdict_engine": False},
     "ls": {"help": "list runs", "verdict_engine": False},

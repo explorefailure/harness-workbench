@@ -383,6 +383,7 @@ command fails the suite until this record routes it.
 - `hwb setup --help`
 - `hwb lab --help`
 - `hwb harness --help`
+- `hwb model --help`
 - `hwb subjects --help`
 - `hwb ls --help`
 - `hwb show --help`
