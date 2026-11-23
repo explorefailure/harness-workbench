@@ -142,17 +142,104 @@ class Lab:
         self._last_duration: Optional[float] = None
         self._stop: Optional[threading.Event] = None
         self._thread: Optional[threading.Thread] = None
+        self._install: Optional[dict[str, Any]] = None
+        self._install_thread: Optional[threading.Thread] = None
 
     # -- discovery ---------------------------------------------------------
     def setup(self) -> dict[str, Any]:
         return self._discover(self.recipe_dir, profile=self.profile, opener=self._opener,
                               harness=self.harness)
 
+    # -- harness runtimes ---------------------------------------------------
+    def _install_target(self) -> tuple[str, Optional[str]]:
+        """The harness this Lab runs and the version its Reality Check needs (None: the default)."""
+        return self.harness, reality.certified_versions().get(self.harness)
+
+    def _install_view(self) -> Optional[dict[str, Any]]:
+        # Caller holds self._lock.
+        return None if self._install is None else dict(self._install)
+
+    def harnesses(self) -> dict[str, Any]:
+        """Every catalog harness's status, plus what installing this Lab's harness would download.
+
+        Read-only: nothing is fetched. The plan lists each download and how it
+        is checked; the pins record no sizes, so none are shown.
+        """
+        from . import runtimes
+        try:
+            rows = runtimes.describe()
+        except (runtimes.RuntimeStoreError, OSError, ValueError, KeyError) as error:
+            raise LabError(500, f"runtime store unreadable: {error}") from error
+        name, version = self._install_target()
+        install: dict[str, Any] = {"harness": name, "version": version, "installable": False,
+                                   "already_installed": False, "downloads": [], "destination": None,
+                                   "error": None}
+        try:
+            steps = runtimes.plan(name, version)
+            install.update(version=steps["version"], installable=True,
+                           already_installed=steps["already_installed"],
+                           downloads=steps["downloads"], destination=steps["destination"])
+        except (runtimes.RuntimeStoreError, OSError, ValueError, KeyError) as error:
+            install["error"] = str(error)
+        with self._lock:
+            job = self._install_view()
+        return {"lab_harness": name, "store": str(runtimes.store_root()), "harnesses": rows,
+                "install": install, "job": job}
+
+    def install_status(self) -> dict[str, Any]:
+        with self._lock:
+            return {"job": self._install_view()}
+
+    def start_install(self, request: Any) -> dict[str, Any]:
+        """Install exactly the harness and version the confirm dialog showed.
+
+        Only this Lab's harness can be installed, only the planned version, and
+        never while a check runs (the run would see a half-made store).
+        """
+        from . import runtimes
+        name, wanted = self._install_target()
+        if not isinstance(request, dict) or set(request) != {"harness", "version"}:
+            raise LabError(400, "Send {\"harness\": ..., \"version\": ...} as shown in the dialog.")
+        try:
+            steps = runtimes.plan(name, wanted)
+        except (runtimes.RuntimeStoreError, OSError, ValueError, KeyError) as error:
+            raise LabError(422, str(error)) from error
+        if request["harness"] != name or request["version"] != steps["version"]:
+            raise LabError(409, f"This Lab installs {name} {steps['version']} only; reload the page.")
+        if steps["already_installed"]:
+            raise LabError(409, f"{name} {steps['version']} is already installed.")
+        with self._lock:
+            if self._job and self._job["state"] == "running":
+                raise LabError(409, "Wait for the running check before installing.")
+            if self._install and self._install["state"] == "running":
+                raise LabError(409, "An install is already running.")
+            self._install = {"state": "running", "harness": name, "version": steps["version"],
+                             "started_at": time.time(), "finished_at": None, "error": None,
+                             "path": None}
+            job = self._install
+            view = self._install_view()
+            self._install_thread = threading.Thread(target=self._run_install,
+                                                    args=(job, name, steps["version"]), daemon=True)
+            self._install_thread.start()
+        return {"job": view}
+
+    def _run_install(self, job: dict[str, Any], name: str, version: str) -> None:
+        from . import runtimes
+        try:
+            done = runtimes.add(name, version)
+            update = {"state": "done", "path": done.get("path")}
+        except Exception as error:  # surface, never swallow: the store removes a partial install
+            update = {"state": "failed", "error": f"{type(error).__name__}: {error}"}
+        with self._lock:
+            job.update(update, finished_at=time.time())
+
     # -- runs --------------------------------------------------------------
     def start_run(self) -> dict[str, Any]:
         with self._lock:
             if self._job and self._job["state"] == "running":
                 raise LabError(409, "A Reality Check is already running.")
+            if self._install and self._install["state"] == "running":
+                raise LabError(409, "Wait for the harness install to finish.")
             job = {"id": uuid.uuid4().hex, "state": "running",
                    "check": reality.CHECK, "started_at": time.time(),
                    "finished_at": None, "result": None, "error": None,
@@ -177,6 +264,12 @@ class Lab:
         with self._lock:
             running = self._job is not None and self._job["state"] == "running"
             stop, thread = self._stop, self._thread
+            installing = self._install_thread if (
+                self._install is not None and self._install["state"] == "running") else None
+        if installing is not None:
+            # An install cannot be interrupted cleanly; let it finish (the store
+            # removes a failed one) rather than leave a half-made directory.
+            installing.join(wait)
         if not running or stop is None or thread is None:
             return None
         stop.set()
@@ -483,6 +576,9 @@ ROUTES = {
     ("GET", "/api/recipe"): "recipe",
     ("POST", "/api/runs"): "start_run",
     ("POST", "/api/recipe/model"): "set_model",
+    ("GET", "/api/harnesses"): "harnesses",
+    ("GET", "/api/harnesses/install"): "install_status",
+    ("POST", "/api/harnesses/install"): "start_install",
 }
 
 
@@ -637,6 +733,12 @@ def _handler(lab: Lab):
                     return self._json(200, lab.recipe())
                 if name == "start_run":
                     return self._json(202, lab.start_run())
+                if name == "harnesses":
+                    return self._json(200, lab.harnesses())
+                if name == "install_status":
+                    return self._json(200, lab.install_status())
+                if name == "start_install":
+                    return self._json(202, lab.start_install(body))
                 if name == "set_model":
                     model = body.get("model") if isinstance(body, dict) else None
                     return self._json(200, lab.set_model(model))
