@@ -80,15 +80,27 @@ record. The package is not published to PyPI.
 ### Install Workbench
 
 Use Python 3.11–3.14 on Linux or macOS. Workbench has zero Python runtime
-dependencies; the coding agent, Node, and Ollama are separate prerequisites
-(next section). Installing from source may download build dependencies.
+dependencies; the coding agent and the model server are separate (next
+section).
 
-Install v0.3.0. It includes the local web GUI (`hwb lab`), the setup hints,
-and the Reality Check on any Pi, Node, and Python version. Drop `--branch
-v0.3.0` to try unreleased changes from `main`.
+The commands below install from `main`, which has everything this README
+describes. **`hwb harness`, `hwb model`, `--harness` and the Lab's harness card
+are not in v0.3.0 yet**; they are planned for v0.4.0. To stay on the release,
+add `@v0.3.0` to the URL and follow the
+[v0.3.0 README](https://github.com/explorefailure/harness-workbench/blob/v0.3.0/README.md).
+
+With [uv](https://docs.astral.sh/uv/getting-started/installation/) (it brings
+its own virtual environment, so Debian and Ubuntu need no `python3-venv`):
 
 ```sh
-git clone --branch v0.3.0 https://github.com/explorefailure/harness-workbench.git
+uv tool install git+https://github.com/explorefailure/harness-workbench
+hwb --version
+```
+
+Without uv, from a clone:
+
+```sh
+git clone https://github.com/explorefailure/harness-workbench.git
 cd harness-workbench
 python3 -m venv .venv
 . .venv/bin/activate
@@ -98,7 +110,7 @@ hwb --version
 
 On Debian and Ubuntu, `python3 -m venv` fails until the venv package is
 installed: `sudo apt install python3-venv`, then delete `.venv` and run the
-`venv` line again.
+`venv` line again. Installing from source may download build dependencies.
 
 Release wheels and source archives for v0.3.0 are available from the
 [release page](https://github.com/explorefailure/harness-workbench/releases/tag/v0.3.0).
@@ -114,19 +126,26 @@ already use, bringing their traces together with independent checks and
 controlled experiments to help you understand failures, improve your setup, and
 get better results from local AI.
 
-The demo needs three things. Workbench does not install them, download models,
-or reconfigure your model server for you:
+The demo needs a coding agent and a model:
 
-1. **Node.js and npm.** Get them from [nodejs.org](https://nodejs.org/en/download)
-   or your package manager. Debian and Ubuntu ship npm separately:
-   `sudo apt install nodejs npm`.
-2. **The Pi coding agent:** `npm install -g @earendil-works/pi-coding-agent`.
-   If npm's global folder belongs to root (the Debian/Ubuntu default), prefix
-   the command with `sudo`.
-3. **Ollama** from [ollama.com/download](https://ollama.com/download), running at
+1. **The Pi coding agent.** Workbench can fetch it for you:
+
+   ```sh
+   hwb harness add pi
+   ```
+
+   It shows what it will download and asks first, then puts pinned,
+   checksum-verified copies of Pi and the Node it needs into Workbench's own
+   runtime store (`~/.local/share/hwb/runtimes`, or `$HWB_RUNTIME_STORE`). No
+   sudo, no global npm, and nothing else on your system changes. `hwb harness
+   list` shows what is installed; `hwb harness remove pi` deletes it again. A
+   Pi you installed yourself (`npm install -g @earendil-works/pi-coding-agent`)
+   works too, and a copy on PATH is always used first.
+2. **Ollama** from [ollama.com/download](https://ollama.com/download), running at
    `http://127.0.0.1:11434`, with the demo's model downloaded:
    `ollama pull gpt-oss:20b`. The download is about 13 GB, and the model needs
-   about that much free memory to run.
+   about that much free memory to run. Workbench never downloads models or
+   reconfigures your model server.
 
 Then check the machine:
 
@@ -134,16 +153,17 @@ Then check the machine:
 hwb setup
 ```
 
-`hwb setup` names anything still missing and how to install it.
+`hwb setup` names anything still missing and how to install it, and marks
+tools found in the runtime store.
 
 Any Pi and Node versions work. The run records which Pi (version and executable
 hash) and which Node it used. The check was built and tested with Pi 0.84.1 on
 Node 22.22.3 (the [shipped pins](src/harness_workbench/subjects/pin.json)); a Pi
 that behaves differently can make a run fail or come out invalid, but cannot
 make it pass, because the verdict comes from Workbench's own test run, not from
-Pi. The pins matter only for certifying the adapters, not for your run. The
-separate [Pi builder integration](docs/pi-builder.md) defaults to a newer
-Pi/Node pair.
+Pi. The pins matter only for certifying the adapters, not for your run.
+`hwb harness add pi` installs Pi 1.4.0, the version the
+[Pi builder integration](docs/pi-builder.md) uses.
 
 A GPU is not required. Without one, Ollama runs the model on the CPU: on a
 12-core laptop-class CPU the whole check took about 3 to 4 minutes.
@@ -151,6 +171,30 @@ A GPU is not required. Without one, Ollama runs the model on the CPU: on a
 v0.2.0 enforced a historical Ollama model digest and could return `INVALID`
 before the agent started; v0.3.0 records your model's identity instead and
 flags a change for another proof.
+
+### Other harnesses and your own model
+
+`hwb harness list` shows every harness Workbench knows, where each is
+installed, and which modes it supports. `hwb harness add opencode` and
+`hwb harness add hermes` install those the same way. The Reality Check can
+also drive Hermes or DeepSeek Harness (`--harness`, see below); for Hermes it
+needs the certified version, `hwb harness add hermes --version 0.20.5`.
+
+The builder integrations ([Pi](docs/pi-builder.md),
+[OpenCode](docs/opencode-builder.md), [Hermes](docs/hermes-builder.md)) run
+your own tasks against a model you name once:
+
+```sh
+hwb model add local --url http://127.0.0.1:11434/v1 --model gpt-oss:20b
+hwb-hermes init my-hermes --model local
+```
+
+`hwb model add` stores the endpoint and model ID in
+`~/.config/hwb/models.json`. For a server that needs a key, add
+`--api-key-env MY_MODEL_KEY`: only the variable's name is stored, never the
+key. Hermes 0.22.5 refuses a model served with less than a 64K-token context
+window; raise the server's context (llama.cpp `-c 65536`, Ollama
+`OLLAMA_CONTEXT_LENGTH=65536`) before using it with Hermes.
 
 ### Run the Reality Check
 

@@ -7,6 +7,14 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- Docs: the README installs Workbench with `uv tool install git+…` (a clone
+  plus venv remains the alternative) and prepares Pi with `hwb harness add pi`
+  instead of npm; a new section covers other harnesses, `hwb model add` and
+  Hermes's 64K-context minimum. The builder guide starts from `hwb harness
+  add`, `hwb model add` and `init --model`, states each builder's runtime
+  lookup order, and its `run` examples no longer pass per-workspace runtime
+  paths. Both say these commands are on `main`, not in v0.3.0.
+
 - The Lab's Discover page has a harness card: every catalog harness with
   whether it is on PATH, which versions are in the runtime store, and its
   modes. When the Lab's own harness is missing from the store, **Install**
