@@ -212,7 +212,10 @@ runtime evidence, not committed certification inputs.
 `hwb try --json` prints the result document instead of the summary. A
 local web GUI, `hwb lab`, opens a localhost page for the same check:
 discover your setup, run it, read the proof, choose the Recipe's model, and
-browse sealed runs. It listens on 127.0.0.1 only, on a free port chosen per
+browse sealed runs. Its Discover page lists every harness (on PATH, in the
+runtime store, which modes) and can install the Lab's own harness: **Install**
+opens a dialog listing exactly what will be downloaded and how each item is
+checked, and nothing is fetched until you confirm. It listens on 127.0.0.1 only, on a free port chosen per
 launch, and every request needs that launch's secret token, which is in the URL
 it prints and opens. While a run is going, it shows which phase the check is in
 and how long the last run took. The agent's own work happens inside one sealed

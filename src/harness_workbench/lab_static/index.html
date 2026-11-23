@@ -84,6 +84,11 @@
   .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 24px; min-width: 0; }
   .section-title { display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
   .table-wrap { overflow-x: auto; }
+  dialog.confirm { max-width: min(560px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 16px; padding: 24px; background: var(--paper); color: var(--ink); }
+  dialog.confirm::backdrop { background: rgba(0,0,0,.45); }
+  dialog.confirm ul { padding-left: 18px; margin: 10px 0; }
+  dialog.confirm li { margin: 6px 0; overflow-wrap: anywhere; }
+  dialog.confirm small { display: block; color: var(--muted); font-family: var(--mono); font-size: 11px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
   th { text-align: left; padding: 0 12px 10px 0; }
   td { padding: 12px 12px 12px 0; border-top: 1px solid var(--line); vertical-align: top; }
@@ -268,6 +273,18 @@
           <ul class="checklist" id="dNeeds"></ul>
         </div>
       </div>
+      <div class="panel" id="dHarnessPanel">
+        <div class="section-title"><h2>Harnesses</h2><span class="chip" id="dInstallState" hidden></span></div>
+        <div class="table-wrap"><table><thead><tr><th class="label">Harness</th><th class="label">On PATH</th><th class="label">Runtime store</th><th class="label">Modes</th></tr></thead><tbody id="dHarnesses"></tbody></table></div>
+        <div class="actions" style="margin-top:12px"><button class="pill" id="dInstall" type="button" hidden>Install</button><span id="dInstallNote"></span></div>
+      </div>
+      <dialog class="confirm" id="dInstallDialog" aria-labelledby="dInstallTitle">
+        <h2 id="dInstallTitle" style="margin-top:0">Install</h2>
+        <p>Workbench will download and verify exactly these into its own runtime store, <code id="dInstallStore"></code>. The harness goes to <code id="dInstallDest"></code>; anything it needs (such as Node or uv) goes beside it in the store. Nothing outside the store changes.</p>
+        <ul id="dInstallList"></ul>
+        <p class="label">Sizes are not recorded in the pins, so they are not shown.</p>
+        <div class="actions"><button class="pill" id="dInstallGo" type="button">Download and install</button><button class="pill pill--light" id="dInstallCancel" type="button" autofocus>Cancel</button></div>
+      </dialog>
       <div class="panel">
         <div class="section-title"><h2 id="dModelsTitle">Models on this machine</h2><span class="label" id="dOllamaUrl"></span></div>
         <div class="table-wrap"><table><thead><tr><th class="label">Model</th><th class="label">Size</th><th class="label">Digest</th><th class="label">Used by Recipe</th></tr></thead><tbody id="dModels"></tbody></table></div>
@@ -699,8 +716,80 @@
   });
   try { var t = localStorage.getItem("hwb-lab-theme"); if (t) document.documentElement.setAttribute("data-theme", t); } catch (e) {}
 
+  /* harnesses */
+  function modesText(m) {
+    return ["certified", "your_task"].filter(function (k) { return m && m[k]; })
+      .map(function (k) { return k === "your_task" ? "your task" : k; }).join(", ") || "—";
+  }
+  function renderInstallJob(job) {
+    var chip = $("dInstallState");
+    chip.hidden = !job;
+    if (!job) return;
+    var secs = Math.round(((job.finished_at || Date.now() / 1000) - job.started_at));
+    chip.textContent = job.state === "running" ? "Installing " + job.harness + " " + job.version + " · " + secs + " s"
+      : job.state === "done" ? "Installed " + job.harness + " " + job.version
+      : "Install failed";
+    text("dInstallNote", job.state === "failed" ? job.error : "");
+  }
+  function loadHarnesses() {
+    return api("/api/harnesses").then(function (h) {
+      state.harnesses = h;
+      $("dHarnesses").replaceChildren.apply($("dHarnesses"), h.harnesses.map(function (row) {
+        var mine = row.harness === h.lab_harness;
+        return el("tr", {}, [
+          el("td", {}, [el("b", { text: row.display }), mine ? el("span", { class: "chip", text: "this Lab", style: "margin-left:8px" }) : el("span", {})]),
+          el("td", { text: row.on_path ? "yes" : "—" }),
+          el("td", { text: row.installed.map(function (i) { return i.version; }).join(", ") || "—" }),
+          el("td", { text: modesText(row.modes) })
+        ]);
+      }));
+      var inst = h.install, button = $("dInstall");
+      var busy = h.job && h.job.state === "running";
+      button.hidden = !inst.installable || inst.already_installed;
+      button.disabled = busy;
+      button.textContent = "Install " + (HARNESS_NAMES[inst.harness] || inst.harness) + " " + (inst.version || "");
+      if (!inst.installable) text("dInstallNote", inst.error || "");
+      else if (inst.already_installed) {
+        var row = h.harnesses.filter(function (r) { return r.harness === inst.harness; })[0];
+        text("dInstallNote", (HARNESS_NAMES[inst.harness] || inst.harness) + " " + inst.version + " is in the runtime store." +
+          (row && row.on_path && inst.harness !== "hermes" ? " The copy on PATH is used first; the store copy is used when none is on PATH." : ""));
+      }
+      else text("dInstallNote", "");
+      renderInstallJob(h.job);
+      return h;
+    });
+  }
+  function pollInstall() {
+    api("/api/harnesses/install").then(function (r) {
+      renderInstallJob(r.job);
+      if (r.job && r.job.state === "running") { setTimeout(pollInstall, 1000); return; }
+      loadSetup().then(loadHarnesses);
+    }, function (e) { text("dInstallNote", e.message); });
+  }
+  $("dInstall").addEventListener("click", function () {
+    var inst = state.harnesses && state.harnesses.install;
+    if (!inst) return;
+    text("dInstallTitle", "Install " + (HARNESS_NAMES[inst.harness] || inst.harness) + " " + inst.version + "?");
+    text("dInstallDest", inst.destination);
+    text("dInstallStore", state.harnesses.store || "");
+    $("dInstallList").replaceChildren.apply($("dInstallList"), inst.downloads.map(function (d) {
+      return el("li", {}, [el("span", { text: d.url }), el("small", { text: "checked: " + d.sha256 })]);
+    }));
+    $("dInstallDialog").showModal();
+  });
+  $("dInstallCancel").addEventListener("click", function () { $("dInstallDialog").close(); });
+  $("dInstallGo").addEventListener("click", function () {
+    var inst = state.harnesses.install;
+    $("dInstallDialog").close();
+    $("dInstall").disabled = true;
+    api("/api/harnesses/install", { method: "POST", body: { harness: inst.harness, version: inst.version } })
+      .then(function (r) { renderInstallJob(r.job); setTimeout(pollInstall, 1000); },
+            function (e) { $("dInstall").disabled = false; text("dInstallNote", e.message); });
+  });
+
   show();
   loadSetup().then(loadRecipe);
+  loadHarnesses().then(function (h) { if (h.job && h.job.state === "running") pollInstall(); }, function () {});
   loadRuns();
   pollJob();
 })();

@@ -7,6 +7,17 @@ the equivalent hyphenated spelling (for example, package `0.1.0rc1` is tagged
 
 ## Unreleased
 
+- The Lab's Discover page has a harness card: every catalog harness with
+  whether it is on PATH, which versions are in the runtime store, and its
+  modes. When the Lab's own harness is missing from the store, **Install**
+  opens a confirm dialog listing each download and how it is checked (the
+  certified Hermes for a Hermes Lab), and only the confirm click installs it,
+  through new `GET /api/harnesses`, `GET/POST /api/harnesses/install` routes
+  behind the existing token, Host and same-origin guard. Only the planned
+  harness and version are accepted; installs and runs exclude each other, and
+  stopping the Lab waits for a running install. Progress is the install's
+  state and elapsed time; download sizes are not shown (the pins record none).
+
 - New `hwb model add NAME --url URL --model ID [--api-key-env VAR]`,
   `hwb model list` and `hwb model remove NAME` keep named model endpoints in
   `$XDG_CONFIG_HOME/hwb/models.json` (default `~/.config/hwb/models.json`,

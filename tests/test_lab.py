@@ -368,9 +368,20 @@ class LabSecurityTests(unittest.TestCase):
         self.assertEqual([], self.srv.calls)
 
     def test_route_table_is_the_whole_surface(self):
-        self.assertEqual(9, len(lab.ROUTES))
+        self.assertEqual(12, len(lab.ROUTES))
         for (method, path) in lab.ROUTES:
             self.assertIn(method, ("GET", "POST"))
+
+    def test_a_refused_install_request_never_reaches_the_installer(self):
+        from harness_workbench import runtimes
+        with mock.patch.object(runtimes, "add") as add:
+            for kwargs in ({"bearer": None}, {"bearer": "wrong"},
+                           {"bearer": self.token, "origin": "http://evil.example"},
+                           {"bearer": self.token, "host": "evil.example"}):
+                with self.subTest(**kwargs):
+                    status, _, _ = self.send("POST", "/api/harnesses/install", **kwargs)
+                    self.assertIn(status, (401, 403))
+        add.assert_not_called()
 
     def test_every_route_refuses_a_missing_or_wrong_token(self):
         for (method, path) in lab.ROUTES:
@@ -679,6 +690,105 @@ class LabApiTests(unittest.TestCase):
         self.assertIn("runs Hermes", str(refused.exception))
         with self.assertRaises(lab.LabError):
             lab.Lab(self.runs, Path(self.tmp.name) / "x", harness="claude")
+
+    def install_lab(self, plan_result=None, plan_error=None):
+        from harness_workbench import runtimes
+        steps = plan_result or {"harness": "pi", "version": "1.4.0", "already_installed": False,
+                                "destination": "/store/pi/1.4.0",
+                                "downloads": [{"url": "https://example.invalid/node.tgz", "sha256": "ab" * 32}]}
+        patches = [mock.patch.object(runtimes, "describe", return_value=[{"harness": "pi", "display": "Pi"}]),
+                   mock.patch.object(runtimes, "plan", side_effect=plan_error, return_value=steps)]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return lab.Lab(self.runs, self.recipe)
+
+    def wait_install(self, the_lab):
+        for _ in range(200):
+            job = the_lab.install_status()["job"]
+            if job and job["state"] != "running":
+                return job
+            threading.Event().wait(0.01)
+        self.fail("install never finished")
+
+    def test_harness_card_lists_the_plan_without_downloading(self):
+        from harness_workbench import runtimes
+        the_lab = self.install_lab()
+        with mock.patch.object(runtimes, "add") as add:
+            card = the_lab.harnesses()
+        add.assert_not_called()
+        self.assertEqual("pi", card["lab_harness"])
+        self.assertEqual({"installable": True, "version": "1.4.0", "already_installed": False},
+                         {k: card["install"][k] for k in ("installable", "version", "already_installed")})
+        self.assertEqual("https://example.invalid/node.tgz", card["install"]["downloads"][0]["url"])
+        self.assertIsNone(card["job"])
+
+    def test_a_harness_workbench_cannot_install_is_listed_with_the_reason(self):
+        from harness_workbench import runtimes
+        the_lab = self.install_lab(plan_error=runtimes.RuntimeStoreError("deepseek cannot be installed by Workbench yet"))
+        card = the_lab.harnesses()
+        self.assertFalse(card["install"]["installable"])
+        self.assertIn("cannot be installed", card["install"]["error"])
+        with self.assertRaises(lab.LabError) as refused:
+            the_lab.start_install({"harness": "pi", "version": "1.4.0"})
+        self.assertEqual(422, refused.exception.status)
+
+    def test_install_accepts_only_the_planned_harness_and_version(self):
+        from harness_workbench import runtimes
+        the_lab = self.install_lab()
+        with mock.patch.object(runtimes, "add") as add:
+            for body, status in (({}, 400), ({"harness": "pi"}, 400), ("pi", 400),
+                                 ({"harness": "pi", "version": "0.84.1"}, 409),
+                                 ({"harness": "hermes", "version": "1.4.0"}, 409),
+                                 ({"harness": "pi", "version": "1.4.0", "extra": 1}, 400)):
+                with self.subTest(body=body), self.assertRaises(lab.LabError) as refused:
+                    the_lab.start_install(body)
+                self.assertEqual(status, refused.exception.status)
+        add.assert_not_called()
+
+    def test_installed_harness_is_not_reinstalled(self):
+        the_lab = self.install_lab(plan_result={"harness": "pi", "version": "1.4.0", "already_installed": True,
+                                                "destination": "/store/pi/1.4.0", "downloads": []})
+        with self.assertRaises(lab.LabError) as refused:
+            the_lab.start_install({"harness": "pi", "version": "1.4.0"})
+        self.assertEqual(409, refused.exception.status)
+
+    def test_install_runs_once_and_blocks_runs_while_it_lasts(self):
+        from harness_workbench import runtimes
+        the_lab = self.install_lab()
+        release = threading.Event()
+        def slow_add(name, version):
+            release.wait(5)
+            return {"installed": True, "path": "/store/pi/1.4.0"}
+        with mock.patch.object(runtimes, "add", side_effect=slow_add) as add:
+            started = the_lab.start_install({"harness": "pi", "version": "1.4.0"})
+            self.assertEqual("running", started["job"]["state"])
+            for attempt in (lambda: the_lab.start_install({"harness": "pi", "version": "1.4.0"}),
+                            the_lab.start_run):
+                with self.assertRaises(lab.LabError) as refused:
+                    attempt()
+                self.assertEqual(409, refused.exception.status)
+            release.set()
+            job = self.wait_install(the_lab)
+        add.assert_called_once_with("pi", "1.4.0")
+        self.assertEqual(("done", "/store/pi/1.4.0"), (job["state"], job["path"]))
+
+    def test_a_failed_install_is_reported_not_swallowed(self):
+        from harness_workbench import runtimes
+        the_lab = self.install_lab()
+        with mock.patch.object(runtimes, "add", side_effect=runtimes.RuntimeStoreError("archive sha256 mismatch")):
+            the_lab.start_install({"harness": "pi", "version": "1.4.0"})
+            job = self.wait_install(the_lab)
+        self.assertEqual("failed", job["state"])
+        self.assertIn("archive sha256 mismatch", job["error"])
+
+    def test_hermes_lab_installs_the_certified_version(self):
+        from harness_workbench import runtimes
+        the_lab = lab.Lab(self.runs, Path(self.tmp.name) / "h", harness="hermes")
+        with mock.patch.object(runtimes, "plan", side_effect=runtimes.RuntimeStoreError("stop")) as plan, \
+             mock.patch.object(runtimes, "describe", return_value=[]):
+            the_lab.harnesses()
+        self.assertEqual(("hermes", reality.certified_versions()["hermes"]), plan.call_args[0][:2])
 
     def test_unknown_lab_profile_is_refused(self):
         with self.assertRaises(lab.LabError):
