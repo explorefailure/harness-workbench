@@ -41,19 +41,46 @@ published 2026-11-17.
 | OpenCode (`hwb-opencode`) | OpenCode 1.19.5 | Provider config selects a compatible endpoint or bundled native SDK | [OpenCode](opencode-builder.md) |
 | Hermes (`hwb-hermes`) | Hermes 0.22.5 / Python 3.14.4 / uv 0.12.21 | Provider config selects a compatible endpoint or named native provider | [Hermes](hermes-builder.md) |
 
-Workbench requires Python 3.11+. Hermes uses its separate owned Python. Pi needs
-its pinned Node on PATH. Runtime installation instructions are in each guide.
+Workbench requires Python 3.11+. Hermes uses its separate owned Python. On
+`main` (unreleased, planned for v0.4.0), `hwb harness add pi|opencode|hermes`
+installs each pinned runtime, with the Node or uv it needs, into Workbench's
+runtime store; v0.3.0 users follow the installation steps in each guide.
 Current-candidate local validation covers Linux and macOS 26.5 arm64 as detailed
 below. Previous hosted adapter CI covers the base commit only.
 
 ## Install and initialize
 
-From the working Workbench checkout, use Python with working `venv`/`ensurepip`
-support (some Linux distributions need their venv package). Building this
-checkout needs `setuptools>=77`; pip build isolation may need network access or
-a populated package cache even though Workbench has no Python runtime dependencies.
-The current host Python lacked ensurepip; a retained managed Python successfully
-created clean environments for the offline wheel/source installation checks.
+Install Workbench as the [README](../README.md#install-workbench) describes.
+Then, on `main`:
+
+```sh
+hwb harness add pi                       # or opencode, or hermes
+hwb model add local --url http://127.0.0.1:11434/v1 --model YOUR_MODEL_ID
+hwb-pi init my-pi --model local          # hwb-opencode / hwb-hermes take the same --model
+hwb-pi doctor my-pi
+```
+
+`hwb harness add` shows what it will download and asks first; everything goes
+into the runtime store (`~/.local/share/hwb/runtimes`, or `$HWB_RUNTIME_STORE`)
+and nothing global changes. `hwb model add` saves the endpoint and model ID in
+`~/.config/hwb/models.json`; `--api-key-env MY_MODEL_KEY` stores only that
+variable's name. `init` copies editable sources, task, fixture, pin and spec
+and downloads nothing; with `--model` it also writes the saved model into the
+new workspace. Existing workspaces and output files are refused to preserve
+earlier evidence.
+
+Each builder finds its runtime in this order. Pi and OpenCode: the explicit
+`--pi`/`--opencode` flag, then one on PATH, then the runtime store. Hermes: the
+explicit `--runtime`, then the workspace's `runtime/source` (from the older
+per-workspace installer), then the runtime store's Hermes with the uv that
+built it. Any version runs; what differs from the pin
+is recorded in `runtime.differs_from_pin`, and the pins stay the default
+install and the CI-tested version.
+
+From a source checkout instead, use Python with working `venv`/`ensurepip`
+support (some Linux distributions need their venv package). Building needs
+`setuptools>=77`; pip build isolation may need network access or a populated
+package cache even though Workbench has no Python runtime dependencies.
 
 ```sh
 python3 -m venv .venv
@@ -61,21 +88,21 @@ python3 -m venv .venv
 python -m pip install .
 ```
 
-Keep the environment active. Run the chosen adapter's `init NEW_DIRECTORY`, then
-its guide's explicit pinned runtime installation and `doctor`. Initialization
-copies editable sources, task, fixture, pin and spec; it downloads nothing.
-Existing workspaces and output files are refused to preserve earlier evidence.
-
 ## Choose a model in Pi
 
-From a newly initialized Pi workspace with the pinned runtime installed:
+`hwb-pi init DIR --model NAME` already wrote `model_adapter_config.json` for a
+saved model. `configure` makes another one, from a saved model or from explicit
+values, for example with an independent check:
 
 ```sh
+hwb-pi configure . --model local --config-name checked.json --check '["python3", "-B", "-m", "unittest", "-v"]'
 hwb-pi configure . --base-url http://127.0.0.1:11434/v1 --model YOUR_MODEL_ID --context-window 65536 --check '["python3", "-B", "-m", "unittest", "-v"]'
-hwb-pi run model_adapter_config.json --pi ./runtime/node_modules/.bin/pi --timeout 600 --output task.result.json
+hwb-pi run model_adapter_config.json --timeout 600 --output task.result.json
 ```
 
-Replace the endpoint/model with your running server's values. Add
+`--model NAME` alone (no `--provider`, no `--base-url`) reads the saved model;
+otherwise it is the model ID. Replace the endpoint/model with your running
+server's values. Add
 `--api-key-env MY_MODEL_KEY` for authentication; set that variable through your
 shell or secret manager. No key value goes in the config or argv.
 
@@ -93,7 +120,14 @@ the endpoint. No provider extension is needed for these paths.
 
 ## Choose a model in OpenCode or Hermes
 
-For an unauthenticated endpoint, edit `provider` in `adapter_config.json`:
+`hwb-opencode init DIR --model NAME` and `hwb-hermes init DIR --model NAME`
+write a saved model into `provider` for you: mode `local`, or `compatible` when
+it was saved with `--api-key-env`. Hermes 0.22.5 refuses a model served with
+less than a 64K-token context window; start the server with at least that
+(llama.cpp `-c 65536`, Ollama `OLLAMA_CONTEXT_LENGTH=65536`).
+
+To set it by hand instead, for an unauthenticated endpoint edit `provider` in
+`adapter_config.json`:
 
 ```json
 {"mode":"local","base_url":"http://127.0.0.1:11434/v1","model":"YOUR_MODEL_ID"}
@@ -206,11 +240,11 @@ Check effects are recorded in `workspace.after_checks`.
 Run the command for your owned workspace:
 
 ```sh
-hwb-pi run your-config.json --pi ./runtime/node_modules/.bin/pi --timeout 600 --output task.result.json
+hwb-pi run your-config.json --timeout 600 --output task.result.json
 ```
 
 ```sh
-hwb-opencode run your-config.json --opencode ./runtime/opencode --timeout 600 --output task.result.json
+hwb-opencode run your-config.json --timeout 600 --output task.result.json
 ```
 
 ```sh
@@ -286,9 +320,9 @@ does not establish reliable completion within either allowance. Earlier failed
 attempts and their original bounds remain retained.
 
 ```sh
-hwb-pi run own_task.json --pi ./runtime/node_modules/.bin/pi --timeout 1200 --output own-task.result.json
+hwb-pi run own_task.json --timeout 1200 --output own-task.result.json
 # Or:
-hwb-opencode run own_task.json --opencode ./runtime/opencode --timeout 1200 --output own-task.result.json
+hwb-opencode run own_task.json --timeout 1200 --output own-task.result.json
 # Or:
 hwb-hermes run own_task.json --timeout 1200 --output own-task.result.json
 ```
